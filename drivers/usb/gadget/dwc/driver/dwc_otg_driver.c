@@ -831,7 +831,9 @@ static int dwc_otg_driver_probe(
 		goto fail;
 	}
 #endif
-#ifdef PCI_INTERFACE
+#ifdef LM_INTERFACE
+	dwc_otg_device->os_dep.lmdev = _dev;
+#elif PCI_INTERFACE
 	pci_set_drvdata(_dev, dwc_otg_device);
 	dwc_otg_device->os_dep.pcidev = _dev;
 #endif

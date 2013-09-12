@@ -360,7 +360,13 @@ static int ep_queue(struct usb_ep *usb_ep, struct usb_request *usb_req,
 	dma_addr = usb_req->dma;
 #else
 #ifdef LM_INTERFACE
-	dma_addr = plat_map_dma_mem(NULL, usb_req->buf, 0);
+	struct lm_device *dev = gadget_wrapper->pcd->otg_dev->os_dep.lmdev;
+	if (GET_CORE_IF(pcd)->dma_enable) {
+		if (usb_req->length != 0 /*&& usb_req->dma == DWC_DMA_ADDR_INVALID*/) {
+			usb_req->dma = dma_addr = dma_map_single(&dev->dev, usb_req->buf, usb_req->length, 
+					ep->dwc_ep.is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
+		}
+	}
 #else
 	if (GET_CORE_IF(pcd)->dma_enable) {
 		struct pci_dev *dev = gadget_wrapper->pcd->otg_dev->os_dep.pcidev;
@@ -824,13 +830,14 @@ static int _complete(dwc_otg_pcd_t * pcd, void *ep_handle,
 			req->status = status;
 
 		}
-
-		req->actual = actual;
-		DWC_SPINUNLOCK(pcd->lock);
-		req->complete(ep_handle, req);
-		DWC_SPINLOCK(pcd->lock);
-	}
-#ifdef PCI_INTERFACE
+#ifdef LM_INTERFACE
+	struct lm_device *dev = gadget_wrapper->pcd->otg_dev->os_dep.lmdev;
+	ep = ep_from_handle(pcd, ep_handle);
+			dma_unmap_single(&dev->dev, req->dma, req->length,
+					 ep->dwc_ep.
+					 is_in ? DMA_TO_DEVICE :
+					 DMA_FROM_DEVICE);
+#elif PCI_INTERFACE
 	dev = gadget_wrapper->pcd->otg_dev->os_dep.pcidev;
 	ep = ep_from_handle(pcd, ep_handle);
 	if (GET_CORE_IF(pcd)->dma_enable) {
@@ -841,6 +848,12 @@ static int _complete(dwc_otg_pcd_t * pcd, void *ep_handle,
 					 PCI_DMA_FROMDEVICE);
 	}
 #endif
+
+		req->actual = actual;
+		DWC_SPINUNLOCK(pcd->lock);
+		req->complete(ep_handle, req);
+		DWC_SPINLOCK(pcd->lock);
+	}
 
 	return 0;
 }

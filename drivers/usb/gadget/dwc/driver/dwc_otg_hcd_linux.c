@@ -354,7 +354,8 @@ int hcd_init(
 	/* Set device flags indicating whether the HCD supports DMA. */
 	if (dwc_otg_is_dma_enable(otg_dev->core_if)) {
 #ifdef LM_INTERFACE
-		_dev->dev.coherent_dma_mask = ~0;
+		*_dev->dev.dma_mask = (void *)DMA_32BIT_MASK;
+		_dev->dev.coherent_dma_mask = DMA_32BIT_MASK;
 #elif  defined(PCI_INTERFACE)
 		pci_set_dma_mask(_dev, DMA_32BIT_MASK);
 		pci_set_consistent_dma_mask(_dev, DMA_32BIT_MASK);
