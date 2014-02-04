@@ -368,6 +368,8 @@
 #define __NR_process_vm_writev		(__NR_Linux + 346)
 #define __NR_kcmp			(__NR_Linux + 347)
 #define __NR_finit_module		(__NR_Linux + 348)
+#define __NR_sched_setattr		(__NR_Linux + 349)
+#define __NR_sched_getattr		(__NR_Linux + 350)
 #define __NR_getrandom			(__NR_Linux + 353)
 #define __NR_memfd_create		(__NR_Linux + 354)
 
@@ -698,6 +700,8 @@
 #define __NR_kcmp			(__NR_Linux + 306)
 #define __NR_finit_module		(__NR_Linux + 307)
 #define __NR_getdents64			(__NR_Linux + 308)
+#define __NR_sched_setattr		(__NR_Linux + 309)
+#define __NR_sched_getattr		(__NR_Linux + 310)
 #define __NR_getrandom			(__NR_Linux + 313)
 #define __NR_memfd_create		(__NR_Linux + 314)
 
@@ -1032,6 +1036,8 @@
 #define __NR_process_vm_writev		(__NR_Linux + 310)
 #define __NR_kcmp			(__NR_Linux + 311)
 #define __NR_finit_module		(__NR_Linux + 312)
+#define __NR_sched_setattr		(__NR_Linux + 313)
+#define __NR_sched_getattr		(__NR_Linux + 314)
 #define __NR_getrandom			(__NR_Linux + 317)
 #define __NR_memfd_create		(__NR_Linux + 318)
 
