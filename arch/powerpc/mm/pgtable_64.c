@@ -761,10 +761,19 @@ void hpte_do_hugepage_flush(struct mm_struct *mm, unsigned long addr,
 	else
 		psize = MMU_PAGE_64K;
 
+	if (!is_kernel_addr(s_addr)) {
+		ssize = user_segment_size(s_addr);
+		vsid = get_vsid(mm->context.id, s_addr, ssize);
+		WARN_ON(vsid == 0);
+	} else {
+		vsid = get_kernel_vsid(s_addr, mmu_kernel_ssize);
+		ssize = mmu_kernel_ssize;
+	}
 
 	if (ppc_md.hugepage_invalidate)
-		return ppc_md.hugepage_invalidate(mm, hpte_slot_array,
-						  s_addr, psize);
+		return ppc_md.hugepage_invalidate(vsid, s_addr,
+						  hpte_slot_array,
+						  psize, ssize);
 	/*
 	 * No bluk hpte removal support, invalidate each entry
 	 */
@@ -782,15 +791,6 @@ void hpte_do_hugepage_flush(struct mm_struct *mm, unsigned long addr,
 
 		/* get the vpn */
 		addr = s_addr + (i * (1ul << shift));
-		if (!is_kernel_addr(addr)) {
-			ssize = user_segment_size(addr);
-			vsid = get_vsid(mm->context.id, addr, ssize);
-			WARN_ON(vsid == 0);
-		} else {
-			vsid = get_kernel_vsid(addr, mmu_kernel_ssize);
-			ssize = mmu_kernel_ssize;
-		}
-
 		vpn = hpt_vpn(addr, vsid, ssize);
 		hash = hpt_hash(vpn, shift, ssize);
 		if (hidx & _PTEIDX_SECONDARY)
