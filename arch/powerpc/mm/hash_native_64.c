@@ -465,22 +465,13 @@ static void native_hugepage_invalidate(struct mm_struct *mm,
 		else
 			/* Invalidate the hpte. NOTE: this also unlocks it */
 			hptep->v = 0;
+		/*
+		 * We need to do tlb invalidate for all the address, tlbie
+		 * instruction compares entry_VA in tlb with the VA specified
+		 * here
+		 */
+		tlbie(vpn, psize, actual_psize, ssize, 0);
 	}
-	/*
-	 * Since this is a hugepage, we just need a single tlbie.
-	 * use the last vpn.
-	 */
-	lock_tlbie = !mmu_has_feature(MMU_FTR_LOCKLESS_TLBIE);
-	if (lock_tlbie)
-		raw_spin_lock(&native_tlbie_lock);
-
-	asm volatile("ptesync":::"memory");
-	__tlbie(vpn, psize, actual_psize, ssize);
-	asm volatile("eieio; tlbsync; ptesync":::"memory");
-
-	if (lock_tlbie)
-		raw_spin_unlock(&native_tlbie_lock);
-
 	local_irq_restore(flags);
 }
 
