@@ -542,4 +542,6 @@ sys_call_table:
 	PTR	compat_sys_process_vm_writev
 	PTR	sys_kcmp
 	PTR	sys_finit_module
+	PTR	sys_getrandom
+	PTR	sys_memfd_create
 	.size	sys_call_table,.-sys_call_table
