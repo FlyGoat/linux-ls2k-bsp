@@ -179,4 +179,7 @@ module_init(nx842_mod_init);
 module_exit(nx842_mod_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("842 Compression Algorithm");
+MODULE_DESCRIPTION("842 Software Compression Algorithm");
+MODULE_ALIAS_CRYPTO("842");
+MODULE_ALIAS_CRYPTO("842-generic");
+MODULE_AUTHOR("Dan Streetman <ddstreet@ieee.org>");
