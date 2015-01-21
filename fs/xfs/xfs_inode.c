@@ -1097,7 +1097,7 @@ xfs_bump_ino_vers2(
 		if (!xfs_sb_version_hasnlink(&mp->m_sb)) {
 			xfs_sb_version_addnlink(&mp->m_sb);
 			spin_unlock(&mp->m_sb_lock);
-			xfs_mod_sb(tp, XFS_SB_VERSIONNUM);
+			xfs_mod_sb(tp);
 		} else {
 			spin_unlock(&mp->m_sb_lock);
 		}

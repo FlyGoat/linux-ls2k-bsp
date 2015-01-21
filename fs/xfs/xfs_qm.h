@@ -160,7 +160,7 @@ struct xfs_dquot_acct {
 
 extern void		xfs_qm_destroy_quotainfo(struct xfs_mount *);
 extern int		xfs_qm_quotacheck(struct xfs_mount *);
-extern int		xfs_qm_write_sb_changes(struct xfs_mount *, __int64_t);
+extern int		xfs_qm_write_sb_changes(struct xfs_mount *);
 
 /* dquot stuff */
 extern void		xfs_qm_dqpurge_all(struct xfs_mount *, uint);
