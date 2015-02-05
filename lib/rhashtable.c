@@ -273,6 +273,8 @@ int rhashtable_expand(struct rhashtable *ht, gfp_t flags)
 		}
 	} while (!complete);
 
+	synchronize_rcu();
+
 	bucket_table_free(old_tbl);
 	return 0;
 }
