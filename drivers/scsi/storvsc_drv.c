@@ -308,7 +308,7 @@ enum storvsc_request_type {
  * This is the end of Protocol specific defines.
  */
 
-static int storvsc_ringbuffer_size = (20 * PAGE_SIZE);
+static int storvsc_ringbuffer_size = (256 * PAGE_SIZE);
 static u32 max_outstanding_req_per_channel;
 
 static int storvsc_vcpus_per_sub_channel = 4;
