@@ -170,6 +170,7 @@ struct nf_bridge_info {
 	struct net_device	*physindev;
 	struct net_device	*physoutdev;
 	unsigned long		data[32 / sizeof(unsigned long)];
+	RH_KABI_EXTEND(__u16	frag_max_size)
 };
 #endif
 
