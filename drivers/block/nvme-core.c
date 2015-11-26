@@ -34,6 +34,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/poison.h>
 #include <linux/ptrace.h>
@@ -2669,6 +2670,7 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
 
 	nvme_dev_list_remove(dev);
 
+	mutex_lock(&dev->shutdown_lock);
 	if (dev->bar) {
 		nvme_freeze_queues(dev);
 		csts = readl(&dev->bar->csts);
@@ -2687,6 +2689,7 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
 
 	for (i = dev->queue_count - 1; i >= 0; i--)
 		nvme_clear_queue(dev->queues[i]);
+	mutex_unlock(&dev->shutdown_lock);
 }
 
 static void nvme_dev_remove(struct nvme_dev *dev)
@@ -3033,6 +3036,7 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	INIT_LIST_HEAD(&dev->namespaces);
 	INIT_WORK(&dev->reset_work, nvme_reset_failed_dev);
+	mutex_init(&dev->shutdown_lock);
 	dev->pci_dev = pci_dev_get(pdev);
 	pci_set_drvdata(pdev, dev);
 	result = nvme_set_instance(dev);
