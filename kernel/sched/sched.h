@@ -144,7 +144,7 @@ struct task_group {
 	unsigned long shares;
 
 	atomic_t load_weight;
-	atomic64_t load_avg;
+	atomic64_t load_avg ____cacheline_aligned;
 	atomic_t runnable_avg;
 #endif
 
