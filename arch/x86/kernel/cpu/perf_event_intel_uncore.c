@@ -969,6 +969,7 @@ static int __init uncore_pci_init(void)
 	case 63: /* Haswell-EP */
 		ret = hswep_uncore_pci_init();
 		break;
+	case 79: /* BDX-EP */
 	case 86: /* BDX-DE */
 		ret = bdx_uncore_pci_init();
 		break;
@@ -1286,6 +1287,7 @@ static int __init uncore_cpu_init(void)
 	case 63: /* Haswell-EP */
 		hswep_uncore_cpu_init();
 		break;
+	case 79: /* BDX-EP */
 	case 86: /* BDX-DE */
 		bdx_uncore_cpu_init();
 		break;
