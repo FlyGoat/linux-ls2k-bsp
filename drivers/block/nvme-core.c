@@ -13,6 +13,7 @@
  */
 
 #include <linux/nvme.h>
+#include <linux/aer.h>
 #include <linux/bitops.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
@@ -2440,6 +2441,8 @@ static int nvme_dev_map(struct nvme_dev *dev)
 	dev->db_stride = 1 << NVME_CAP_STRIDE(cap);
 	dev->dbs = ((void __iomem *)dev->bar) + 4096;
 
+	pci_enable_pcie_error_reporting(pdev);
+	pci_save_state(pdev);
 	return 0;
 
  unmap:
@@ -2465,8 +2468,10 @@ static void nvme_dev_unmap(struct nvme_dev *dev)
 		pci_release_regions(dev->pci_dev);
 	}
 
-	if (pci_is_enabled(dev->pci_dev))
+	if (pci_is_enabled(dev->pci_dev)) {
+		pci_disable_pcie_error_reporting(dev->pci_dev);
 		pci_disable_device(dev->pci_dev);
+	}
 }
 
 struct nvme_delq_ctx {
@@ -3121,13 +3126,6 @@ static void nvme_remove(struct pci_dev *pdev)
 	kref_put(&dev->kref, nvme_free_dev);
 }
 
-/* These functions are yet to be implemented */
-#define nvme_error_detected NULL
-#define nvme_dump_registers NULL
-#define nvme_link_reset NULL
-#define nvme_slot_reset NULL
-#define nvme_error_resume NULL
-
 static int nvme_suspend(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
@@ -3151,10 +3149,46 @@ static int nvme_resume(struct device *dev)
 
 static SIMPLE_DEV_PM_OPS(nvme_dev_pm_ops, nvme_suspend, nvme_resume);
 
+static pci_ers_result_t nvme_error_detected(struct pci_dev *pdev,
+						pci_channel_state_t state)
+{
+	struct nvme_dev *dev = pci_get_drvdata(pdev);
+
+	/*
+	 * A frozen channel requires a reset. When detected, this method will
+	 * shutdown the controller to quiesce. The controller will be restarted
+	 * after the slot reset through driver's slot_reset callback.
+	 */
+	dev_warn(&pdev->dev, "error detected: state:%d\n", state);
+	switch (state) {
+	case pci_channel_io_normal:
+		return PCI_ERS_RESULT_CAN_RECOVER;
+	case pci_channel_io_frozen:
+		nvme_dev_shutdown(dev);
+		return PCI_ERS_RESULT_NEED_RESET;
+	case pci_channel_io_perm_failure:
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+	return PCI_ERS_RESULT_NEED_RESET;
+}
+
+static pci_ers_result_t nvme_slot_reset(struct pci_dev *pdev)
+{
+	struct nvme_dev *dev = pci_get_drvdata(pdev);
+
+	dev_info(&pdev->dev, "restart after slot reset\n");
+	pci_restore_state(pdev);
+	queue_work(nvme_workq, &dev->reset_work);
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+static void nvme_error_resume(struct pci_dev *pdev)
+{
+	pci_cleanup_aer_uncorrect_error_status(pdev);
+}
+
 static const struct pci_error_handlers nvme_err_handler = {
 	.error_detected	= nvme_error_detected,
-	.mmio_enabled	= nvme_dump_registers,
-	.link_reset	= nvme_link_reset,
 	.slot_reset	= nvme_slot_reset,
 	.resume		= nvme_error_resume,
 };
