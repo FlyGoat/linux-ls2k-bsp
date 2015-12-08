@@ -893,9 +893,9 @@ static const struct x86_cpu_id intel_pstate_cpu_ids[] = {
 	ICPU(0x45, core_params),
 	ICPU(0x46, core_params),
 	ICPU(0x47, core_params),
-	/* ICPU(0x4e, core_params), */
+	ICPU(0x4e, core_params),
 	ICPU(0x4f, core_params),
-	/* ICPU(0x5e, core_params), */
+	ICPU(0x5e, core_params),
 	ICPU(0x56, core_params),
 	ICPU(0x57, knl_params),
 	{}
@@ -955,6 +955,8 @@ static unsigned int intel_pstate_get(unsigned int cpu_num)
 
 static int intel_pstate_set_policy(struct cpufreq_policy *policy)
 {
+	int max_policy_calc;
+
 	if (!policy->cpuinfo.max_freq)
 		return -ENODEV;
 
@@ -973,7 +975,9 @@ static int intel_pstate_set_policy(struct cpufreq_policy *policy)
 	limits.min_perf_pct = clamp_t(int, limits.min_perf_pct, 0 , 100);
 	limits.min_perf = div_fp(int_tofp(limits.min_perf_pct), int_tofp(100));
 
-	limits.max_policy_pct = (policy->max * 100) / policy->cpuinfo.max_freq;
+	max_policy_calc = (policy->max * 1000) / policy->cpuinfo.max_freq;
+	limits.max_policy_pct = round_up(max_policy_calc, 10) / 10;
+
 	limits.max_policy_pct = clamp_t(int, limits.max_policy_pct, 0 , 100);
 	limits.max_perf_pct = min(limits.max_policy_pct, limits.max_sysfs_pct);
 	limits.max_perf = div_fp(int_tofp(limits.max_perf_pct), int_tofp(100));
@@ -1052,12 +1056,6 @@ static int __initdata no_load;
 static int __initdata no_hwp;
 static int __initdata hwp_only;
 static unsigned int force_load;
-
-/* RHEL7: disable HWP for Skylake-S processors */
-static struct x86_cpu_id __initdata hwp_quirk_cpu_ids[] = {
-	{ .vendor = X86_VENDOR_INTEL, .family = 6, .model = 0x5e },
-	{}
-};
 
 static int intel_pstate_msrs_not_valid(void)
 {
@@ -1236,16 +1234,6 @@ static int __init intel_pstate_init(void)
 	all_cpu_data = vzalloc(sizeof(void *) * num_possible_cpus());
 	if (!all_cpu_data)
 		return -ENOMEM;
-
-	/*
-	 * RHEL7: We are having issues with the Skylake-S hanging
-	 * when HWP is enabled so check for Skylake-S and
-	 * disable HWP if found
-	 */
-	if (x86_match_cpu(hwp_quirk_cpu_ids)) {
-		pr_info("intel_pstate Skylake-S detected. disabling HWP\n");
-		no_hwp = 1;
-	}
 
 	if (cpu_has(c,X86_FEATURE_HWP) && !no_hwp)
 		intel_pstate_hwp_enable();
