@@ -516,6 +516,13 @@ extern void qla81xx_fw_dump(scsi_qla_host_t *, int);
 extern void qla82xx_fw_dump(scsi_qla_host_t *, int);
 extern void qla8044_fw_dump(scsi_qla_host_t *, int);
 
+extern void qla27xx_fwdump(scsi_qla_host_t *, int);
+extern ulong qla27xx_fwdt_calculate_dump_size(struct scsi_qla_host *);
+extern int qla27xx_fwdt_template_valid(void *);
+extern ulong qla27xx_fwdt_template_size(void *);
+extern const void *qla27xx_fwdt_template_default(void);
+extern ulong qla27xx_fwdt_template_default_size(void);
+
 extern void qla2x00_dump_regs(scsi_qla_host_t *);
 extern void qla2x00_dump_buffer(uint8_t *, uint32_t);
 extern void qla2x00_dump_buffer_zipped(uint8_t *, uint32_t);
@@ -543,7 +550,7 @@ extern void *qla24xx_prep_ms_fdmi_iocb(scsi_qla_host_t *, uint32_t, uint32_t);
 extern int qla2x00_fdmi_register(scsi_qla_host_t *);
 extern int qla2x00_gfpn_id(scsi_qla_host_t *, sw_info_t *);
 extern int qla2x00_gpsc(scsi_qla_host_t *, sw_info_t *);
-extern void qla2x00_get_sym_node_name(scsi_qla_host_t *, uint8_t *);
+extern void qla2x00_get_sym_node_name(scsi_qla_host_t *, uint8_t *, size_t);
 
 /*
  * Global Function Prototypes in qla_attr.c source file.
@@ -596,7 +603,7 @@ extern void qlafx00_soft_reset(scsi_qla_host_t *);
 extern int qlafx00_chip_diag(scsi_qla_host_t *);
 extern void qlafx00_config_rings(struct scsi_qla_host *);
 extern char *qlafx00_pci_info_str(struct scsi_qla_host *, char *);
-extern char *qlafx00_fw_version_str(struct scsi_qla_host *, char *);
+extern char *qlafx00_fw_version_str(struct scsi_qla_host *, char *, size_t);
 extern irqreturn_t qlafx00_intr_handler(int, void *);
 extern void qlafx00_enable_intrs(struct qla_hw_data *);
 extern void qlafx00_disable_intrs(struct qla_hw_data *);
@@ -733,8 +740,6 @@ extern void qla8044_set_idc_dontreset(struct scsi_qla_host *ha);
 extern int qla8044_rd_direct(struct scsi_qla_host *vha, const uint32_t crb_reg);
 extern void qla8044_wr_direct(struct scsi_qla_host *vha,
 			      const uint32_t crb_reg, const uint32_t value);
-extern inline void qla8044_set_qsnt_ready(struct scsi_qla_host *vha);
-extern inline void qla8044_need_reset_handler(struct scsi_qla_host *vha);
 extern int qla8044_device_state_handler(struct scsi_qla_host *vha);
 extern void qla8044_clear_qsnt_ready(struct scsi_qla_host *vha);
 extern void qla8044_clear_drv_active(struct qla_hw_data *);

@@ -223,7 +223,6 @@ int mlx4_ib_rereg_user_mr(struct ib_mr *mr, int flags,
 
 	if (flags & IB_MR_REREG_TRANS) {
 		int shift;
-		int err;
 		int n;
 
 		mlx4_mr_rereg_mem_cleanup(dev->dev, &mmr->mmr);
@@ -234,14 +233,13 @@ int mlx4_ib_rereg_user_mr(struct ib_mr *mr, int flags,
 					0);
 		if (IS_ERR(mmr->umem)) {
 			err = PTR_ERR(mmr->umem);
+			/* Prevent mlx4_ib_dereg_mr from free'ing invalid pointer */
 			mmr->umem = NULL;
 			goto release_mpt_entry;
 		}
 		n = ib_umem_page_count(mmr->umem);
 		shift = ilog2(mmr->umem->page_size);
 
-		mmr->mmr.iova       = virt_addr;
-		mmr->mmr.size       = length;
 		err = mlx4_mr_rereg_mem_write(dev->dev, &mmr->mmr,
 					      virt_addr, length, n, shift,
 					      *pmpt_entry);
@@ -249,6 +247,8 @@ int mlx4_ib_rereg_user_mr(struct ib_mr *mr, int flags,
 			ib_umem_release(mmr->umem);
 			goto release_mpt_entry;
 		}
+		mmr->mmr.iova       = virt_addr;
+		mmr->mmr.size       = length;
 
 		err = mlx4_ib_umem_write_mtt(dev, &mmr->mmr.mtt, mmr->umem);
 		if (err) {
@@ -262,6 +262,8 @@ int mlx4_ib_rereg_user_mr(struct ib_mr *mr, int flags,
 	 * return a failure. But dereg_mr will free the resources.
 	 */
 	err = mlx4_mr_hw_write_mpt(dev->dev, &mmr->mmr, pmpt_entry);
+	if (!err && flags & IB_MR_REREG_ACCESS)
+		mmr->mmr.access = mr_access_flags;
 
 release_mpt_entry:
 	mlx4_mr_hw_put_mpt(dev->dev, pmpt_entry);
@@ -399,7 +401,8 @@ struct ib_fast_reg_page_list *mlx4_ib_alloc_fast_reg_page_list(struct ib_device 
 	if (!mfrpl->ibfrpl.page_list)
 		goto err_free;
 
-	mfrpl->mapped_page_list = dma_alloc_coherent(&dev->dev->pdev->dev,
+	mfrpl->mapped_page_list = dma_alloc_coherent(&dev->dev->persist->
+						     pdev->dev,
 						     size, &mfrpl->map,
 						     GFP_KERNEL);
 	if (!mfrpl->mapped_page_list)
@@ -421,7 +424,8 @@ void mlx4_ib_free_fast_reg_page_list(struct ib_fast_reg_page_list *page_list)
 	struct mlx4_ib_fast_reg_page_list *mfrpl = to_mfrpl(page_list);
 	int size = page_list->max_page_list_len * sizeof (u64);
 
-	dma_free_coherent(&dev->dev->pdev->dev, size, mfrpl->mapped_page_list,
+	dma_free_coherent(&dev->dev->persist->pdev->dev, size,
+			  mfrpl->mapped_page_list,
 			  mfrpl->map);
 	kfree(mfrpl->ibfrpl.page_list);
 	kfree(mfrpl);

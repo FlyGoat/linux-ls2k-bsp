@@ -544,29 +544,45 @@ static void bnx2x_set_gro_params(struct sk_buff *skb, u16 parsing_flags,
 static int bnx2x_alloc_rx_sge(struct bnx2x *bp, struct bnx2x_fastpath *fp,
 			      u16 index, gfp_t gfp_mask)
 {
-	struct page *page = alloc_pages(gfp_mask, PAGES_PER_SGE_SHIFT);
 	struct sw_rx_page *sw_buf = &fp->rx_page_ring[index];
 	struct eth_rx_sge *sge = &fp->rx_sge_ring[index];
+	struct bnx2x_alloc_pool *pool = &fp->page_pool;
 	dma_addr_t mapping;
 
-	if (unlikely(page == NULL)) {
-		BNX2X_ERR("Can't alloc sge\n");
-		return -ENOMEM;
+	if (!pool->page || (PAGE_SIZE - pool->offset) < SGE_PAGE_SIZE) {
+
+		/* put page reference used by the memory pool, since we
+		 * won't be using this page as the mempool anymore.
+		 */
+		if (pool->page)
+			put_page(pool->page);
+
+		pool->page = alloc_pages(gfp_mask, PAGES_PER_SGE_SHIFT);
+		if (unlikely(!pool->page)) {
+			BNX2X_ERR("Can't alloc sge\n");
+			return -ENOMEM;
+		}
+
+		pool->offset = 0;
 	}
 
-	mapping = dma_map_page(&bp->pdev->dev, page, 0,
-			       SGE_PAGES, DMA_FROM_DEVICE);
+	mapping = dma_map_page(&bp->pdev->dev, pool->page,
+			       pool->offset, SGE_PAGE_SIZE, DMA_FROM_DEVICE);
 	if (unlikely(dma_mapping_error(&bp->pdev->dev, mapping))) {
-		__free_pages(page, PAGES_PER_SGE_SHIFT);
 		BNX2X_ERR("Can't map sge\n");
 		return -ENOMEM;
 	}
 
-	sw_buf->page = page;
+	get_page(pool->page);
+	sw_buf->page = pool->page;
+	sw_buf->offset = pool->offset;
+
 	dma_unmap_addr_set(sw_buf, mapping, mapping);
 
 	sge->addr_hi = cpu_to_le32(U64_HI(mapping));
 	sge->addr_lo = cpu_to_le32(U64_LO(mapping));
+
+	pool->offset += SGE_PAGE_SIZE;
 
 	return 0;
 }
@@ -629,20 +645,22 @@ static int bnx2x_fill_frag_skb(struct bnx2x *bp, struct bnx2x_fastpath *fp,
 			return err;
 		}
 
-		/* Unmap the page as we're going to pass it to the stack */
 		dma_unmap_page(&bp->pdev->dev,
 			       dma_unmap_addr(&old_rx_pg, mapping),
-			       SGE_PAGES, DMA_FROM_DEVICE);
+			       SGE_PAGE_SIZE, DMA_FROM_DEVICE);
 		/* Add one frag and update the appropriate fields in the skb */
 		if (fp->mode == TPA_MODE_LRO)
-			skb_fill_page_desc(skb, j, old_rx_pg.page, 0, frag_len);
+			skb_fill_page_desc(skb, j, old_rx_pg.page,
+					   old_rx_pg.offset, frag_len);
 		else { /* GRO */
 			int rem;
 			int offset = 0;
 			for (rem = frag_len; rem > 0; rem -= gro_size) {
 				int len = rem > gro_size ? gro_size : rem;
 				skb_fill_page_desc(skb, frag_id++,
-						   old_rx_pg.page, offset, len);
+						   old_rx_pg.page,
+						   old_rx_pg.offset + offset,
+						   len);
 				if (offset)
 					get_page(old_rx_pg.page);
 				offset += len;
@@ -947,10 +965,10 @@ static int bnx2x_rx_int(struct bnx2x_fastpath *fp, int budget)
 			u16 frag_size, pages;
 #ifdef BNX2X_STOP_ON_ERROR
 			/* sanity check */
-			if (fp->disable_tpa &&
+			if (fp->mode == TPA_MODE_DISABLED &&
 			    (CQE_TYPE_START(cqe_fp_type) ||
 			     CQE_TYPE_STOP(cqe_fp_type)))
-				BNX2X_ERR("START/STOP packet while disable_tpa type %x\n",
+				BNX2X_ERR("START/STOP packet while TPA disabled, type %x\n",
 					  CQE_TYPE(cqe_fp_type));
 #endif
 
@@ -1015,7 +1033,7 @@ static int bnx2x_rx_int(struct bnx2x_fastpath *fp, int budget)
 		 */
 		if ((bp->dev->mtu > ETH_MAX_PACKET_SIZE) &&
 		    (len <= RX_COPY_THRESH)) {
-			skb = netdev_alloc_skb_ip_align(bp->dev, len);
+			skb = napi_alloc_skb(&fp->napi, len);
 			if (skb == NULL) {
 				DP(NETIF_MSG_RX_ERR | NETIF_MSG_RX_STATUS,
 				   "ERROR  packet dropped because of alloc failure\n");
@@ -1139,7 +1157,7 @@ static irqreturn_t bnx2x_msix_fp_int(int irq, void *fp_cookie)
 		prefetch(fp->txdata_ptr[cos]->tx_cons_sb);
 
 	prefetch(&fp->sb_running_index[SM_RX_ID]);
-	napi_schedule(&bnx2x_fp(bp, fp->index, napi));
+	napi_schedule_irqoff(&bnx2x_fp(bp, fp->index, napi));
 
 	return IRQ_HANDLED;
 }
@@ -1396,7 +1414,7 @@ void bnx2x_init_rx_rings(struct bnx2x *bp)
 		DP(NETIF_MSG_IFUP,
 		   "mtu %d  rx_buf_size %d\n", bp->dev->mtu, fp->rx_buf_size);
 
-		if (!fp->disable_tpa) {
+		if (fp->mode != TPA_MODE_DISABLED) {
 			/* Fill the per-aggregation pool */
 			for (i = 0; i < MAX_AGG_QS(bp); i++) {
 				struct bnx2x_agg_info *tpa_info =
@@ -1410,7 +1428,7 @@ void bnx2x_init_rx_rings(struct bnx2x *bp)
 					BNX2X_ERR("Failed to allocate TPA skb pool for queue[%d] - disabling TPA on this queue!\n",
 						  j);
 					bnx2x_free_tpa_pool(bp, fp, i);
-					fp->disable_tpa = 1;
+					fp->mode = TPA_MODE_DISABLED;
 					break;
 				}
 				dma_unmap_addr_set(first_buf, mapping, 0);
@@ -1438,7 +1456,7 @@ void bnx2x_init_rx_rings(struct bnx2x *bp)
 								ring_prod);
 					bnx2x_free_tpa_pool(bp, fp,
 							    MAX_AGG_QS(bp));
-					fp->disable_tpa = 1;
+					fp->mode = TPA_MODE_DISABLED;
 					ring_prod = 0;
 					break;
 				}
@@ -1560,7 +1578,7 @@ static void bnx2x_free_rx_skbs(struct bnx2x *bp)
 
 		bnx2x_free_rx_bds(fp);
 
-		if (!fp->disable_tpa)
+		if (fp->mode != TPA_MODE_DISABLED)
 			bnx2x_free_tpa_pool(bp, fp, MAX_AGG_QS(bp));
 	}
 }
@@ -1849,7 +1867,7 @@ static void bnx2x_napi_enable_cnic(struct bnx2x *bp)
 	int i;
 
 	for_each_rx_queue_cnic(bp, i) {
-		bnx2x_fp_init_lock(&bp->fp[i]);
+		bnx2x_fp_busy_poll_init(&bp->fp[i]);
 		napi_enable(&bnx2x_fp(bp, i, napi));
 	}
 }
@@ -1859,7 +1877,7 @@ static void bnx2x_napi_enable(struct bnx2x *bp)
 	int i;
 
 	for_each_eth_queue(bp, i) {
-		bnx2x_fp_init_lock(&bp->fp[i]);
+		bnx2x_fp_busy_poll_init(&bp->fp[i]);
 		napi_enable(&bnx2x_fp(bp, i, napi));
 	}
 }
@@ -1937,7 +1955,7 @@ void bnx2x_set_num_queues(struct bnx2x *bp)
 	bp->num_ethernet_queues = bnx2x_calc_num_queues(bp);
 
 	/* override in STORAGE SD modes */
-	if (IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp))
+	if (IS_MF_STORAGE_ONLY(bp))
 		bp->num_ethernet_queues = 1;
 
 	/* Add special queues */
@@ -2098,7 +2116,7 @@ int bnx2x_rss(struct bnx2x *bp, struct bnx2x_rss_config_obj *rss_obj,
 
 	if (config_hash) {
 		/* RSS keys */
-		prandom_bytes(params.rss_key, T_ETH_RSS_KEY * 4);
+		netdev_rss_key_fill(params.rss_key, T_ETH_RSS_KEY * 4);
 		__set_bit(BNX2X_RSS_SET_SRCH, &params.rss_flags);
 	}
 
@@ -2476,17 +2494,19 @@ static void bnx2x_bz_fp(struct bnx2x *bp, int index)
 	/* set the tpa flag for each queue. The tpa flag determines the queue
 	 * minimal size so it must be set prior to queue memory allocation
 	 */
-	fp->disable_tpa = !(bp->flags & TPA_ENABLE_FLAG ||
-				  (bp->flags & GRO_ENABLE_FLAG &&
-				   bnx2x_mtu_allows_gro(bp->dev->mtu)));
-	if (bp->flags & TPA_ENABLE_FLAG)
+	if (bp->dev->features & NETIF_F_LRO)
 		fp->mode = TPA_MODE_LRO;
-	else if (bp->flags & GRO_ENABLE_FLAG)
+	else if (bp->dev->features & NETIF_F_GRO &&
+		 bnx2x_mtu_allows_gro(bp->dev->mtu))
 		fp->mode = TPA_MODE_GRO;
+	else
+		fp->mode = TPA_MODE_DISABLED;
 
-	/* We don't want TPA on an FCoE L2 ring */
-	if (IS_FCOE_FP(fp))
-		fp->disable_tpa = 1;
+	/* We don't want TPA if it's disabled in bp
+	 * or if this is an FCoE L2 ring.
+	 */
+	if (bp->disable_tpa || IS_FCOE_FP(fp))
+		fp->mode = TPA_MODE_DISABLED;
 }
 
 int bnx2x_load_cnic(struct bnx2x *bp)
@@ -2607,7 +2627,7 @@ int bnx2x_nic_load(struct bnx2x *bp, int load_mode)
 	/*
 	 * Zero fastpath structures preserving invariants like napi, which are
 	 * allocated only once, fp index, max_cos, bp pointer.
-	 * Also set fp->disable_tpa and txdata_ptr.
+	 * Also set fp->mode and txdata_ptr.
 	 */
 	DP(NETIF_MSG_IFUP, "num queues: %d", bp->num_queues);
 	for_each_queue(bp, i)
@@ -3174,7 +3194,7 @@ static int bnx2x_poll(struct napi_struct *napi, int budget)
 		}
 #endif
 		if (!bnx2x_fp_lock_napi(fp))
-			return work_done;
+			return budget;
 
 		for_each_cos_in_tx_queue(fp, cos)
 			if (bnx2x_tx_queue_has_work(fp->txdata_ptr[cos]))
@@ -3190,9 +3210,10 @@ static int bnx2x_poll(struct napi_struct *napi, int budget)
 			}
 		}
 
+		bnx2x_fp_unlock_napi(fp);
+
 		/* Fall out from the NAPI loop if needed */
-		if (!bnx2x_fp_unlock_napi(fp) &&
-		    !(bnx2x_has_rx_work(fp) || bnx2x_has_tx_work(fp))) {
+		if (!(bnx2x_has_rx_work(fp) || bnx2x_has_tx_work(fp))) {
 
 			/* No need to update SB for FCoE L2 ring as long as
 			 * it's connected to the default SB and the SB
@@ -3245,7 +3266,7 @@ int bnx2x_low_latency_recv(struct napi_struct *napi)
 
 	if ((bp->state == BNX2X_STATE_CLOSED) ||
 	    (bp->state == BNX2X_STATE_ERROR) ||
-	    (bp->flags & (TPA_ENABLE_FLAG | GRO_ENABLE_FLAG)))
+	    (bp->dev->features & (NETIF_F_LRO | NETIF_F_GRO)))
 		return LL_FLUSH_FAILED;
 
 	if (!bnx2x_fp_lock_poll(fp))
@@ -3396,8 +3417,13 @@ static int bnx2x_pkt_req_lin(struct bnx2x *bp, struct sk_buff *skb,
 			u32 wnd_sum = 0;
 
 			/* Headers length */
-			hlen = (int)(skb_transport_header(skb) - skb->data) +
-				tcp_hdrlen(skb);
+			if (xmit_type & XMIT_GSO_ENC)
+				hlen = (int)(skb_inner_transport_header(skb) -
+					     skb->data) +
+					     inner_tcp_hdrlen(skb);
+			else
+				hlen = (int)(skb_transport_header(skb) -
+					     skb->data) + tcp_hdrlen(skb);
 
 			/* Amount of data (w/o headers) on linear part of SKB*/
 			first_bd_sz = skb_headlen(skb) - hlen;
@@ -3864,9 +3890,9 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	   "sending pkt %u @%p  next_idx %u  bd %u @%p\n",
 	   pkt_prod, tx_buf, txdata->tx_pkt_prod, bd_prod, tx_start_bd);
 
-	if (vlan_tx_tag_present(skb)) {
+	if (skb_vlan_tag_present(skb)) {
 		tx_start_bd->vlan_or_ethertype =
-		    cpu_to_le16(vlan_tx_tag_get(skb));
+		    cpu_to_le16(skb_vlan_tag_get(skb));
 		tx_start_bd->bd_flags.as_bitfield |=
 		    (X_ETH_OUTBAND_VLAN << ETH_TX_BD_FLAGS_VLAN_MODE_SHIFT);
 	} else {
@@ -4230,14 +4256,13 @@ int bnx2x_change_mac_addr(struct net_device *dev, void *p)
 	struct bnx2x *bp = netdev_priv(dev);
 	int rc = 0;
 
-	if (!bnx2x_is_valid_ether_addr(bp, addr->sa_data)) {
+	if (!is_valid_ether_addr(addr->sa_data)) {
 		BNX2X_ERR("Requested MAC address is not valid\n");
 		return -EINVAL;
 	}
 
-	if ((IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp)) &&
-	    !is_zero_ether_addr(addr->sa_data)) {
-		BNX2X_ERR("Can't configure non-zero address on iSCSI or FCoE functions in MF-SD mode\n");
+	if (IS_MF_STORAGE_ONLY(bp)) {
+		BNX2X_ERR("Can't change address on STORAGE ONLY function\n");
 		return -EINVAL;
 	}
 
@@ -4416,8 +4441,7 @@ static int bnx2x_alloc_fp_mem_at(struct bnx2x *bp, int index)
 	u8 cos;
 	int rx_ring_size = 0;
 
-	if (!bp->rx_ring_size &&
-	    (IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp))) {
+	if (!bp->rx_ring_size && IS_MF_STORAGE_ONLY(bp)) {
 		rx_ring_size = MIN_RX_SIZE_NONTPA;
 		bp->rx_ring_size = rx_ring_size;
 	} else if (!bp->rx_ring_size) {
@@ -4543,7 +4567,7 @@ alloc_mem_err:
 	 * In these cases we disable the queue
 	 * Min size is different for OOO, TPA and non-TPA queues
 	 */
-	if (ring_size < (fp->disable_tpa ?
+	if (ring_size < (fp->mode == TPA_MODE_DISABLED ?
 				MIN_RX_SIZE_NONTPA : MIN_RX_SIZE_TPA)) {
 			/* release memory allocated for this queue */
 			bnx2x_free_fp_mem_at(bp, index);
@@ -4784,6 +4808,11 @@ int bnx2x_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
+	if (pci_num_vf(bp->pdev)) {
+		DP(BNX2X_MSG_IOV, "VFs are enabled, can not change MTU\n");
+		return -EPERM;
+	}
+
 	if (bp->recovery_state != BNX2X_RECOVERY_DONE) {
 		BNX2X_ERR("Can't perform change MTU during parity recovery\n");
 		return -EAGAIN;
@@ -4809,15 +4838,28 @@ netdev_features_t bnx2x_fix_features(struct net_device *dev,
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
+	if (pci_num_vf(bp->pdev)) {
+		netdev_features_t changed = dev->features ^ features;
+
+		/* Revert the requested changes in features if they
+		 * would require internal reload of PF in bnx2x_set_features().
+		 */
+		if (!(features & NETIF_F_RXCSUM) && !bp->disable_tpa) {
+			features &= ~NETIF_F_RXCSUM;
+			features |= dev->features & NETIF_F_RXCSUM;
+		}
+
+		if (changed & NETIF_F_LOOPBACK) {
+			features &= ~NETIF_F_LOOPBACK;
+			features |= dev->features & NETIF_F_LOOPBACK;
+		}
+	}
+
 	/* TPA requires Rx CSUM offloading */
 	if (!(features & NETIF_F_RXCSUM)) {
 		features &= ~NETIF_F_LRO;
 		features &= ~NETIF_F_GRO;
 	}
-
-	/* Note: do not disable SW GRO in kernel when HW GRO is off */
-	if (bp->disable_tpa)
-		features &= ~NETIF_F_LRO;
 
 	return features;
 }
@@ -4825,50 +4867,42 @@ netdev_features_t bnx2x_fix_features(struct net_device *dev,
 int bnx2x_set_features(struct net_device *dev, netdev_features_t features)
 {
 	struct bnx2x *bp = netdev_priv(dev);
-	u32 flags = bp->flags;
-	u32 changes;
+	netdev_features_t changes = features ^ dev->features;
 	bool bnx2x_reload = false;
+	int rc;
 
-	if (features & NETIF_F_LRO)
-		flags |= TPA_ENABLE_FLAG;
-	else
-		flags &= ~TPA_ENABLE_FLAG;
-
-	if (features & NETIF_F_GRO)
-		flags |= GRO_ENABLE_FLAG;
-	else
-		flags &= ~GRO_ENABLE_FLAG;
-
-	if (features & NETIF_F_LOOPBACK) {
-		if (bp->link_params.loopback_mode != LOOPBACK_BMAC) {
-			bp->link_params.loopback_mode = LOOPBACK_BMAC;
-			bnx2x_reload = true;
-		}
-	} else {
-		if (bp->link_params.loopback_mode != LOOPBACK_NONE) {
-			bp->link_params.loopback_mode = LOOPBACK_NONE;
-			bnx2x_reload = true;
+	/* VFs or non SRIOV PFs should be able to change loopback feature */
+	if (!pci_num_vf(bp->pdev)) {
+		if (features & NETIF_F_LOOPBACK) {
+			if (bp->link_params.loopback_mode != LOOPBACK_BMAC) {
+				bp->link_params.loopback_mode = LOOPBACK_BMAC;
+				bnx2x_reload = true;
+			}
+		} else {
+			if (bp->link_params.loopback_mode != LOOPBACK_NONE) {
+				bp->link_params.loopback_mode = LOOPBACK_NONE;
+				bnx2x_reload = true;
+			}
 		}
 	}
 
-	changes = flags ^ bp->flags;
-
 	/* if GRO is changed while LRO is enabled, don't force a reload */
-	if ((changes & GRO_ENABLE_FLAG) && (flags & TPA_ENABLE_FLAG))
-		changes &= ~GRO_ENABLE_FLAG;
+	if ((changes & NETIF_F_GRO) && (features & NETIF_F_LRO))
+		changes &= ~NETIF_F_GRO;
 
 	/* if GRO is changed while HW TPA is off, don't force a reload */
-	if ((changes & GRO_ENABLE_FLAG) && bp->disable_tpa)
-		changes &= ~GRO_ENABLE_FLAG;
+	if ((changes & NETIF_F_GRO) && bp->disable_tpa)
+		changes &= ~NETIF_F_GRO;
 
 	if (changes)
 		bnx2x_reload = true;
 
-	bp->flags = flags;
-
 	if (bnx2x_reload) {
-		if (bp->recovery_state == BNX2X_RECOVERY_DONE)
-			return bnx2x_reload_if_running(dev);
+		if (bp->recovery_state == BNX2X_RECOVERY_DONE) {
+			dev->features = features;
+			rc = bnx2x_reload_if_running(dev);
+			return rc ? rc : 1;
+		}
 		/* else: bnx2x_nic_load() will be called at end of recovery */
 	}
 

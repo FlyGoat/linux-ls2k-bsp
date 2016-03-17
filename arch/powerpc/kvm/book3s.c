@@ -52,6 +52,7 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	{ "dec",         VCPU_STAT(dec_exits) },
 	{ "ext_intr",    VCPU_STAT(ext_intr_exits) },
 	{ "queue_intr",  VCPU_STAT(queue_intr) },
+	{ "halt_successful_poll", VCPU_STAT(halt_successful_poll), },
 	{ "halt_wakeup", VCPU_STAT(halt_wakeup) },
 	{ "pf_storage",  VCPU_STAT(pf_storage) },
 	{ "sp_storage",  VCPU_STAT(sp_storage) },
@@ -64,13 +65,16 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	{ NULL }
 };
 
-void kvmppc_core_load_host_debugstate(struct kvm_vcpu *vcpu)
+void kvmppc_unfixup_split_real(struct kvm_vcpu *vcpu)
 {
+	if (vcpu->arch.hflags & BOOK3S_HFLAG_SPLIT_HACK) {
+		ulong pc = kvmppc_get_pc(vcpu);
+		if ((pc & SPLIT_HACK_MASK) == SPLIT_HACK_OFFS)
+			kvmppc_set_pc(vcpu, pc & ~SPLIT_HACK_MASK);
+		vcpu->arch.hflags &= ~BOOK3S_HFLAG_SPLIT_HACK;
+	}
 }
-
-void kvmppc_core_load_guest_debugstate(struct kvm_vcpu *vcpu)
-{
-}
+EXPORT_SYMBOL_GPL(kvmppc_unfixup_split_real);
 
 static inline unsigned long kvmppc_interrupt_offset(struct kvm_vcpu *vcpu)
 {
@@ -118,6 +122,7 @@ static inline bool kvmppc_critical_section(struct kvm_vcpu *vcpu)
 
 void kvmppc_inject_interrupt(struct kvm_vcpu *vcpu, int vec, u64 flags)
 {
+	kvmppc_unfixup_split_real(vcpu);
 	kvmppc_set_srr0(vcpu, kvmppc_get_pc(vcpu));
 	kvmppc_set_srr1(vcpu, kvmppc_get_msr(vcpu) | flags);
 	kvmppc_set_pc(vcpu, kvmppc_interrupt_offset(vcpu) + vec);
@@ -216,6 +221,23 @@ void kvmppc_core_dequeue_external(struct kvm_vcpu *vcpu)
 {
 	kvmppc_book3s_dequeue_irqprio(vcpu, BOOK3S_INTERRUPT_EXTERNAL);
 	kvmppc_book3s_dequeue_irqprio(vcpu, BOOK3S_INTERRUPT_EXTERNAL_LEVEL);
+}
+
+void kvmppc_core_queue_data_storage(struct kvm_vcpu *vcpu, ulong dar,
+				    ulong flags)
+{
+	kvmppc_set_dar(vcpu, dar);
+	kvmppc_set_dsisr(vcpu, flags);
+	kvmppc_book3s_queue_irqprio(vcpu, BOOK3S_INTERRUPT_DATA_STORAGE);
+}
+
+void kvmppc_core_queue_inst_storage(struct kvm_vcpu *vcpu, ulong flags)
+{
+	u64 msr = kvmppc_get_msr(vcpu);
+	msr &= ~(SRR1_ISI_NOPT | SRR1_ISI_N_OR_G | SRR1_ISI_PROT);
+	msr |= flags & (SRR1_ISI_NOPT | SRR1_ISI_N_OR_G | SRR1_ISI_PROT);
+	kvmppc_set_msr_fast(vcpu, msr);
+	kvmppc_book3s_queue_irqprio(vcpu, BOOK3S_INTERRUPT_INST_STORAGE);
 }
 
 int kvmppc_book3s_irqprio_deliver(struct kvm_vcpu *vcpu, unsigned int priority)
@@ -342,18 +364,18 @@ int kvmppc_core_prepare_to_enter(struct kvm_vcpu *vcpu)
 }
 EXPORT_SYMBOL_GPL(kvmppc_core_prepare_to_enter);
 
-pfn_t kvmppc_gfn_to_pfn(struct kvm_vcpu *vcpu, gfn_t gfn, bool writing,
+pfn_t kvmppc_gpa_to_pfn(struct kvm_vcpu *vcpu, gpa_t gpa, bool writing,
 			bool *writable)
 {
-	ulong mp_pa = vcpu->arch.magic_page_pa;
+	ulong mp_pa = vcpu->arch.magic_page_pa & KVM_PAM;
+	gfn_t gfn = gpa >> PAGE_SHIFT;
 
 	if (!(kvmppc_get_msr(vcpu) & MSR_SF))
 		mp_pa = (uint32_t)mp_pa;
 
 	/* Magic page override */
-	if (unlikely(mp_pa) &&
-	    unlikely(((gfn << PAGE_SHIFT) & KVM_PAM) ==
-		     ((mp_pa & PAGE_MASK) & KVM_PAM))) {
+	gpa &= ~0xFFFULL;
+	if (unlikely(mp_pa) && unlikely((gpa & KVM_PAM) == mp_pa)) {
 		ulong shared_page = ((ulong)vcpu->arch.shared) & PAGE_MASK;
 		pfn_t pfn;
 
@@ -366,11 +388,13 @@ pfn_t kvmppc_gfn_to_pfn(struct kvm_vcpu *vcpu, gfn_t gfn, bool writing,
 
 	return gfn_to_pfn_prot(vcpu->kvm, gfn, writing, writable);
 }
-EXPORT_SYMBOL_GPL(kvmppc_gfn_to_pfn);
+EXPORT_SYMBOL_GPL(kvmppc_gpa_to_pfn);
 
-static int kvmppc_xlate(struct kvm_vcpu *vcpu, ulong eaddr, bool data,
-			bool iswrite, struct kvmppc_pte *pte)
+int kvmppc_xlate(struct kvm_vcpu *vcpu, ulong eaddr, enum xlate_instdata xlid,
+		 enum xlate_readwrite xlrw, struct kvmppc_pte *pte)
 {
+	bool data = (xlid == XLATE_DATA);
+	bool iswrite = (xlrw == XLATE_WRITE);
 	int relocated = (kvmppc_get_msr(vcpu) & (data ? MSR_DR : MSR_IR));
 	int r;
 
@@ -384,88 +408,34 @@ static int kvmppc_xlate(struct kvm_vcpu *vcpu, ulong eaddr, bool data,
 		pte->may_write = true;
 		pte->may_execute = true;
 		r = 0;
+
+		if ((kvmppc_get_msr(vcpu) & (MSR_IR | MSR_DR)) == MSR_DR &&
+		    !data) {
+			if ((vcpu->arch.hflags & BOOK3S_HFLAG_SPLIT_HACK) &&
+			    ((eaddr & SPLIT_HACK_MASK) == SPLIT_HACK_OFFS))
+			pte->raddr &= ~SPLIT_HACK_MASK;
+		}
 	}
 
 	return r;
 }
 
-static hva_t kvmppc_bad_hva(void)
+int kvmppc_load_last_inst(struct kvm_vcpu *vcpu, enum instruction_type type,
+					 u32 *inst)
 {
-	return PAGE_OFFSET;
+	ulong pc = kvmppc_get_pc(vcpu);
+	int r;
+
+	if (type == INST_SC)
+		pc -= 4;
+
+	r = kvmppc_ld(vcpu, &pc, sizeof(u32), inst, false);
+	if (r == EMULATE_DONE)
+		return r;
+	else
+		return EMULATE_AGAIN;
 }
-
-static hva_t kvmppc_pte_to_hva(struct kvm_vcpu *vcpu, struct kvmppc_pte *pte,
-			       bool read)
-{
-	hva_t hpage;
-
-	if (read && !pte->may_read)
-		goto err;
-
-	if (!read && !pte->may_write)
-		goto err;
-
-	hpage = gfn_to_hva(vcpu->kvm, pte->raddr >> PAGE_SHIFT);
-	if (kvm_is_error_hva(hpage))
-		goto err;
-
-	return hpage | (pte->raddr & ~PAGE_MASK);
-err:
-	return kvmppc_bad_hva();
-}
-
-int kvmppc_st(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
-	      bool data)
-{
-	struct kvmppc_pte pte;
-
-	vcpu->stat.st++;
-
-	if (kvmppc_xlate(vcpu, *eaddr, data, true, &pte))
-		return -ENOENT;
-
-	*eaddr = pte.raddr;
-
-	if (!pte.may_write)
-		return -EPERM;
-
-	if (kvm_write_guest(vcpu->kvm, pte.raddr, ptr, size))
-		return EMULATE_DO_MMIO;
-
-	return EMULATE_DONE;
-}
-EXPORT_SYMBOL_GPL(kvmppc_st);
-
-int kvmppc_ld(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
-		      bool data)
-{
-	struct kvmppc_pte pte;
-	hva_t hva = *eaddr;
-
-	vcpu->stat.ld++;
-
-	if (kvmppc_xlate(vcpu, *eaddr, data, false, &pte))
-		goto nopte;
-
-	*eaddr = pte.raddr;
-
-	hva = kvmppc_pte_to_hva(vcpu, &pte, true);
-	if (kvm_is_error_hva(hva))
-		goto mmio;
-
-	if (copy_from_user(ptr, (void __user *)hva, size)) {
-		printk(KERN_INFO "kvmppc_ld at 0x%lx failed\n", hva);
-		goto mmio;
-	}
-
-	return EMULATE_DONE;
-
-nopte:
-	return -ENOENT;
-mmio:
-	return EMULATE_DO_MMIO;
-}
-EXPORT_SYMBOL_GPL(kvmppc_ld);
+EXPORT_SYMBOL_GPL(kvmppc_load_last_inst);
 
 int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
 {
@@ -646,6 +616,12 @@ int kvm_vcpu_ioctl_get_one_reg(struct kvm_vcpu *vcpu, struct kvm_one_reg *reg)
 		case KVM_REG_PPC_BESCR:
 			val = get_reg_val(reg->id, vcpu->arch.bescr);
 			break;
+		case KVM_REG_PPC_VTB:
+			val = get_reg_val(reg->id, vcpu->arch.vtb);
+			break;
+		case KVM_REG_PPC_IC:
+			val = get_reg_val(reg->id, vcpu->arch.ic);
+			break;
 		default:
 			r = -EINVAL;
 			break;
@@ -750,6 +726,12 @@ int kvm_vcpu_ioctl_set_one_reg(struct kvm_vcpu *vcpu, struct kvm_one_reg *reg)
 		case KVM_REG_PPC_BESCR:
 			vcpu->arch.bescr = set_reg_val(reg->id, val);
 			break;
+		case KVM_REG_PPC_VTB:
+			vcpu->arch.vtb = set_reg_val(reg->id, val);
+			break;
+		case KVM_REG_PPC_IC:
+			vcpu->arch.ic = set_reg_val(reg->id, val);
+			break;
 		default:
 			r = -EINVAL;
 			break;
@@ -789,13 +771,12 @@ int kvm_arch_vcpu_ioctl_translate(struct kvm_vcpu *vcpu,
 int kvm_arch_vcpu_ioctl_set_guest_debug(struct kvm_vcpu *vcpu,
 					struct kvm_guest_debug *dbg)
 {
-	return -EINVAL;
+	vcpu->guest_debug = dbg->control;
+	return 0;
 }
 
-void kvmppc_decrementer_func(unsigned long data)
+void kvmppc_decrementer_func(struct kvm_vcpu *vcpu)
 {
-	struct kvm_vcpu *vcpu = (struct kvm_vcpu *)data;
-
 	kvmppc_core_queue_dec(vcpu);
 	kvm_vcpu_kick(vcpu);
 }
@@ -839,16 +820,17 @@ void kvmppc_core_flush_memslot(struct kvm *kvm, struct kvm_memory_slot *memslot)
 
 int kvmppc_core_prepare_memory_region(struct kvm *kvm,
 				struct kvm_memory_slot *memslot,
-				struct kvm_userspace_memory_region *mem)
+				const struct kvm_userspace_memory_region *mem)
 {
 	return kvm->arch.kvm_ops->prepare_memory_region(kvm, memslot, mem);
 }
 
 void kvmppc_core_commit_memory_region(struct kvm *kvm,
-				struct kvm_userspace_memory_region *mem,
-				const struct kvm_memory_slot *old)
+				const struct kvm_userspace_memory_region *mem,
+				const struct kvm_memory_slot *old,
+				const struct kvm_memory_slot *new)
 {
-	kvm->arch.kvm_ops->commit_memory_region(kvm, mem, old);
+	kvm->arch.kvm_ops->commit_memory_region(kvm, mem, old, new);
 }
 
 int kvm_unmap_hva(struct kvm *kvm, unsigned long hva)
@@ -902,6 +884,88 @@ void kvmppc_core_destroy_vm(struct kvm *kvm)
 	WARN_ON(!list_empty(&kvm->arch.spapr_tce_tables));
 #endif
 }
+
+int kvmppc_h_logical_ci_load(struct kvm_vcpu *vcpu)
+{
+	unsigned long size = kvmppc_get_gpr(vcpu, 4);
+	unsigned long addr = kvmppc_get_gpr(vcpu, 5);
+	u64 buf;
+	int srcu_idx;
+	int ret;
+
+	if (!is_power_of_2(size) || (size > sizeof(buf)))
+		return H_TOO_HARD;
+
+	srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
+	ret = kvm_io_bus_read(vcpu->kvm, KVM_MMIO_BUS, addr, size, &buf);
+	srcu_read_unlock(&vcpu->kvm->srcu, srcu_idx);
+	if (ret != 0)
+		return H_TOO_HARD;
+
+	switch (size) {
+	case 1:
+		kvmppc_set_gpr(vcpu, 4, *(u8 *)&buf);
+		break;
+
+	case 2:
+		kvmppc_set_gpr(vcpu, 4, be16_to_cpu(*(__be16 *)&buf));
+		break;
+
+	case 4:
+		kvmppc_set_gpr(vcpu, 4, be32_to_cpu(*(__be32 *)&buf));
+		break;
+
+	case 8:
+		kvmppc_set_gpr(vcpu, 4, be64_to_cpu(*(__be64 *)&buf));
+		break;
+
+	default:
+		BUG();
+	}
+
+	return H_SUCCESS;
+}
+EXPORT_SYMBOL_GPL(kvmppc_h_logical_ci_load);
+
+int kvmppc_h_logical_ci_store(struct kvm_vcpu *vcpu)
+{
+	unsigned long size = kvmppc_get_gpr(vcpu, 4);
+	unsigned long addr = kvmppc_get_gpr(vcpu, 5);
+	unsigned long val = kvmppc_get_gpr(vcpu, 6);
+	u64 buf;
+	int srcu_idx;
+	int ret;
+
+	switch (size) {
+	case 1:
+		*(u8 *)&buf = val;
+		break;
+
+	case 2:
+		*(__be16 *)&buf = cpu_to_be16(val);
+		break;
+
+	case 4:
+		*(__be32 *)&buf = cpu_to_be32(val);
+		break;
+
+	case 8:
+		*(__be64 *)&buf = cpu_to_be64(val);
+		break;
+
+	default:
+		return H_TOO_HARD;
+	}
+
+	srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
+	ret = kvm_io_bus_write(vcpu->kvm, KVM_MMIO_BUS, addr, size, &buf);
+	srcu_read_unlock(&vcpu->kvm->srcu, srcu_idx);
+	if (ret != 0)
+		return H_TOO_HARD;
+
+	return H_SUCCESS;
+}
+EXPORT_SYMBOL_GPL(kvmppc_h_logical_ci_store);
 
 int kvmppc_core_check_processor_compat(void)
 {

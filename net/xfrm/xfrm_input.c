@@ -13,8 +13,85 @@
 #include <net/dst.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
+#include <net/ip_tunnels.h>
+#include <net/ip6_tunnel.h>
 
 static struct kmem_cache *secpath_cachep __read_mostly;
+
+static DEFINE_SPINLOCK(xfrm_input_afinfo_lock);
+static struct xfrm_input_afinfo __rcu *xfrm_input_afinfo[NPROTO];
+
+int xfrm_input_register_afinfo(struct xfrm_input_afinfo *afinfo)
+{
+	int err = 0;
+
+	if (unlikely(afinfo == NULL))
+		return -EINVAL;
+	if (unlikely(afinfo->family >= NPROTO))
+		return -EAFNOSUPPORT;
+	spin_lock_bh(&xfrm_input_afinfo_lock);
+	if (unlikely(xfrm_input_afinfo[afinfo->family] != NULL))
+		err = -ENOBUFS;
+	else
+		rcu_assign_pointer(xfrm_input_afinfo[afinfo->family], afinfo);
+	spin_unlock_bh(&xfrm_input_afinfo_lock);
+	return err;
+}
+EXPORT_SYMBOL(xfrm_input_register_afinfo);
+
+int xfrm_input_unregister_afinfo(struct xfrm_input_afinfo *afinfo)
+{
+	int err = 0;
+
+	if (unlikely(afinfo == NULL))
+		return -EINVAL;
+	if (unlikely(afinfo->family >= NPROTO))
+		return -EAFNOSUPPORT;
+	spin_lock_bh(&xfrm_input_afinfo_lock);
+	if (likely(xfrm_input_afinfo[afinfo->family] != NULL)) {
+		if (unlikely(xfrm_input_afinfo[afinfo->family] != afinfo))
+			err = -EINVAL;
+		else
+			RCU_INIT_POINTER(xfrm_input_afinfo[afinfo->family], NULL);
+	}
+	spin_unlock_bh(&xfrm_input_afinfo_lock);
+	synchronize_rcu();
+	return err;
+}
+EXPORT_SYMBOL(xfrm_input_unregister_afinfo);
+
+static struct xfrm_input_afinfo *xfrm_input_get_afinfo(unsigned int family)
+{
+	struct xfrm_input_afinfo *afinfo;
+
+	if (unlikely(family >= NPROTO))
+		return NULL;
+	rcu_read_lock();
+	afinfo = rcu_dereference(xfrm_input_afinfo[family]);
+	if (unlikely(!afinfo))
+		rcu_read_unlock();
+	return afinfo;
+}
+
+static void xfrm_input_put_afinfo(struct xfrm_input_afinfo *afinfo)
+{
+	rcu_read_unlock();
+}
+
+static int xfrm_rcv_cb(struct sk_buff *skb, unsigned int family, u8 protocol,
+		       int err)
+{
+	int ret;
+	struct xfrm_input_afinfo *afinfo = xfrm_input_get_afinfo(family);
+
+	if (!afinfo)
+		return -EAFNOSUPPORT;
+
+	ret = afinfo->callback(skb, protocol, err);
+	xfrm_input_put_afinfo(afinfo);
+
+	return ret;
+}
 
 void __secpath_destroy(struct sec_path *sp)
 {
@@ -111,6 +188,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 	struct xfrm_state *x = NULL;
 	xfrm_address_t *daddr;
 	struct xfrm_mode *inner_mode;
+	u32 mark = skb->mark;
 	unsigned int family;
 	int decaps = 0;
 	int async = 0;
@@ -127,6 +205,18 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 	daddr = (xfrm_address_t *)(skb_network_header(skb) +
 				   XFRM_SPI_SKB_CB(skb)->daddroff);
 	family = XFRM_SPI_SKB_CB(skb)->family;
+
+	/* if tunnel is present override skb->mark value with tunnel i_key */
+	if (XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4) {
+		switch (family) {
+		case AF_INET:
+			mark = be32_to_cpu(XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4->parms.i_key);
+			break;
+		case AF_INET6:
+			mark = be32_to_cpu(XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip6->parms.i_key);
+			break;
+		}
+	}
 
 	/* Allocate new secpath or COW existing one. */
 	if (!skb->sp || atomic_read(&skb->sp->refcnt) != 1) {
@@ -154,7 +244,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 			goto drop;
 		}
 
-		x = xfrm_state_lookup(net, skb->mark, daddr, spi, nexthdr, family);
+		x = xfrm_state_lookup(net, mark, daddr, spi, nexthdr, family);
 		if (x == NULL) {
 			XFRM_INC_STATS(net, LINUX_MIB_XFRMINNOSTATES);
 			xfrm_audit_state_notfound(skb, family, spi, seq);

@@ -521,7 +521,7 @@ struct lpc_ich_info lpc_chipset_info[] = {
  * pci_driver, because the I/O Controller Hub has also other
  * functions that probably will be registered by other drivers.
  */
-static DEFINE_PCI_DEVICE_TABLE(lpc_ich_ids) = {
+static const struct pci_device_id lpc_ich_ids[] = {
 	{ PCI_VDEVICE(INTEL, 0x2410), LPC_ICH},
 	{ PCI_VDEVICE(INTEL, 0x2420), LPC_ICH0},
 	{ PCI_VDEVICE(INTEL, 0x2440), LPC_ICH2},
@@ -910,8 +910,8 @@ gpe0_done:
 	lpc_ich_enable_gpio_space(dev);
 
 	lpc_ich_finalize_cell(dev, &lpc_ich_cells[LPC_GPIO]);
-	ret = mfd_add_devices(&dev->dev, -1, &lpc_ich_cells[LPC_GPIO],
-			      1, NULL, 0, NULL);
+	ret = mfd_add_devices(&dev->dev, PLATFORM_DEVID_AUTO,
+			      &lpc_ich_cells[LPC_GPIO], 1, NULL, 0, NULL);
 
 gpio_done:
 	if (acpi_conflict)
@@ -984,8 +984,8 @@ static int lpc_ich_init_wdt(struct pci_dev *dev)
 	}
 
 	lpc_ich_finalize_cell(dev, &lpc_ich_cells[LPC_WDT]);
-	ret = mfd_add_devices(&dev->dev, -1, &lpc_ich_cells[LPC_WDT],
-			      1, NULL, 0, NULL);
+	ret = mfd_add_devices(&dev->dev, PLATFORM_DEVID_AUTO,
+			      &lpc_ich_cells[LPC_WDT], 1, NULL, 0, NULL);
 
 wdt_done:
 	return ret;

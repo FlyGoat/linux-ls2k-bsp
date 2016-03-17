@@ -230,6 +230,8 @@ struct lpfc_stats {
 	uint32_t elsRcvRRQ;
 	uint32_t elsRcvRTV;
 	uint32_t elsRcvECHO;
+	uint32_t elsRcvLCB;
+	uint32_t elsRcvRDP;
 	uint32_t elsXmitFLOGI;
 	uint32_t elsXmitFDISC;
 	uint32_t elsXmitPLOGI;
@@ -413,6 +415,9 @@ struct lpfc_vport {
 	uint32_t cfg_fcp_class;
 	uint32_t cfg_use_adisc;
 	uint32_t cfg_fdmi_on;
+#define LPFC_FDMI_SUPPORT	1	/* bit 0 - FDMI supported? */
+#define LPFC_FDMI_REG_DELAY	2	/* bit 1 - 60 sec registration delay */
+#define LPFC_FDMI_ALL_ATTRIB	4	/* bit 2 - register ALL attributes? */
 	uint32_t cfg_discovery_threads;
 	uint32_t cfg_log_verbose;
 	uint32_t cfg_max_luns;

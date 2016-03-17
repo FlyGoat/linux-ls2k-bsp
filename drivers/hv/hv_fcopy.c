@@ -86,6 +86,18 @@ static void fcopy_work_func(struct work_struct *dummy)
 	 * process the pending transaction.
 	 */
 	fcopy_respond_to_host(HV_E_FAIL);
+
+	/* In the case the user-space daemon crashes, hangs or is killed, we
+	 * need to down the semaphore, otherwise, after the daemon starts next
+	 * time, the obsolete data in fcopy_transaction.message or
+	 * fcopy_transaction.fcopy_msg will be used immediately.
+	 *
+	 * NOTE: fcopy_read() happens to get the semaphore (very rare)? We're
+	 * still OK, because we've reported the failure to the host.
+	 */
+	if (down_trylock(&fcopy_transaction.read_sema))
+		;
+
 }
 
 static int fcopy_handle_handshake(u32 version)
@@ -344,6 +356,11 @@ static int fcopy_open(struct inode *inode, struct file *f)
 	return 0;
 }
 
+/* XXX: there are still some tricky corner cases, e.g.,
+ * In an SMP guest, when fcopy_release() runs between
+ * schedule_delayed_work() and fcopy_send_data(), there is
+ * still a chance an obsolete message will be queued.
+ */
 static int fcopy_release(struct inode *inode, struct file *f)
 {
 	/*
@@ -351,11 +368,19 @@ static int fcopy_release(struct inode *inode, struct file *f)
 	 */
 	in_hand_shake = true;
 	opened = false;
+
+	if (cancel_delayed_work_sync(&fcopy_work)) {
+		/* We haven't up()-ed the semaphore(very rare)? */
+		if (down_trylock(&fcopy_transaction.read_sema))
+			;
+		fcopy_respond_to_host(HV_E_FAIL);
+	}
 	return 0;
 }
 
 
 static const struct file_operations fcopy_fops = {
+	.owner          = THIS_MODULE,
 	.read           = fcopy_read,
 	.write          = fcopy_write,
 	.release	= fcopy_release,

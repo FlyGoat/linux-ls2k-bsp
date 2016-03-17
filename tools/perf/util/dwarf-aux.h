@@ -41,6 +41,9 @@ extern int cu_walk_functions_at(Dwarf_Die *cu_die, Dwarf_Addr addr,
 /* Ensure that this DIE is a subprogram and definition (not declaration) */
 extern bool die_is_func_def(Dwarf_Die *dw_die);
 
+/* Ensure that this DIE is an instance of a subprogram */
+extern bool die_is_func_instance(Dwarf_Die *dw_die);
+
 /* Compare diename and tname */
 extern bool die_compare_name(Dwarf_Die *dw_die, const char *tname);
 
@@ -77,6 +80,10 @@ extern Dwarf_Die *die_find_child(Dwarf_Die *rt_die,
 
 /* Search a non-inlined function including given address */
 extern Dwarf_Die *die_find_realfunc(Dwarf_Die *cu_die, Dwarf_Addr addr,
+				    Dwarf_Die *die_mem);
+
+/* Search a non-inlined function with tail call at given address */
+Dwarf_Die *die_find_tailfunc(Dwarf_Die *cu_die, Dwarf_Addr addr,
 				    Dwarf_Die *die_mem);
 
 /* Search the top inlined function including given address */

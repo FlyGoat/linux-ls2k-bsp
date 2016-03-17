@@ -245,10 +245,10 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 	err = ceph_mdsc_do_request(mdsc,
 				   (flags & (O_CREAT|O_TRUNC)) ? dir : NULL,
 				   req);
+	err = ceph_handle_snapdir(req, dentry, err);
 	if (err)
 		goto out_err;
 
-	err = ceph_handle_snapdir(req, dentry, err);
 	if (err == 0 && (flags & O_CREAT) && !req->r_reply_info.head->is_dentry)
 		err = ceph_handle_notrace_create(dir, dentry);
 
@@ -299,6 +299,11 @@ int ceph_release(struct inode *inode, struct file *file)
 	wake_up_all(&ci->i_cap_wq);
 	return 0;
 }
+
+enum {
+	CHECK_EOF = 1,
+	READ_INLINE = 2,
+};
 
 /*
  * Read a range of bytes striped over one or more objects.  Iterate over
@@ -354,13 +359,14 @@ more:
 	if (ret >= 0) {
 		int didpages;
 		if (was_short && (pos + ret < inode->i_size)) {
-			u64 tmp = min(this_len - ret,
-					inode->i_size - pos - ret);
+			int zlen = min(this_len - ret,
+				       inode->i_size - pos - ret);
+			int zoff = (o_direct ? buf_align : io_align) +
+				    read + ret;
 			dout(" zero gap %llu to %llu\n",
-				pos + ret, pos + ret + tmp);
-			ceph_zero_page_vector_range(page_align + read + ret,
-							tmp, pages);
-			ret += tmp;
+				pos + ret, pos + ret + zlen);
+			ceph_zero_page_vector_range(zoff, zlen, pages);
+			ret += zlen;
 		}
 
 		didpages = (page_align + ret) >> PAGE_CACHE_SHIFT;
@@ -379,7 +385,7 @@ more:
 		ret = read;
 		/* did we bounce off eof? */
 		if (pos + left > inode->i_size)
-			*checkeof = 1;
+			*checkeof = CHECK_EOF;
 	}
 
 	dout("striped_read returns %d\n", ret);
@@ -578,7 +584,7 @@ ceph_sync_direct_write(struct kiocb *iocb, const struct iovec *iov,
 		snapc = ci->i_snap_realm->cached_context;
 		vino = ceph_vino(inode);
 		req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout,
-					    vino, pos, &len,
+					    vino, pos, &len, 0,
 					    2,/*include a 'startsync' command*/
 					    CEPH_OSD_OP_WRITE, flags, snapc,
 					    ci->i_truncate_seq,
@@ -588,6 +594,8 @@ ceph_sync_direct_write(struct kiocb *iocb, const struct iovec *iov,
 			ret = PTR_ERR(req);
 			break;
 		}
+
+		osd_req_op_init(req, 1, CEPH_OSD_OP_STARTSYNC);
 
 		num_pages = calc_pages_for(page_align, len);
 		pages = ceph_get_direct_page_vector(data, num_pages, false);
@@ -697,7 +705,7 @@ static ssize_t ceph_sync_write(struct kiocb *iocb, const struct iovec *iov,
 		snapc = ci->i_snap_realm->cached_context;
 		vino = ceph_vino(inode);
 		req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout,
-					    vino, pos, &len, 1,
+					    vino, pos, &len, 0, 1,
 					    CEPH_OSD_OP_WRITE, flags, snapc,
 					    ci->i_truncate_seq,
 					    ci->i_truncate_size,
@@ -774,6 +782,65 @@ out:
 	return ret;
 }
 
+static ssize_t inline_to_iov(struct kiocb *iocb, struct iov_iter *i,
+			     struct page *inline_page, int inline_len,
+			     loff_t i_size)
+{
+	loff_t pos = iocb->ki_pos;
+	size_t len = iov_iter_count(i);
+	ssize_t ret = 0;
+
+	BUG_ON(PageHighMem(inline_page));
+
+	if (pos < i_size && pos < PAGE_CACHE_SIZE) {
+		void *kdata = page_address(inline_page) + pos;
+		loff_t end = min_t(loff_t, pos + len,
+				   min_t(loff_t, i_size, PAGE_CACHE_SIZE));
+		size_t left = end - pos;
+
+		if (inline_len < end)
+			zero_user_segment(inline_page, inline_len, end);
+
+		while (left) {
+			void __user *udata = i->iov->iov_base + i->iov_offset;
+			size_t n = min(i->iov->iov_len - i->iov_offset, left);
+
+			if (__copy_to_user(udata, kdata, n)) {
+				ret = -EFAULT;
+				break;
+			}
+			iov_iter_advance(i, n);
+			kdata += n;
+			pos += n;
+			left -= n;
+		}
+	}
+
+	if (!ret && pos < i_size && pos < iocb->ki_pos + len) {
+		size_t left = min_t(loff_t, iocb->ki_pos + len, i_size) - pos;
+
+		while (left) {
+			void __user *udata = i->iov->iov_base + i->iov_offset;
+			size_t n = min(i->iov->iov_len - i->iov_offset, left);
+
+			if (__clear_user(udata, n)) {
+				ret = -EFAULT;
+				break;
+			}
+			iov_iter_advance(i, n);
+			pos += n;
+			left -= n;
+		}
+	}
+
+	if (pos > iocb->ki_pos) {
+		ret = pos - iocb->ki_pos;
+		iocb->ki_pos = pos;
+	}
+
+	return ret;
+}
+
 /*
  * Wrap generic_file_aio_read with checks for cap bits on the inode.
  * Atomically grab references, so that those bits are not released
@@ -789,9 +856,11 @@ static ssize_t ceph_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	size_t len = iocb->ki_nbytes;
 	struct inode *inode = file_inode(filp);
 	struct ceph_inode_info *ci = ceph_inode(inode);
+	struct page *pinned_page = NULL;
+	struct iov_iter i;
 	ssize_t ret;
 	int want, got = 0;
-	int checkeof = 0, read = 0;
+	int retry_op = 0, read = 0;
 
 again:
 	dout("aio_read %p %llx.%llx %llu~%u trying to get caps on %p\n",
@@ -801,15 +870,13 @@ again:
 		want = CEPH_CAP_FILE_CACHE | CEPH_CAP_FILE_LAZYIO;
 	else
 		want = CEPH_CAP_FILE_CACHE;
-	ret = ceph_get_caps(ci, CEPH_CAP_FILE_RD, want, &got, -1);
+	ret = ceph_get_caps(ci, CEPH_CAP_FILE_RD, want, -1, &got, &pinned_page);
 	if (ret < 0)
 		return ret;
 
 	if ((got & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) == 0 ||
 	    (iocb->ki_filp->f_flags & O_DIRECT) ||
 	    (fi->flags & CEPH_F_SYNC)) {
-		struct iov_iter i;
-
 		dout("aio_sync_read %p %llx.%llx %llu~%u got cap refs on %s\n",
 		     inode, ceph_vinop(inode), iocb->ki_pos, (unsigned)len,
 		     ceph_cap_string(got));
@@ -823,8 +890,12 @@ again:
 
 		iov_iter_init(&i, iov, nr_segs, len, read);
 
-		/* hmm, this isn't really async... */
-		ret = ceph_sync_read(iocb, &i, &checkeof);
+		if (ci->i_inline_version == CEPH_INLINE_NONE) {
+			/* hmm, this isn't really async... */
+			ret = ceph_sync_read(iocb, &i, &retry_op);
+		} else {
+			retry_op = READ_INLINE;
+		}
 	} else {
 		/*
 		 * We can't modify the content of iov,
@@ -844,21 +915,50 @@ again:
 out:
 	dout("aio_read %p %llx.%llx dropping cap refs on %s = %d\n",
 	     inode, ceph_vinop(inode), ceph_cap_string(got), (int)ret);
+	if (pinned_page) {
+		page_cache_release(pinned_page);
+		pinned_page = NULL;
+	}
 	ceph_put_cap_refs(ci, got);
+	if (retry_op && ret >= 0) {
+		int statret;
+		struct page *page = NULL;
+		loff_t i_size;
+		if (retry_op == READ_INLINE) {
+			page = __page_cache_alloc(GFP_NOFS);
+			if (!page)
+				return -ENOMEM;
+		}
 
-	if (checkeof && ret >= 0) {
-		int statret = ceph_do_getattr(inode, CEPH_STAT_CAP_SIZE, false);
+		statret = __ceph_do_getattr(inode, page,
+					    CEPH_STAT_CAP_INLINE_DATA, !!page);
+		if (statret < 0) {
+			 __free_page(page);
+			if (statret == -ENODATA) {
+				BUG_ON(retry_op != READ_INLINE);
+				goto again;
+			}
+			return statret;
+		}
+
+		i_size = i_size_read(inode);
+		if (retry_op == READ_INLINE) {
+			BUG_ON(ret > 0 || read > 0);
+			ret = inline_to_iov(iocb, &i, page, statret, i_size);
+			__free_pages(page, 0);
+			return ret;
+		}
 
 		/* hit EOF or hole? */
-		if (statret == 0 && iocb->ki_pos < inode->i_size &&
-			ret < len) {
+		if (retry_op == CHECK_EOF && iocb->ki_pos < i_size &&
+		    ret < len) {
 			dout("sync_read hit hole, ppos %lld < size %lld"
 			     ", reading more\n", iocb->ki_pos,
 			     inode->i_size);
 
 			read += ret;
 			len -= ret;
-			checkeof = 0;
+			retry_op = 0;
 			goto again;
 		}
 	}
@@ -918,6 +1018,12 @@ static ssize_t ceph_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	if (err)
 		goto out;
 
+	if (ci->i_inline_version != CEPH_INLINE_NONE) {
+		err = ceph_uninline_data(file, NULL);
+		if (err < 0)
+			goto out;
+	}
+
 retry_snap:
 	if (ceph_osdmap_flag(osdc->osdmap, CEPH_OSDMAP_FULL)) {
 		err = -ENOSPC;
@@ -931,7 +1037,8 @@ retry_snap:
 	else
 		want = CEPH_CAP_FILE_BUFFER;
 	got = 0;
-	err = ceph_get_caps(ci, CEPH_CAP_FILE_WR, want, &got, pos + count);
+	err = ceph_get_caps(ci, CEPH_CAP_FILE_WR, want, pos + count,
+			    &got, NULL);
 	if (err < 0)
 		goto out;
 
@@ -971,6 +1078,7 @@ retry_snap:
 	if (written >= 0) {
 		int dirty;
 		spin_lock(&ci->i_ceph_lock);
+		ci->i_inline_version = CEPH_INLINE_NONE;
 		dirty = __ceph_mark_dirty_caps(ci, CEPH_CAP_FILE_WR);
 		spin_unlock(&ci->i_ceph_lock);
 		if (dirty)
@@ -1049,16 +1157,7 @@ static loff_t ceph_llseek(struct file *file, loff_t offset, int whence)
 		break;
 	}
 
-	if (offset < 0 || offset > inode->i_sb->s_maxbytes) {
-		offset = -EINVAL;
-		goto out;
-	}
-
-	/* Special lock needed here? */
-	if (offset != file->f_pos) {
-		file->f_pos = offset;
-		file->f_version = 0;
-	}
+	offset = vfs_setpos(file, offset, inode->i_sb->s_maxbytes);
 
 out:
 	mutex_unlock(&inode->i_mutex);
@@ -1122,7 +1221,7 @@ static int ceph_zero_partial_object(struct inode *inode,
 	req = ceph_osdc_new_request(&fsc->client->osdc, &ci->i_layout,
 					ceph_vino(inode),
 					offset, length,
-					1, op,
+					0, 1, op,
 					CEPH_OSD_FLAG_WRITE |
 					CEPH_OSD_FLAG_ONDISK,
 					NULL, 0, 0, false);
@@ -1225,6 +1324,12 @@ static long ceph_fallocate(struct file *file, int mode,
 		goto unlock;
 	}
 
+	if (ci->i_inline_version != CEPH_INLINE_NONE) {
+		ret = ceph_uninline_data(file, NULL);
+		if (ret < 0)
+			goto unlock;
+	}
+
 	size = i_size_read(inode);
 	if (!(mode & FALLOC_FL_KEEP_SIZE))
 		endoff = offset + length;
@@ -1234,7 +1339,7 @@ static long ceph_fallocate(struct file *file, int mode,
 	else
 		want = CEPH_CAP_FILE_BUFFER;
 
-	ret = ceph_get_caps(ci, CEPH_CAP_FILE_WR, want, &got, endoff);
+	ret = ceph_get_caps(ci, CEPH_CAP_FILE_WR, want, endoff, &got, NULL);
 	if (ret < 0)
 		goto unlock;
 
@@ -1251,6 +1356,7 @@ static long ceph_fallocate(struct file *file, int mode,
 
 	if (!ret) {
 		spin_lock(&ci->i_ceph_lock);
+		ci->i_inline_version = CEPH_INLINE_NONE;
 		dirty = __ceph_mark_dirty_caps(ci, CEPH_CAP_FILE_WR);
 		spin_unlock(&ci->i_ceph_lock);
 		if (dirty)

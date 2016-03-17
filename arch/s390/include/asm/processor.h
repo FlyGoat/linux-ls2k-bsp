@@ -13,6 +13,7 @@
 
 #ifndef __ASSEMBLY__
 
+#include <linux/rh_kabi.h>
 #include <linux/linkage.h>
 #include <linux/irqflags.h>
 #include <asm/cpu.h>
@@ -90,10 +91,19 @@ struct thread_struct {
 	int ri_signum;
 #ifdef CONFIG_64BIT
 	unsigned char trap_tdb[256];	/* Transaction abort diagnose block */
+	RH_KABI_EXTEND(__vector128 *vxrs) /* Vector register save area */
 #endif
 };
 
-#define PER_FLAG_NO_TE		1UL	/* Flag to disable transactions. */
+/* Flag to disable transactions. */
+#define PER_FLAG_NO_TE			1UL
+/* Flag to enable random transaction aborts. */
+#define PER_FLAG_TE_ABORT_RAND		2UL
+/* Flag to specify random transaction abort mode:
+ * - abort each transaction at a random instruction before TEND if set.
+ * - abort random transactions at a random instruction if cleared.
+ */
+#define PER_FLAG_TE_ABORT_RAND_TEND	4UL
 
 typedef struct thread_struct thread_struct;
 
@@ -159,11 +169,6 @@ extern void release_thread(struct task_struct *);
  */
 extern unsigned long thread_saved_pc(struct task_struct *t);
 
-extern void show_code(struct pt_regs *regs);
-extern void print_fn_code(unsigned char *code, unsigned long len);
-extern int insn_to_mnemonic(unsigned char *instruction, char *buf,
-			    unsigned int len);
-
 unsigned long get_wchan(struct task_struct *p);
 #define task_pt_regs(tsk) ((struct pt_regs *) \
         (task_stack_page(tsk) + THREAD_SIZE) - 1)
@@ -184,12 +189,7 @@ static inline unsigned short stap(void)
 /*
  * Give up the time slice of the virtual PU.
  */
-static inline void cpu_relax(void)
-{
-	if (MACHINE_HAS_DIAG44)
-		asm volatile("diag 0,0,68");
-	barrier();
-}
+void cpu_relax(void);
 
 #define arch_mutex_cpu_relax()  barrier()
 

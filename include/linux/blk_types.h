@@ -29,6 +29,25 @@ struct bio_vec {
 };
 
 /*
+ * RHEL7 auxillary shadow structure used to extend 'struct bio' without
+ * breaking RHEL kABI -- bio_init_aux() must be used to set bio->bio_aux
+ */
+struct bio_aux {
+	unsigned long	bi_flags;
+	atomic_t	__bi_remaining;
+
+	/*
+	 * IMPORTANT: adding any new members to this struct will require a more
+	 * comprehensive audit (e.g. all bio_init() callers checked to see if
+	 * they'll need to make use of the new bio_aux member(s) you're adding).
+	 */
+};
+
+#define BIO_AUX_CHAIN	0	/* chained bio, ->bi_remaining in effect */
+
+#define bio_aux_flagged(bio, flag)	((bio)->bio_aux && (bio)->bio_aux->bi_flags & (1 << (flag)))
+
+/*
  * main unit of I/O for the block layer and lower layers (ie drivers and
  * stacking drivers)
  */
@@ -88,10 +107,10 @@ struct bio {
 
 	/* FOR RH USE ONLY
 	 *
-	 * The following padding has been inserted before ABI freeze to
-	 * allow extending the structure while preserving ABI.
+	 * The following padding has been replaced to allow extending
+	 * the structure, using struct bio_aux, while preserving ABI.
 	 */
-	void			*rh_reserved1;
+	RH_KABI_REPLACE(void *rh_reserved1, struct bio_aux *bio_aux)
 
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid
@@ -107,8 +126,6 @@ struct bio {
  * bio flags
  */
 #define BIO_UPTODATE	0	/* ok after I/O completion */
-#define BIO_RW_BLOCK	1	/* RW_AHEAD set, and read/write would block */
-#define BIO_EOF		2	/* out-out-bounds error */
 #define BIO_SEG_VALID	3	/* bi_phys_segments valid */
 #define BIO_CLONED	4	/* doesn't own data */
 #define BIO_BOUNCED	5	/* bio is a bounce bio */
@@ -188,6 +205,7 @@ enum rq_flag_bits {
 	__REQ_END,		/* OBSOLETE */
 	__REQ_HASHED,		/* on IO scheduler merge hash */
 	__REQ_MQ_INFLIGHT,	/* track inflight for MQ */
+	__REQ_NO_TIMEOUT,	/* requests may never expire */
 	__REQ_NR_BITS,		/* stops here */
 };
 
@@ -214,7 +232,7 @@ enum rq_flag_bits {
 
 /* This mask is used for both bio and request merge checking */
 #define REQ_NOMERGE_FLAGS \
-	(REQ_NOMERGE | REQ_STARTED | REQ_SOFTBARRIER | REQ_FLUSH | REQ_FUA)
+	(REQ_NOMERGE | REQ_STARTED | REQ_SOFTBARRIER | REQ_FLUSH | REQ_FUA | REQ_FLUSH_SEQ)
 
 #define REQ_RAHEAD		(1ULL << __REQ_RAHEAD)
 #define REQ_THROTTLED		(1ULL << __REQ_THROTTLED)
@@ -241,5 +259,6 @@ enum rq_flag_bits {
 #define REQ_PM			(1ULL << __REQ_PM)
 #define REQ_HASHED		(1ULL << __REQ_HASHED)
 #define REQ_MQ_INFLIGHT		(1ULL << __REQ_MQ_INFLIGHT)
+#define REQ_NO_TIMEOUT		(1ULL << __REQ_NO_TIMEOUT)
 
 #endif /* __LINUX_BLK_TYPES_H */

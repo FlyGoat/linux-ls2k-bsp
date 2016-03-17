@@ -188,7 +188,7 @@ void gfs2_set_inode_flags(struct inode *inode)
 
 	flags &= ~(S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC|S_NOSEC);
 	if ((ip->i_eattr == 0) && !is_sxid(inode->i_mode))
-		inode->i_flags |= S_NOSEC;
+		flags |= S_NOSEC;
 	if (ip->i_diskflags & GFS2_DIF_IMMUTABLE)
 		flags |= S_IMMUTABLE;
 	if (ip->i_diskflags & GFS2_DIF_APPENDONLY)
@@ -436,11 +436,11 @@ static int gfs2_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (ret)
 		goto out_unlock;
 
-	ret = gfs2_quota_lock_check(ip);
-	if (ret)
-		goto out_unlock;
 	gfs2_write_calc_reserv(ip, PAGE_CACHE_SIZE, &data_blocks, &ind_blocks);
 	ap.target = data_blocks + ind_blocks;
+	ret = gfs2_quota_lock_check(ip, &ap);
+	if (ret)
+		goto out_unlock;
 	ret = gfs2_inplace_reserve(ip, &ap);
 	if (ret)
 		goto out_quota_unlock;
@@ -737,7 +737,6 @@ static int fallocate_chunk(struct inode *inode, loff_t offset, loff_t len,
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct buffer_head *dibh;
 	int error;
-	loff_t size = len;
 	unsigned int nr_blks;
 	sector_t lblock = offset >> inode->i_blkbits;
 
@@ -771,31 +770,34 @@ static int fallocate_chunk(struct inode *inode, loff_t offset, loff_t len,
 			goto out;
 		}
 	}
-	if (offset + size > inode->i_size && !(mode & FALLOC_FL_KEEP_SIZE))
-		i_size_write(inode, offset + size);
-
-	mark_inode_dirty(inode);
-
 out:
 	brelse(dibh);
 	return error;
 }
-
-static void calc_max_reserv(struct gfs2_inode *ip, loff_t max, loff_t *len,
-			    unsigned int *data_blocks, unsigned int *ind_blocks)
+/**
+ * calc_max_reserv() - Reverse of write_calc_reserv. Given a number of
+ *                     blocks, determine how many bytes can be written.
+ * @ip:          The inode in question.
+ * @len:         Max cap of bytes. What we return in *len must be <= this.
+ * @data_blocks: Compute and return the number of data blocks needed
+ * @ind_blocks:  Compute and return the number of indirect blocks needed
+ * @max_blocks:  The total blocks available to work with.
+ *
+ * Returns: void, but @len, @data_blocks and @ind_blocks are filled in.
+ */
+static void calc_max_reserv(struct gfs2_inode *ip, loff_t *len,
+			    unsigned int *data_blocks, unsigned int *ind_blocks,
+			    unsigned int max_blocks)
 {
+	loff_t max = *len;
 	const struct gfs2_sbd *sdp = GFS2_SB(&ip->i_inode);
-	unsigned int max_blocks = ip->i_rgd->rd_free_clone;
 	unsigned int tmp, max_data = max_blocks - 3 * (sdp->sd_max_height - 1);
 
 	for (tmp = max_data; tmp > sdp->sd_diptrs;) {
 		tmp = DIV_ROUND_UP(tmp, sdp->sd_inptrs);
 		max_data -= tmp;
 	}
-	/* This calculation isn't the exact reverse of gfs2_write_calc_reserve,
-	   so it might end up with fewer data blocks */
-	if (max_data <= *data_blocks)
-		return;
+
 	*data_blocks = max_data;
 	*ind_blocks = max_blocks - max_data;
 	*len = ((loff_t)max_data - 3) << sdp->sd_sb.sb_bsize_shift;
@@ -805,28 +807,22 @@ static void calc_max_reserv(struct gfs2_inode *ip, loff_t max, loff_t *len,
 	}
 }
 
-static long gfs2_fallocate(struct file *file, int mode, loff_t offset,
-			   loff_t len)
+static long __gfs2_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
 	struct inode *inode = file_inode(file);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_alloc_parms ap = { .aflags = 0, };
 	unsigned int data_blocks = 0, ind_blocks = 0, rblocks;
-	loff_t bytes, max_bytes;
+	loff_t bytes, max_bytes, max_blks = UINT_MAX;
 	int error;
 	const loff_t pos = offset;
 	const loff_t count = len;
 	loff_t bsize_mask = ~((loff_t)sdp->sd_sb.sb_bsize - 1);
 	loff_t next = (offset + len - 1) >> sdp->sd_sb.sb_bsize_shift;
 	loff_t max_chunk_size = UINT_MAX & bsize_mask;
-	struct gfs2_holder gh;
 
 	next = (next + 1) << sdp->sd_sb.sb_bsize_shift;
-
-	/* We only support the FALLOC_FL_KEEP_SIZE mode */
-	if (mode & ~FALLOC_FL_KEEP_SIZE)
-		return -EOPNOTSUPP;
 
 	offset &= bsize_mask;
 
@@ -838,18 +834,10 @@ static long gfs2_fallocate(struct file *file, int mode, loff_t offset,
 	if (bytes == 0)
 		bytes = sdp->sd_sb.sb_bsize;
 
-	error = gfs2_rs_alloc(ip);
-	if (error)
-		return error;
-
-	mutex_lock(&inode->i_mutex);
-
-	gfs2_holder_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
-	error = gfs2_glock_nq(&gh);
-	if (unlikely(error))
-		goto out_uninit;
-
 	gfs2_size_hint(file, offset, len);
+
+	gfs2_write_calc_reserv(ip, PAGE_SIZE, &data_blocks, &ind_blocks);
+	ap.min_target = data_blocks + ind_blocks;
 
 	while (len > 0) {
 		if (len < bytes)
@@ -859,28 +847,41 @@ static long gfs2_fallocate(struct file *file, int mode, loff_t offset,
 			offset += bytes;
 			continue;
 		}
-		error = gfs2_quota_lock_check(ip);
-		if (error)
-			goto out_unlock;
 
-retry:
+		/* We need to determine how many bytes we can actually
+		 * fallocate without exceeding quota or going over the
+		 * end of the fs. We start off optimistically by assuming
+		 * we can write max_bytes */
+		max_bytes = (len > max_chunk_size) ? max_chunk_size : len;
+
+		/* Since max_bytes is most likely a theoretical max, we
+		 * calculate a more realistic 'bytes' to serve as a good
+		 * starting point for the number of bytes we may be able
+		 * to write */
 		gfs2_write_calc_reserv(ip, bytes, &data_blocks, &ind_blocks);
-
 		ap.target = data_blocks + ind_blocks;
+
+		error = gfs2_quota_lock_check(ip, &ap);
+		if (error)
+			return error;
+		/* ap.allowed tells us how many blocks quota will allow
+		 * us to write. Check if this reduces max_blks */
+		if (ap.allowed && ap.allowed < max_blks)
+			max_blks = ap.allowed;
+
 		error = gfs2_inplace_reserve(ip, &ap);
-		if (error) {
-			if (error == -ENOSPC && bytes > sdp->sd_sb.sb_bsize) {
-				bytes >>= 1;
-				bytes &= bsize_mask;
-				if (bytes == 0)
-					bytes = sdp->sd_sb.sb_bsize;
-				goto retry;
-			}
+		if (error)
 			goto out_qunlock;
-		}
-		max_bytes = bytes;
-		calc_max_reserv(ip, (len > max_chunk_size)? max_chunk_size: len,
-				&max_bytes, &data_blocks, &ind_blocks);
+
+		/* check if the selected rgrp limits our max_blks further */
+		if (ap.allowed && ap.allowed < max_blks)
+			max_blks = ap.allowed;
+
+		/* Almost done. Calculate bytes that can be written using
+		 * max_blks. We also recompute max_bytes, data_blocks and
+		 * ind_blocks */
+		calc_max_reserv(ip, &max_bytes, &data_blocks,
+				&ind_blocks, max_blks);
 
 		rblocks = RES_DINODE + ind_blocks + RES_STATFS + RES_QUOTA +
 			  RES_RG_HDR + gfs2_rg_blocks(ip, data_blocks + ind_blocks);
@@ -904,20 +905,65 @@ retry:
 		gfs2_quota_unlock(ip);
 	}
 
-	if (error == 0)
-		error = generic_write_sync(file, pos, count);
-	goto out_unlock;
+	if (!(mode & FALLOC_FL_KEEP_SIZE) && (pos + count) > inode->i_size) {
+		i_size_write(inode, pos + count);
+		file_update_time(file);
+		mark_inode_dirty(inode);
+	}
+
+	return generic_write_sync(file, pos, count);
 
 out_trans_fail:
 	gfs2_inplace_release(ip);
 out_qunlock:
 	gfs2_quota_unlock(ip);
+	return error;
+}
+
+static long gfs2_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
+{
+	struct inode *inode = file_inode(file);
+	struct gfs2_inode *ip = GFS2_I(inode);
+	struct gfs2_holder gh;
+	int ret;
+
+	/* We only support the FALLOC_FL_KEEP_SIZE mode */
+	if ((mode & ~FALLOC_FL_KEEP_SIZE) || gfs2_is_jdata(ip))
+		return -EOPNOTSUPP;
+
+	mutex_lock(&inode->i_mutex);
+
+	gfs2_holder_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
+	ret = gfs2_glock_nq(&gh);
+	if (ret)
+		goto out_uninit;
+
+	if (!(mode & FALLOC_FL_KEEP_SIZE) &&
+	    (offset + len) > inode->i_size) {
+		ret = inode_newsize_ok(inode, offset + len);
+		if (ret)
+			goto out_unlock;
+	}
+
+	ret = get_write_access(inode);
+	if (ret)
+		goto out_unlock;
+
+	ret = gfs2_rs_alloc(ip);
+	if (ret)
+		goto out_putw;
+
+	ret = __gfs2_fallocate(file, mode, offset, len);
+	if (ret)
+		gfs2_rs_deltree(ip->i_res);
+out_putw:
+	put_write_access(inode);
 out_unlock:
 	gfs2_glock_dq(&gh);
 out_uninit:
 	gfs2_holder_uninit(&gh);
 	mutex_unlock(&inode->i_mutex);
-	return error;
+	return ret;
 }
 
 static ssize_t gfs2_file_splice_write(struct pipe_inode_info *pipe,
@@ -953,7 +999,7 @@ static ssize_t gfs2_file_splice_write(struct pipe_inode_info *pipe,
  * Returns: errno
  */
 
-static int gfs2_setlease(struct file *file, long arg, struct file_lock **fl)
+static int gfs2_setlease(struct file *file, long arg, struct file_lock **fl, void **priv)
 {
 	return -EINVAL;
 }

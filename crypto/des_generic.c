@@ -971,8 +971,6 @@ static struct crypto_alg des_algs[2] = { {
 	.cia_decrypt		=	des3_ede_decrypt } }
 } };
 
-MODULE_ALIAS("des3_ede");
-
 static int __init des_generic_mod_init(void)
 {
 	return crypto_register_algs(des_algs, ARRAY_SIZE(des_algs));

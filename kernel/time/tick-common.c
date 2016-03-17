@@ -71,6 +71,7 @@ static void tick_periodic(int cpu)
 
 		do_timer(1);
 		write_sequnlock(&jiffies_lock);
+		update_wall_time();
 	}
 
 	update_process_times(user_mode(get_irq_regs()));
@@ -86,6 +87,16 @@ void tick_handle_periodic(struct clock_event_device *dev)
 	ktime_t next;
 
 	tick_periodic(cpu);
+
+#if defined(CONFIG_HIGH_RES_TIMERS) || defined(CONFIG_NO_HZ_COMMON)
+	/*
+	 * The cpu might have transitioned to HIGHRES or NOHZ mode via
+	 * update_process_times() -> run_local_timers() ->
+	 * hrtimer_run_queues().
+	 */
+	if (dev->event_handler != tick_handle_periodic)
+		return;
+#endif
 
 	if (dev->mode != CLOCK_EVT_MODE_ONESHOT)
 		return;
@@ -369,8 +380,14 @@ static void tick_resume(void)
 	raw_spin_unlock_irqrestore(&tick_device_lock, flags);
 }
 
-void tick_notify(unsigned long reason, void *dev)
+/*
+ * tick_notify: notification about relevant events
+ * Returns 0 on success, any other value on error
+ */
+int tick_notify(unsigned long reason, void *dev)
 {
+	int ret = 0;
+
 	switch (reason) {
 
 	case CLOCK_EVT_NOTIFY_BROADCAST_ON:
@@ -381,7 +398,7 @@ void tick_notify(unsigned long reason, void *dev)
 
 	case CLOCK_EVT_NOTIFY_BROADCAST_ENTER:
 	case CLOCK_EVT_NOTIFY_BROADCAST_EXIT:
-		tick_broadcast_oneshot_control(reason);
+		ret = tick_broadcast_oneshot_control(reason);
 		break;
 
 	case CLOCK_EVT_NOTIFY_CPU_DYING:
@@ -406,6 +423,8 @@ void tick_notify(unsigned long reason, void *dev)
 	default:
 		break;
 	}
+
+	return ret;
 }
 
 /**

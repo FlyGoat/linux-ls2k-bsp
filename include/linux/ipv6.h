@@ -120,6 +120,12 @@ struct ipv6_mc_socklist;
 struct ipv6_ac_socklist;
 struct ipv6_fl_socklist;
 
+struct inet6_cork {
+	struct ipv6_txoptions *opt;
+	u8 hop_limit;
+	u8 tclass;
+};
+
 /**
  * struct ipv6_pinfo - ipv6 private area
  *
@@ -210,11 +216,7 @@ struct ipv6_pinfo {
 	struct ipv6_txoptions	*opt;
 	struct sk_buff		*pktoptions;
 	struct sk_buff		*rxpmtu;
-	struct {
-		struct ipv6_txoptions *opt;
-		u8 hop_limit;
-		u8 tclass;
-	} cork;
+	struct inet6_cork	cork;
 };
 
 /* WARNING: don't change the layout of the members in {raw,udp,tcp}6_sock! */
@@ -251,16 +253,6 @@ struct tcp6_timewait_sock {
 static inline struct ipv6_pinfo * inet6_sk(const struct sock *__sk)
 {
 	return inet_sk(__sk)->pinet6;
-}
-
-static inline struct request_sock *inet6_reqsk_alloc(struct request_sock_ops *ops)
-{
-	struct request_sock *req = reqsk_alloc(ops);
-
-	if (req)
-		inet_rsk(req)->pktopts = NULL;
-
-	return req;
 }
 
 static inline struct raw6_sock *raw6_sk(const struct sock *sk)

@@ -190,6 +190,25 @@ int kvmppc_kvm_pv(struct kvm_vcpu *vcpu)
 		vcpu->arch.magic_page_pa = param1 & ~0xfffULL;
 		vcpu->arch.magic_page_ea = param2 & ~0xfffULL;
 
+#ifdef CONFIG_PPC_64K_PAGES
+		/*
+		 * Make sure our 4k magic page is in the same window of a 64k
+		 * page within the guest and within the host's page.
+		 */
+		if ((vcpu->arch.magic_page_pa & 0xf000) !=
+		    ((ulong)vcpu->arch.shared & 0xf000)) {
+			void *old_shared = vcpu->arch.shared;
+			ulong shared = (ulong)vcpu->arch.shared;
+			void *new_shared;
+
+			shared &= PAGE_MASK;
+			shared |= vcpu->arch.magic_page_pa & 0xf000;
+			new_shared = (void*)shared;
+			memcpy(new_shared, old_shared, 0x1000);
+			vcpu->arch.shared = new_shared;
+		}
+#endif
+
 		r2 = KVM_MAGIC_FEAT_SR | KVM_MAGIC_FEAT_MAS0_TO_SPRG7;
 
 		r = EV_SUCCESS;
@@ -254,12 +273,15 @@ int kvmppc_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu)
 	enum emulation_result er;
 	int r;
 
-	er = kvmppc_emulate_instruction(run, vcpu);
+	er = kvmppc_emulate_loadstore(vcpu);
 	switch (er) {
 	case EMULATE_DONE:
 		/* Future optimization: only reload non-volatiles if they were
 		 * actually modified. */
 		r = RESUME_GUEST_NV;
+		break;
+	case EMULATE_AGAIN:
+		r = RESUME_GUEST;
 		break;
 	case EMULATE_DO_MMIO:
 		run->exit_reason = KVM_EXIT_MMIO;
@@ -270,11 +292,15 @@ int kvmppc_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu)
 		r = RESUME_HOST_NV;
 		break;
 	case EMULATE_FAIL:
+	{
+		u32 last_inst;
+
+		kvmppc_get_last_inst(vcpu, false, &last_inst);
 		/* XXX Deliver Program interrupt to guest. */
-		printk(KERN_EMERG "%s: emulation failed (%08x)\n", __func__,
-		       kvmppc_get_last_inst(vcpu));
+		pr_emerg("%s: emulation failed (%08x)\n", __func__, last_inst);
 		r = RESUME_HOST;
 		break;
+	}
 	default:
 		WARN_ON(1);
 		r = RESUME_GUEST;
@@ -284,12 +310,87 @@ int kvmppc_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu)
 }
 EXPORT_SYMBOL_GPL(kvmppc_emulate_mmio);
 
-int kvm_arch_hardware_enable(void *garbage)
+int kvmppc_st(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
+	      bool data)
+{
+	ulong mp_pa = vcpu->arch.magic_page_pa & KVM_PAM & PAGE_MASK;
+	struct kvmppc_pte pte;
+	int r;
+
+	vcpu->stat.st++;
+
+	r = kvmppc_xlate(vcpu, *eaddr, data ? XLATE_DATA : XLATE_INST,
+			 XLATE_WRITE, &pte);
+	if (r < 0)
+		return r;
+
+	*eaddr = pte.raddr;
+
+	if (!pte.may_write)
+		return -EPERM;
+
+	/* Magic page override */
+	if (kvmppc_supports_magic_page(vcpu) && mp_pa &&
+	    ((pte.raddr & KVM_PAM & PAGE_MASK) == mp_pa) &&
+	    !(kvmppc_get_msr(vcpu) & MSR_PR)) {
+		void *magic = vcpu->arch.shared;
+		magic += pte.eaddr & 0xfff;
+		memcpy(magic, ptr, size);
+		return EMULATE_DONE;
+	}
+
+	if (kvm_write_guest(vcpu->kvm, pte.raddr, ptr, size))
+		return EMULATE_DO_MMIO;
+
+	return EMULATE_DONE;
+}
+EXPORT_SYMBOL_GPL(kvmppc_st);
+
+int kvmppc_ld(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
+		      bool data)
+{
+	ulong mp_pa = vcpu->arch.magic_page_pa & KVM_PAM & PAGE_MASK;
+	struct kvmppc_pte pte;
+	int rc;
+
+	vcpu->stat.ld++;
+
+	rc = kvmppc_xlate(vcpu, *eaddr, data ? XLATE_DATA : XLATE_INST,
+			  XLATE_READ, &pte);
+	if (rc)
+		return rc;
+
+	*eaddr = pte.raddr;
+
+	if (!pte.may_read)
+		return -EPERM;
+
+	if (!data && !pte.may_execute)
+		return -ENOEXEC;
+
+	/* Magic page override */
+	if (kvmppc_supports_magic_page(vcpu) && mp_pa &&
+	    ((pte.raddr & KVM_PAM & PAGE_MASK) == mp_pa) &&
+	    !(kvmppc_get_msr(vcpu) & MSR_PR)) {
+		void *magic = vcpu->arch.shared;
+		magic += pte.eaddr & 0xfff;
+		memcpy(ptr, magic, size);
+		return EMULATE_DONE;
+	}
+
+	if (kvm_read_guest(vcpu->kvm, pte.raddr, ptr, size))
+		return EMULATE_DO_MMIO;
+
+	return EMULATE_DONE;
+}
+EXPORT_SYMBOL_GPL(kvmppc_ld);
+
+int kvm_arch_hardware_enable(void)
 {
 	return 0;
 }
 
-void kvm_arch_hardware_disable(void *garbage)
+void kvm_arch_hardware_disable(void)
 {
 }
 
@@ -366,13 +467,19 @@ void kvm_arch_sync_events(struct kvm *kvm)
 {
 }
 
-int kvm_dev_ioctl_check_extension(long ext)
+int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 {
 	int r;
-	/* FIXME!!
-	 * Should some of this be vm ioctl ? is it possible now ?
-	 */
+	/* Assume we're using HV mode when the HV module is loaded */
 	int hv_enabled = kvmppc_hv_ops ? 1 : 0;
+
+	if (kvm) {
+		/*
+		 * Hooray - we know which VM type we're running on. Depend on
+		 * that rather than the guess above.
+		 */
+		hv_enabled = is_kvmppc_hv_enabled(kvm);
+	}
 
 	switch (ext) {
 #ifdef CONFIG_BOOKE
@@ -502,24 +609,25 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 	return kvmppc_core_create_memslot(kvm, slot, npages);
 }
 
-void kvm_arch_memslots_updated(struct kvm *kvm)
+void kvm_arch_memslots_updated(struct kvm *kvm, struct kvm_memslots *slots)
 {
 }
 
 int kvm_arch_prepare_memory_region(struct kvm *kvm,
 				   struct kvm_memory_slot *memslot,
-				   struct kvm_userspace_memory_region *mem,
+				   const struct kvm_userspace_memory_region *mem,
 				   enum kvm_mr_change change)
 {
 	return kvmppc_core_prepare_memory_region(kvm, memslot, mem);
 }
 
 void kvm_arch_commit_memory_region(struct kvm *kvm,
-				   struct kvm_userspace_memory_region *mem,
+				   const struct kvm_userspace_memory_region *mem,
 				   const struct kvm_memory_slot *old,
+				   const struct kvm_memory_slot *new,
 				   enum kvm_mr_change change)
 {
-	kvmppc_core_commit_memory_region(kvm, mem, old);
+	kvmppc_core_commit_memory_region(kvm, mem, old, new);
 }
 
 void kvm_arch_flush_shadow_all(struct kvm *kvm)
@@ -543,16 +651,14 @@ struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm, unsigned int id)
 	return vcpu;
 }
 
-int kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
+void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 {
-	return 0;
 }
 
 void kvm_arch_vcpu_free(struct kvm_vcpu *vcpu)
 {
 	/* Make sure we're not using the vcpu anymore */
 	hrtimer_cancel(&vcpu->arch.dec_timer);
-	tasklet_kill(&vcpu->arch.tasklet);
 
 	kvmppc_remove_vcpu_debugfs(vcpu);
 
@@ -578,16 +684,12 @@ int kvm_cpu_has_pending_timer(struct kvm_vcpu *vcpu)
 	return kvmppc_core_pending_dec(vcpu);
 }
 
-/*
- * low level hrtimer wake routine. Because this runs in hardirq context
- * we schedule a tasklet to do the real work.
- */
 enum hrtimer_restart kvmppc_decrementer_wakeup(struct hrtimer *timer)
 {
 	struct kvm_vcpu *vcpu;
 
 	vcpu = container_of(timer, struct kvm_vcpu, arch.dec_timer);
-	tasklet_schedule(&vcpu->arch.tasklet);
+	kvmppc_decrementer_func(vcpu);
 
 	return HRTIMER_NORESTART;
 }
@@ -597,7 +699,6 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 	int ret;
 
 	hrtimer_init(&vcpu->arch.dec_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
-	tasklet_init(&vcpu->arch.tasklet, kvmppc_decrementer_func, (ulong)vcpu);
 	vcpu->arch.dec_timer.function = kvmppc_decrementer_wakeup;
 	vcpu->arch.dec_expires = ~(u64)0;
 
@@ -1255,3 +1356,5 @@ void kvm_arch_exit(void)
 {
 
 }
+
+EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_ppc_instr);

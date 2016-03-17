@@ -68,9 +68,9 @@ bool __blk_mq_tag_busy(struct blk_mq_hw_ctx *hctx)
 }
 
 /*
- * Wakeup all potentially sleeping on normal (non-reserved) tags
+ * Wakeup all potentially sleeping on tags
  */
-static void blk_mq_tag_wakeup_all(struct blk_mq_tags *tags)
+void blk_mq_tag_wakeup_all(struct blk_mq_tags *tags, bool include_reserve)
 {
 	struct blk_mq_bitmap_tags *bt;
 	int i, wake_index;
@@ -84,6 +84,12 @@ static void blk_mq_tag_wakeup_all(struct blk_mq_tags *tags)
 			wake_up(&bs->wait);
 
 		wake_index = bt_index_inc(wake_index);
+	}
+
+	if (include_reserve) {
+		bt = &tags->breserved_tags;
+		if (waitqueue_active(&bt->bs[0].wait))
+			wake_up(&bt->bs[0].wait);
 	}
 }
 
@@ -100,7 +106,7 @@ void __blk_mq_tag_idle(struct blk_mq_hw_ctx *hctx)
 
 	atomic_dec(&tags->active_queues);
 
-	blk_mq_tag_wakeup_all(tags);
+	blk_mq_tag_wakeup_all(tags, false);
 }
 
 /*
@@ -136,27 +142,30 @@ static inline bool hctx_may_queue(struct blk_mq_hw_ctx *hctx,
 
 static int __bt_get_word(struct blk_align_bitmap *bm, unsigned int last_tag)
 {
-	int tag, org_last_tag, end;
+	int tag, org_last_tag = last_tag;
 
-	org_last_tag = last_tag;
-	end = bm->depth;
-	do {
-restart:
-		tag = find_next_zero_bit(&bm->word, end, last_tag);
-		if (unlikely(tag >= end)) {
+	while (1) {
+		tag = find_next_zero_bit(&bm->word, bm->depth, last_tag);
+		if (unlikely(tag >= bm->depth)) {
 			/*
-			 * We started with an offset, start from 0 to
+			 * We started with an offset, and we didn't reset the
+			 * offset to 0 in a failure case, so start from 0 to
 			 * exhaust the map.
 			 */
 			if (org_last_tag && last_tag) {
-				end = last_tag;
-				last_tag = 0;
-				goto restart;
+				last_tag = org_last_tag = 0;
+				continue;
 			}
 			return -1;
 		}
+
+		if (!test_and_set_bit(tag, &bm->word))
+			break;
+
 		last_tag = tag + 1;
-	} while (test_and_set_bit_lock(tag, &bm->word));
+		if (last_tag >= bm->depth - 1)
+			last_tag = 0;
+	}
 
 	return tag;
 }
@@ -191,9 +200,17 @@ static int __bt_get(struct blk_mq_hw_ctx *hctx, struct blk_mq_bitmap_tags *bt,
 			goto done;
 		}
 
-		last_tag = 0;
-		if (++index >= bt->map_nr)
+		/*
+		 * Jump to next index, and reset the last tag to be the
+		 * first tag of that index
+		 */
+		index++;
+		last_tag = (index << bt->bits_per_word);
+
+		if (index >= bt->map_nr) {
 			index = 0;
+			last_tag = 0;
+		}
 	}
 
 	*tag_cache = 0;
@@ -250,6 +267,23 @@ static int bt_get(struct blk_mq_alloc_data *data,
 	do {
 		prepare_to_wait(&bs->wait, &wait, TASK_UNINTERRUPTIBLE);
 
+		tag = __bt_get(hctx, bt, last_tag);
+		if (tag != -1)
+			break;
+
+		/*
+		 * We're out of tags on this hardware queue, kick any
+		 * pending IO submits before going to sleep waiting for
+		 * some to complete. Note that hctx can be NULL here for
+		 * reserved tag allocation.
+		 */
+		if (hctx)
+			blk_mq_run_hw_queue(hctx, false);
+
+		/*
+		 * Retry tag allocation after running the hardware queue,
+		 * as running the queue may also have found completions.
+		 */
 		tag = __bt_get(hctx, bt, last_tag);
 		if (tag != -1)
 			break;
@@ -340,42 +374,23 @@ static void bt_clear_tag(struct blk_mq_bitmap_tags *bt, unsigned int tag)
 	struct bt_wait_state *bs;
 	int wait_cnt;
 
-	/*
-	 * The unlock memory barrier need to order access to req in free
-	 * path and clearing tag bit
-	 */
-	clear_bit_unlock(TAG_TO_BIT(bt, tag), &bt->map[index].word);
+	clear_bit(TAG_TO_BIT(bt, tag), &bt->map[index].word);
+
+	/* Ensure that the wait list checks occur after clear_bit(). */
+	smp_mb();
 
 	bs = bt_wake_ptr(bt);
 	if (!bs)
 		return;
 
 	wait_cnt = atomic_dec_return(&bs->wait_cnt);
+	if (unlikely(wait_cnt < 0))
+		wait_cnt = atomic_inc_return(&bs->wait_cnt);
 	if (wait_cnt == 0) {
-wake:
 		atomic_add(bt->wake_cnt, &bs->wait_cnt);
 		bt_index_atomic_inc(&bt->wake_index);
 		wake_up(&bs->wait);
-	} else if (wait_cnt < 0) {
-		wait_cnt = atomic_inc_return(&bs->wait_cnt);
-		if (!wait_cnt)
-			goto wake;
 	}
-}
-
-static void __blk_mq_put_tag(struct blk_mq_tags *tags, unsigned int tag)
-{
-	BUG_ON(tag >= tags->nr_tags);
-
-	bt_clear_tag(&tags->bitmap_tags, tag);
-}
-
-static void __blk_mq_put_reserved_tag(struct blk_mq_tags *tags,
-				      unsigned int tag)
-{
-	BUG_ON(tag >= tags->nr_reserved_tags);
-
-	bt_clear_tag(&tags->breserved_tags, tag);
 }
 
 void blk_mq_put_tag(struct blk_mq_hw_ctx *hctx, unsigned int tag,
@@ -386,10 +401,13 @@ void blk_mq_put_tag(struct blk_mq_hw_ctx *hctx, unsigned int tag,
 	if (tag >= tags->nr_reserved_tags) {
 		const int real_tag = tag - tags->nr_reserved_tags;
 
-		__blk_mq_put_tag(tags, real_tag);
+		BUG_ON(real_tag >= tags->nr_tags);
+		bt_clear_tag(&tags->bitmap_tags, real_tag);
 		*last_tag = real_tag;
-	} else
-		__blk_mq_put_reserved_tag(tags, tag);
+	} else {
+		BUG_ON(tag >= tags->nr_reserved_tags);
+		bt_clear_tag(&tags->breserved_tags, tag);
+	}
 }
 
 static void bt_for_each(struct blk_mq_hw_ctx *hctx,
@@ -413,6 +431,39 @@ static void bt_for_each(struct blk_mq_hw_ctx *hctx,
 		off += (1 << bt->bits_per_word);
 	}
 }
+
+static void bt_tags_for_each(struct blk_mq_tags *tags,
+		struct blk_mq_bitmap_tags *bt, unsigned int off,
+		busy_tag_iter_fn *fn, void *data, bool reserved)
+{
+	struct request *rq;
+	int bit, i;
+
+	if (!tags->rqs)
+		return;
+	for (i = 0; i < bt->map_nr; i++) {
+		struct blk_align_bitmap *bm = &bt->map[i];
+
+		for (bit = find_first_bit(&bm->word, bm->depth);
+		     bit < bm->depth;
+		     bit = find_next_bit(&bm->word, bm->depth, bit + 1)) {
+			rq = blk_mq_tag_to_rq(tags, off + bit);
+			fn(rq, data, reserved);
+		}
+
+		off += (1 << bt->bits_per_word);
+	}
+}
+
+void blk_mq_all_tag_busy_iter(struct blk_mq_tags *tags, busy_tag_iter_fn *fn,
+		void *priv)
+{
+	if (tags->nr_reserved_tags)
+		bt_tags_for_each(tags, &tags->breserved_tags, 0, fn, priv, true);
+	bt_tags_for_each(tags, &tags->bitmap_tags, tags->nr_reserved_tags, fn, priv,
+			false);
+}
+EXPORT_SYMBOL(blk_mq_all_tag_busy_iter);
 
 void blk_mq_tag_busy_iter(struct blk_mq_hw_ctx *hctx, busy_iter_fn *fn,
 		void *priv)
@@ -455,8 +506,8 @@ static void bt_update_count(struct blk_mq_bitmap_tags *bt,
 	}
 
 	bt->wake_cnt = BT_WAIT_BATCH;
-	if (bt->wake_cnt > depth / 4)
-		bt->wake_cnt = max(1U, depth / 4);
+	if (bt->wake_cnt > depth / BT_WAIT_QUEUES)
+		bt->wake_cnt = max(1U, depth / BT_WAIT_QUEUES);
 
 	bt->depth = depth;
 }
@@ -502,6 +553,7 @@ static int bt_alloc(struct blk_mq_bitmap_tags *bt, unsigned int depth,
 	bt->bs = kzalloc(BT_WAIT_QUEUES * sizeof(*bt->bs), GFP_KERNEL);
 	if (!bt->bs) {
 		kfree(bt->map);
+		bt->map = NULL;
 		return -ENOMEM;
 	}
 
@@ -552,6 +604,11 @@ struct blk_mq_tags *blk_mq_init_tags(unsigned int total_tags,
 	if (!tags)
 		return NULL;
 
+	if (!zalloc_cpumask_var(&tags->cpumask, GFP_KERNEL)) {
+		kfree(tags);
+		return NULL;
+	}
+
 	tags->nr_tags = total_tags;
 	tags->nr_reserved_tags = reserved_tags;
 
@@ -583,9 +640,37 @@ int blk_mq_tag_update_depth(struct blk_mq_tags *tags, unsigned int tdepth)
 	 * static and should never need resizing.
 	 */
 	bt_update_count(&tags->bitmap_tags, tdepth);
-	blk_mq_tag_wakeup_all(tags);
+	blk_mq_tag_wakeup_all(tags, false);
 	return 0;
 }
+
+/**
+ * blk_mq_unique_tag() - return a tag that is unique queue-wide
+ * @rq: request for which to compute a unique tag
+ *
+ * The tag field in struct request is unique per hardware queue but not over
+ * all hardware queues. Hence this function that returns a tag with the
+ * hardware context index in the upper bits and the per hardware queue tag in
+ * the lower bits.
+ *
+ * Note: When called for a request that is queued on a non-multiqueue request
+ * queue, the hardware context index is set to zero.
+ */
+u32 blk_mq_unique_tag(struct request *rq)
+{
+	struct request_queue *q = rq->q;
+	struct blk_mq_hw_ctx *hctx;
+	int hwq = 0;
+
+	if (q->mq_ops) {
+		hctx = q->mq_ops->map_queue(q, rq->mq_ctx->cpu);
+		hwq = hctx->queue_num;
+	}
+
+	return (hwq << BLK_MQ_UNIQUE_TAG_BITS) |
+		(rq->tag & BLK_MQ_UNIQUE_TAG_MASK);
+}
+EXPORT_SYMBOL(blk_mq_unique_tag);
 
 ssize_t blk_mq_tag_sysfs_show(struct blk_mq_tags *tags, char *page)
 {

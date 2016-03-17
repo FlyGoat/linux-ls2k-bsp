@@ -268,6 +268,10 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 		old_len = new_len;
 		old_addr = new_addr;
 		new_addr = -ENOMEM;
+	} else if (vm_flags & VM_FOP_EXTEND) {
+		struct file_operations_extend *fop = to_fop_extend(vma->vm_file->f_op);
+		if (fop->mremap)
+			fop->mremap(vma->vm_file, new_vma);
 	}
 
 	/* Conceal VM_ACCOUNT so old reservation is not undone */

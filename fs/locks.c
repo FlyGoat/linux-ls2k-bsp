@@ -130,11 +130,14 @@
 #include <linux/percpu.h>
 #include <linux/lglock.h>
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/filelock.h>
+
 #include <asm/uaccess.h>
 
 #define IS_POSIX(fl)	(fl->fl_flags & FL_POSIX)
 #define IS_FLOCK(fl)	(fl->fl_flags & FL_FLOCK)
-#define IS_LEASE(fl)	(fl->fl_flags & (FL_LEASE|FL_DELEG))
+#define IS_LEASE(fl)	(fl->fl_flags & (FL_LEASE|FL_DELEG|FL_LAYOUT))
 
 static bool lease_breaking(struct file_lock *fl)
 {
@@ -462,7 +465,7 @@ static int lease_init(struct file *filp, long type, struct file_lock *fl)
 	if (assign_type(fl, type) != 0)
 		return -EINVAL;
 
-	fl->fl_owner = current->files;
+	fl->fl_owner = (fl_owner_t)filp;
 	fl->fl_pid = current->tgid;
 
 	fl->fl_file = filp;
@@ -652,15 +655,18 @@ static void locks_insert_lock(struct file_lock **pos, struct file_lock *fl)
 	locks_insert_global_locks(fl);
 }
 
-/*
- * Delete a lock and then free it.
- * Wake up processes that are blocked waiting for this lock,
- * notify the FS that the lock has been cleared and
- * finally free the lock.
+/**
+ * locks_delete_lock - Delete a lock and then free it.
+ * @thisfl_p: pointer that points to the fl_next field of the previous
+ * 	      inode->i_flock list entry
+ *
+ * Unlink a lock from all lists and free the namespace reference, but don't
+ * free it yet. Wake up processes that are blocked waiting for this lock and
+ * notify the FS that the lock has been cleared.
  *
  * Must be called with the i_lock held!
  */
-static void locks_delete_lock(struct file_lock **thisfl_p)
+static void locks_unlink_lock(struct file_lock **thisfl_p)
 {
 	struct file_lock *fl = *thisfl_p;
 
@@ -675,6 +681,18 @@ static void locks_delete_lock(struct file_lock **thisfl_p)
 	}
 
 	locks_wake_up_blocks(fl);
+}
+
+/*
+ * Unlink a lock from all lists and free it.
+ *
+ * Must be called with i_lock held!
+ */
+static void locks_delete_lock(struct file_lock **thisfl_p)
+{
+	struct file_lock *fl = *thisfl_p;
+
+	locks_unlink_lock(thisfl_p);
 	locks_free_lock(fl);
 }
 
@@ -1265,7 +1283,6 @@ int lease_modify(struct file_lock **before, int arg)
 	}
 	return 0;
 }
-
 EXPORT_SYMBOL(lease_modify);
 
 static bool past_time(unsigned long then)
@@ -1283,6 +1300,7 @@ static void time_out_leases(struct inode *inode)
 
 	before = &inode->i_flock;
 	while ((fl = *before) && IS_LEASE(fl) && lease_breaking(fl)) {
+		trace_time_out_leases(inode, fl);
 		if (past_time(fl->fl_downgrade_time))
 			lease_modify(before, F_RDLCK);
 		if (past_time(fl->fl_break_time))
@@ -1294,6 +1312,8 @@ static void time_out_leases(struct inode *inode)
 
 static bool leases_conflict(struct file_lock *lease, struct file_lock *breaker)
 {
+	if ((breaker->fl_flags & FL_LAYOUT) != (lease->fl_flags & FL_LAYOUT))
+		return false;
 	if ((breaker->fl_flags & FL_DELEG) && (lease->fl_flags & FL_LEASE))
 		return false;
 	return locks_conflict(breaker, lease);
@@ -1318,7 +1338,6 @@ int __break_lease(struct inode *inode, unsigned int mode, unsigned int type)
 	struct file_lock *new_fl, *flock;
 	struct file_lock *fl;
 	unsigned long break_time;
-	int i_have_this_lease = 0;
 	bool lease_conflict = false;
 	int want_write = (mode & O_ACCMODE) != O_RDONLY;
 
@@ -1338,8 +1357,7 @@ int __break_lease(struct inode *inode, unsigned int mode, unsigned int type)
 	for (fl = flock; fl && IS_LEASE(fl); fl = fl->fl_next) {
 		if (leases_conflict(fl, new_fl)) {
 			lease_conflict = true;
-			if (fl->fl_owner == current->files)
-				i_have_this_lease = 1;
+			break;
 		}
 	}
 	if (!lease_conflict)
@@ -1369,7 +1387,8 @@ int __break_lease(struct inode *inode, unsigned int mode, unsigned int type)
 		fl->fl_lmops->lm_break(fl);
 	}
 
-	if (i_have_this_lease || (mode & O_NONBLOCK)) {
+	if (mode & O_NONBLOCK) {
+		trace_break_lease_noblock(inode, new_fl);
 		error = -EWOULDBLOCK;
 		goto out;
 	}
@@ -1382,10 +1401,12 @@ restart:
 			break_time++;
 	}
 	locks_insert_block(flock, new_fl);
+	trace_break_lease_block(inode, new_fl);
 	spin_unlock(&inode->i_lock);
 	error = wait_event_interruptible_timeout(new_fl->fl_wait,
 						!new_fl->fl_next, break_time);
 	spin_lock(&inode->i_lock);
+	trace_break_lease_unblock(inode, new_fl);
 	locks_delete_block(new_fl);
 	if (error >= 0) {
 		if (error == 0)
@@ -1472,7 +1493,37 @@ int fcntl_getlease(struct file *filp)
 	return type;
 }
 
-static int generic_add_lease(struct file *filp, long arg, struct file_lock **flp)
+/**
+ * check_conflicting_open - see if the given dentry points to a file that has
+ * 			    an existing open that would conflict with the
+ * 			    desired lease.
+ * @dentry:	dentry to check
+ * @arg:	type of lease that we're trying to acquire
+ *
+ * Check to see if there's an existing open fd on this file that would
+ * conflict with the lease we're trying to set.
+ */
+static int
+check_conflicting_open(const struct dentry *dentry, const long arg, int flags)
+{
+	int ret = 0;
+	struct inode *inode = dentry->d_inode;
+
+	if (flags & FL_LAYOUT)
+		return 0;
+
+	if ((arg == F_RDLCK) && (atomic_read(&inode->i_writecount) > 0))
+		return -EAGAIN;
+
+	if ((arg == F_WRLCK) && ((d_count(dentry) > 1) ||
+	    (atomic_read(&inode->i_count) > 1)))
+		ret = -EAGAIN;
+
+	return ret;
+}
+
+static int
+generic_add_lease(struct file *filp, long arg, struct file_lock **flp, void **priv)
 {
 	struct file_lock *fl, **before, **my_before = NULL, *lease;
 	struct dentry *dentry = filp->f_path.dentry;
@@ -1481,6 +1532,8 @@ static int generic_add_lease(struct file *filp, long arg, struct file_lock **flp
 	int error;
 
 	lease = *flp;
+	trace_generic_add_lease(inode, lease);
+
 	/*
 	 * In the delegation case we need mutual exclusion with
 	 * a number of operations that take the i_mutex.  We trylock
@@ -1498,12 +1551,8 @@ static int generic_add_lease(struct file *filp, long arg, struct file_lock **flp
 		return -EINVAL;
 	}
 
-	error = -EAGAIN;
-	if ((arg == F_RDLCK) && (atomic_read(&inode->i_writecount) > 0))
-		goto out;
-	if ((arg == F_WRLCK)
-	    && ((d_count(dentry) > 1)
-		|| (atomic_read(&inode->i_count) > 1)))
+	error = check_conflicting_open(dentry, arg, lease->fl_flags);
+	if (error)
 		goto out;
 
 	/*
@@ -1518,7 +1567,8 @@ static int generic_add_lease(struct file *filp, long arg, struct file_lock **flp
 	for (before = &inode->i_flock;
 			((fl = *before) != NULL) && IS_LEASE(fl);
 			before = &fl->fl_next) {
-		if (fl->fl_file == filp) {
+		if (fl->fl_file == filp &&
+			fl->fl_owner == lease->fl_owner) {
 			my_before = before;
 			continue;
 		}
@@ -1548,15 +1598,31 @@ static int generic_add_lease(struct file *filp, long arg, struct file_lock **flp
 		goto out;
 
 	locks_insert_lock(before, lease);
-	error = 0;
+	/*
+	 * The check in break_lease() is lockless. It's possible for another
+	 * open to race in after we did the earlier check for a conflicting
+	 * open but before the lease was inserted. Check again for a
+	 * conflicting open and cancel the lease if there is one.
+	 *
+	 * We also add a barrier here to ensure that the insertion of the lock
+	 * precedes these checks.
+	 */
+	smp_mb();
+	error = check_conflicting_open(dentry, arg, lease->fl_flags);
+	if (error)
+		goto out_unlink;
 out:
 	if (is_deleg)
 		mutex_unlock(&inode->i_mutex);
 	return error;
+out_unlink:
+	locks_unlink_lock(before);
+	goto out;
 }
 
-static int generic_delete_lease(struct file *filp, struct file_lock **flp)
+static int generic_delete_lease(struct file *filp, void *owner)
 {
+	int error = -EAGAIN;
 	struct file_lock *fl, **before;
 	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
@@ -1564,11 +1630,14 @@ static int generic_delete_lease(struct file *filp, struct file_lock **flp)
 	for (before = &inode->i_flock;
 			((fl = *before) != NULL) && IS_LEASE(fl);
 			before = &fl->fl_next) {
-		if (fl->fl_file != filp)
-			continue;
-		return (*flp)->fl_lmops->lm_change(before, F_UNLCK);
+		if (fl->fl_file == filp && 
+			fl->fl_owner == owner)
+			break;
 	}
-	return -EAGAIN;
+	trace_generic_delete_lease(inode, fl);
+	if (fl && IS_LEASE(fl))
+		error = fl->fl_lmops->lm_change(before, F_UNLCK);
+	return error;
 }
 
 /**
@@ -1576,13 +1645,15 @@ static int generic_delete_lease(struct file *filp, struct file_lock **flp)
  *	@filp: file pointer
  *	@arg: type of lease to obtain
  *	@flp: input - file_lock to use, output - file_lock inserted
+ *	@priv: private data for lm_setup
  *
  *	The (input) flp->fl_lmops->lm_break function is required
  *	by break_lease().
  *
  *	Called with inode->i_lock held.
  */
-int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
+int generic_setlease(struct file *filp, long arg, struct file_lock **flp,
+			void **priv)
 {
 	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
@@ -1598,76 +1669,58 @@ int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
 
 	time_out_leases(inode);
 
-	BUG_ON(!(*flp)->fl_lmops->lm_break);
-
 	switch (arg) {
 	case F_UNLCK:
-		return generic_delete_lease(filp, flp);
+		return generic_delete_lease(filp, *priv);
 	case F_RDLCK:
 	case F_WRLCK:
-		return generic_add_lease(filp, arg, flp);
+		if (!(*flp)->fl_lmops->lm_break) {
+			WARN_ON_ONCE(1);
+			return -ENOLCK;
+		}
+		return generic_add_lease(filp, arg, flp, priv);
 	default:
 		return -EINVAL;
 	}
 }
 EXPORT_SYMBOL(generic_setlease);
 
-static int __vfs_setlease(struct file *filp, long arg, struct file_lock **lease)
+static int
+__vfs_setlease(struct file *filp, long arg, struct file_lock **lease, void **priv)
 {
 	if (filp->f_op && filp->f_op->setlease)
-		return filp->f_op->setlease(filp, arg, lease);
+		return filp->f_op->setlease(filp, arg, lease, priv);
 	else
-		return generic_setlease(filp, arg, lease);
+		return generic_setlease(filp, arg, lease, priv);
 }
 
 /**
- *	vfs_setlease        -       sets a lease on an open file
- *	@filp: file pointer
- *	@arg: type of lease to obtain
- *	@lease: file_lock to use
+ * vfs_setlease        -       sets a lease on an open file
+ * @filp: file pointer
+ * @arg: type of lease to obtain
+ * @lease: file_lock to use when adding a lease
+ * @priv: private info for lm_setup when adding a lease
  *
- *	Call this to establish a lease on the file.
- *	The (*lease)->fl_lmops->lm_break operation must be set; if not,
- *	break_lease will oops!
- *
- *	This will call the filesystem's setlease file method, if
- *	defined.  Note that there is no getlease method; instead, the
- *	filesystem setlease method should call back to setlease() to
- *	add a lease to the inode's lease list, where fcntl_getlease() can
- *	find it.  Since fcntl_getlease() only reports whether the current
- *	task holds a lease, a cluster filesystem need only do this for
- *	leases held by processes on this node.
- *
- *	There is also no break_lease method; filesystems that
- *	handle their own leases should break leases themselves from the
- *	filesystem's open, create, and (on truncate) setattr methods.
- *
- *	Warning: the only current setlease methods exist only to disable
- *	leases in certain cases.  More vfs changes may be required to
- *	allow a full filesystem lease implementation.
+ * Call this to establish a lease on the file. The "lease" argument is not
+ * used for F_UNLCK requests and may be NULL. For commands that set or alter
+ * an existing lease, the (*lease)->fl_lmops->lm_break operation must be set;
+ * if not, this function will return -ENOLCK (and generate a scary-looking
+ * stack trace).
  */
 
-int vfs_setlease(struct file *filp, long arg, struct file_lock **lease)
+int
+vfs_setlease(struct file *filp, long arg, struct file_lock **lease, void **priv)
 {
 	struct inode *inode = file_inode(filp);
 	int error;
 
 	spin_lock(&inode->i_lock);
-	error = __vfs_setlease(filp, arg, lease);
+	error = __vfs_setlease(filp, arg, lease, priv);
 	spin_unlock(&inode->i_lock);
 
 	return error;
 }
 EXPORT_SYMBOL_GPL(vfs_setlease);
-
-static int do_fcntl_delete_lease(struct file *filp)
-{
-	struct file_lock fl, *flp = &fl;
-
-	lease_init(filp, F_UNLCK, flp);
-
-	return vfs_setlease(filp, F_UNLCK, &flp);
-}
 
 static int do_fcntl_add_lease(unsigned int fd, struct file *filp, long arg)
 {
@@ -1687,7 +1740,7 @@ static int do_fcntl_add_lease(unsigned int fd, struct file *filp, long arg)
 	}
 	ret = fl;
 	spin_lock(&inode->i_lock);
-	error = __vfs_setlease(filp, arg, &ret);
+	error = __vfs_setlease(filp, arg, &ret, NULL);
 	if (error) {
 		spin_unlock(&inode->i_lock);
 		locks_free_lock(fl);
@@ -1727,7 +1780,7 @@ out_free_fasync:
 int fcntl_setlease(unsigned int fd, struct file *filp, long arg)
 {
 	if (arg == F_UNLCK)
-		return do_fcntl_delete_lease(filp);
+		return vfs_setlease(filp, F_UNLCK, NULL, (void **)&filp);
 	return do_fcntl_add_lease(fd, filp, arg);
 }
 
@@ -2393,6 +2446,37 @@ static int locks_show(struct seq_file *f, void *v)
 		lock_get_status(f, bfl, iter->li_pos, " ->");
 
 	return 0;
+}
+
+void show_fd_locks(struct seq_file *f,
+		  struct file *filp, struct files_struct *files)
+{
+	struct inode *inode = file_inode(filp);
+	struct file_lock **before, *fl;
+	int id = 0;
+
+	spin_lock(&inode->i_lock);
+	for_each_lock(inode, before) {
+		fl = *before;
+
+		if (filp != fl->fl_file)
+			continue;
+		/*
+		 * Upstream does fl->fl_owner != filp in the second check,
+		 * but RHEL doesn't use ->fl_owner as "struct file *", it
+		 * is NULL if IS_FLOCK(). But in this case we rely on the
+		 * previous check, when upstream set ->fl_owner = filp it
+		 * matches ->fl_file.
+		 */
+		if (fl->fl_owner != files &&
+		    fl->fl_owner != NULL)
+			continue;
+
+		id++;
+		seq_puts(f, "lock:\t");
+		lock_get_status(f, fl, id, "");
+	}
+	spin_unlock(&inode->i_lock);
 }
 
 static void *locks_start(struct seq_file *f, loff_t *pos)

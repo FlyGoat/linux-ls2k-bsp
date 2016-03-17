@@ -857,7 +857,7 @@ qla82xx_rom_lock(struct qla_hw_data *ha)
 			break;
 		if (timeout >= qla82xx_rom_lock_timeout) {
 			lock_owner = qla82xx_rd_32(ha, QLA82XX_ROM_LOCK_ID);
-			ql_log(ql_log_warn, vha, 0xb157,
+			ql_dbg(ql_dbg_p3p, vha, 0xb157,
 			    "%s: Simultaneous flash access by following ports, active port = %d: accessing port = %d",
 			    __func__, ha->portnum, lock_owner);
 			return -1;
@@ -1674,10 +1674,10 @@ qla82xx_iospace_config(struct qla_hw_data *ha)
 	/* Mapping of IO base pointer */
 	if (IS_QLA8044(ha)) {
 		ha->iobase =
-		    (device_reg_t __iomem *)((uint8_t *)ha->nx_pcibase);
+		    (device_reg_t *)((uint8_t *)ha->nx_pcibase);
 	} else if (IS_QLA82XX(ha)) {
 		ha->iobase =
-		    (device_reg_t __iomem *)((uint8_t *)ha->nx_pcibase +
+		    (device_reg_t *)((uint8_t *)ha->nx_pcibase +
 			0xbc000 + (ha->pdev->devfn << 11));
 	}
 

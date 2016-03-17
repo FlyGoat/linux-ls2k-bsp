@@ -179,6 +179,16 @@ tcp_app_win - INTEGER
 	buffer. Value 0 is special, it means that nothing is reserved.
 	Default: 31
 
+tcp_autocorking - BOOLEAN
+	Enable TCP auto corking :
+	When applications do consecutive small write()/sendmsg() system calls,
+	we try to coalesce these small writes as much as possible, to lower
+	total amount of sent packets. This is done if at least one prior
+	packet for the flow is waiting in Qdisc queues or device transmit
+	queue. Applications can still use TCP_CORK for optimal behavior
+	when they know how/when to uncork their sockets.
+	Default : 1
+
 tcp_available_congestion_control - STRING
 	Shows the available congestion control choices that are registered.
 	More congestion control algorithms may be available as modules,
@@ -255,6 +265,28 @@ tcp_frto - INTEGER
 	modification. It does not require any support from the peer.
 
 	By default it's enabled with a non-zero value. 0 disables F-RTO.
+
+tcp_invalid_ratelimit - INTEGER
+	Limit the maximal rate for sending duplicate acknowledgments
+	in response to incoming TCP packets that are for an existing
+	connection but that are invalid due to any of these reasons:
+
+	  (a) out-of-window sequence number,
+	  (b) out-of-window acknowledgment number, or
+	  (c) PAWS (Protection Against Wrapped Sequence numbers) check failure
+
+	This can help mitigate simple "ack loop" DoS attacks, wherein
+	a buggy or malicious middlebox or man-in-the-middle can
+	rewrite TCP header fields in manner that causes each endpoint
+	to think that the other is sending invalid TCP segments, thus
+	causing each side to send an unterminating stream of duplicate
+	acknowledgments for invalid segments.
+
+	Using 0 disables rate-limiting of dupacks in response to
+	invalid segments; otherwise this value specifies the minimal
+	space between sending such dupacks, in milliseconds.
+
+	Default: 500 (milliseconds).
 
 tcp_keepalive_time - INTEGER
 	How often TCP sends out keepalive messages when keepalive is enabled.
@@ -540,6 +572,19 @@ tcp_wmem - vector of 3 INTEGERs: min, default, max
 	automatic tuning of that socket's send buffer size, in which case
 	this value is ignored.
 	Default: between 64K and 4MB, depending on RAM size.
+
+tcp_notsent_lowat - UNSIGNED INTEGER
+	A TCP socket can control the amount of unsent bytes in its write queue,
+	thanks to TCP_NOTSENT_LOWAT socket option. poll()/select()/epoll()
+	reports POLLOUT events if the amount of unsent bytes is below a per
+	socket value, and if the write queue is not full. sendmsg() will
+	also not add new buffers if the limit is hit.
+
+	This global variable controls the amount of unsent data for
+	sockets not using TCP_NOTSENT_LOWAT. For these sockets, a change
+	to the global variable has immediate effect.
+
+	Default: UINT_MAX (0xFFFFFFFF)
 
 tcp_workaround_signed_windows - BOOLEAN
 	If set, assume no receipt of a window scaling option means the

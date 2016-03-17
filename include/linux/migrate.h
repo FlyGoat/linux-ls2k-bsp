@@ -41,8 +41,6 @@ extern int migrate_page(struct address_space *,
 			struct page *, struct page *, enum migrate_mode);
 extern int migrate_pages(struct list_head *l, new_page_t x,
 		unsigned long private, enum migrate_mode mode, int reason);
-extern int migrate_huge_page(struct page *, new_page_t x,
-		unsigned long private, enum migrate_mode mode);
 
 extern int fail_migrate_page(struct address_space *,
 			struct page *, struct page *);
@@ -65,9 +63,6 @@ static inline void putback_lru_pages(struct list_head *l) {}
 static inline void putback_movable_pages(struct list_head *l) {}
 static inline int migrate_pages(struct list_head *l, new_page_t x,
 		unsigned long private, enum migrate_mode mode, int reason)
-	{ return -ENOSYS; }
-static inline int migrate_huge_page(struct page *page, new_page_t x,
-		unsigned long private, enum migrate_mode mode)
 	{ return -ENOSYS; }
 
 static inline int migrate_prep(void) { return -ENOSYS; }
@@ -97,7 +92,6 @@ static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 
 #ifdef CONFIG_NUMA_BALANCING
 extern bool pmd_trans_migrating(pmd_t pmd);
-extern void wait_migrate_huge_page(struct anon_vma *anon_vma, pmd_t *pmd);
 extern int migrate_misplaced_page(struct page *page,
 				  struct vm_area_struct *vma, int node);
 extern bool migrate_ratelimited(int node);
@@ -105,9 +99,6 @@ extern bool migrate_ratelimited(int node);
 static inline bool pmd_trans_migrating(pmd_t pmd)
 {
 	return false;
-}
-static inline void wait_migrate_huge_page(struct anon_vma *anon_vma, pmd_t *pmd)
-{
 }
 static inline int migrate_misplaced_page(struct page *page,
 					 struct vm_area_struct *vma, int node)

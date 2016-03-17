@@ -695,8 +695,7 @@ static int __init dmar_acpi_dev_scope_init(void)
 				       andd->object_name);
 				continue;
 			}
-			acpi_bus_get_device(h, &adev);
-			if (!adev) {
+			if (acpi_bus_get_device(h, &adev)) {
 				pr_err("Failed to get device for ACPI object %s\n",
 				       andd->object_name);
 				continue;
@@ -1021,7 +1020,7 @@ static void free_iommu(struct intel_iommu *iommu)
 	if (iommu->irq) {
 		free_irq(iommu->irq, iommu);
 		irq_set_handler_data(iommu->irq, NULL);
-		destroy_irq(iommu->irq);
+		dmar_free_hwirq(iommu->irq);
 	}
 
 	if (iommu->qi) {
@@ -1366,9 +1365,6 @@ int dmar_enable_qi(struct intel_iommu *iommu)
 		return -ENOMEM;
 	}
 
-	qi->free_head = qi->free_tail = 0;
-	qi->free_cnt = QI_LENGTH;
-
 	raw_spin_lock_init(&qi->q_lock);
 
 	__dmar_enable_qi(iommu);
@@ -1577,8 +1573,8 @@ int dmar_set_interrupt(struct intel_iommu *iommu)
 	if (iommu->irq)
 		return 0;
 
-	irq = create_irq();
-	if (!irq) {
+	irq = dmar_alloc_hwirq();
+	if (irq <= 0) {
 		pr_err("IOMMU: no free vectors\n");
 		return -EINVAL;
 	}
@@ -1590,7 +1586,7 @@ int dmar_set_interrupt(struct intel_iommu *iommu)
 	if (ret) {
 		irq_set_handler_data(irq, NULL);
 		iommu->irq = 0;
-		destroy_irq(irq);
+		dmar_free_hwirq(irq);
 		return ret;
 	}
 

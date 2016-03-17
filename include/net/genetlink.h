@@ -91,9 +91,7 @@ struct genl_info {
 	struct genlmsghdr *	genlhdr;
 	void *			userhdr;
 	struct nlattr **	attrs;
-#ifdef CONFIG_NET_NS
-	struct net *		_net;
-#endif
+	possible_net_t		_net;
 	void *			user_ptr[2];
 	struct sock *		dst_sk;
 };
@@ -207,6 +205,23 @@ static inline struct nlmsghdr *genlmsg_nlhdr(void *user_hdr,
 				   family->hdrsize -
 				   GENL_HDRLEN -
 				   NLMSG_HDRLEN);
+}
+
+/**
+ * genlmsg_parse - parse attributes of a genetlink message
+ * @nlh: netlink message header
+ * @family: genetlink message family
+ * @tb: destination array with maxtype+1 elements
+ * @maxtype: maximum attribute type to be expected
+ * @policy: validation policy
+ * */
+static inline int genlmsg_parse(const struct nlmsghdr *nlh,
+				const struct genl_family *family,
+				struct nlattr *tb[], int maxtype,
+				const struct nla_policy *policy)
+{
+	return nlmsg_parse(nlh, family->hdrsize + GENL_HDRLEN, tb, maxtype,
+			   policy);
 }
 
 /**
@@ -401,11 +416,11 @@ static inline int genl_set_err(struct genl_family *family, struct net *net,
 }
 
 static inline int genl_has_listeners(struct genl_family *family,
-				     struct sock *sk, unsigned int group)
+				     struct net *net, unsigned int group)
 {
 	if (WARN_ON_ONCE(group >= family->n_mcgrps))
 		return -EINVAL;
 	group = family->mcgrp_offset + group;
-	return netlink_has_listeners(sk, group);
+	return netlink_has_listeners(net->genl_sock, group);
 }
 #endif	/* __NET_GENERIC_NETLINK_H */

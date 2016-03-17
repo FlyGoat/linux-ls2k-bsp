@@ -38,6 +38,12 @@
 #include <asm/paca.h>
 #endif
 
+/*
+ * KVMPPC_INST_SW_BREAKPOINT is debug Instruction
+ * for supporting software breakpoint.
+ */
+#define KVMPPC_INST_SW_BREAKPOINT	0x00dddd00
+
 enum emulation_result {
 	EMULATE_DONE,         /* no further processing */
 	EMULATE_DO_MMIO,      /* kvm_run filled with MMIO request */
@@ -45,6 +51,21 @@ enum emulation_result {
 	EMULATE_FAIL,         /* can't emulate this instruction */
 	EMULATE_AGAIN,        /* something went wrong. go again */
 	EMULATE_EXIT_USER,    /* emulation requires exit to user-space */
+};
+
+enum instruction_type {
+	INST_GENERIC,
+	INST_SC,		/* system call */
+};
+
+enum xlate_instdata {
+	XLATE_INST,		/* translate instruction address */
+	XLATE_DATA		/* translate data address */
+};
+
+enum xlate_readwrite {
+	XLATE_READ,		/* check for read permissions */
+	XLATE_WRITE		/* check for write permissions */
 };
 
 extern int kvmppc_vcpu_run(struct kvm_run *kvm_run, struct kvm_vcpu *vcpu);
@@ -62,12 +83,20 @@ extern int kvmppc_handle_store(struct kvm_run *run, struct kvm_vcpu *vcpu,
 			       u64 val, unsigned int bytes,
 			       int is_default_endian);
 
+extern int kvmppc_load_last_inst(struct kvm_vcpu *vcpu,
+				 enum instruction_type type, u32 *inst);
+
+extern int kvmppc_ld(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
+		     bool data);
+extern int kvmppc_st(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
+		     bool data);
 extern int kvmppc_emulate_instruction(struct kvm_run *run,
                                       struct kvm_vcpu *vcpu);
+extern int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu);
 extern int kvmppc_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu);
 extern void kvmppc_emulate_dec(struct kvm_vcpu *vcpu);
 extern u32 kvmppc_get_dec(struct kvm_vcpu *vcpu, u64 tb);
-extern void kvmppc_decrementer_func(unsigned long data);
+extern void kvmppc_decrementer_func(struct kvm_vcpu *vcpu);
 extern int kvmppc_sanity_check(struct kvm_vcpu *vcpu);
 extern int kvmppc_subarch_vcpu_init(struct kvm_vcpu *vcpu);
 extern void kvmppc_subarch_vcpu_uninit(struct kvm_vcpu *vcpu);
@@ -86,6 +115,9 @@ extern gpa_t kvmppc_mmu_xlate(struct kvm_vcpu *vcpu, unsigned int gtlb_index,
                               gva_t eaddr);
 extern void kvmppc_mmu_dtlb_miss(struct kvm_vcpu *vcpu);
 extern void kvmppc_mmu_itlb_miss(struct kvm_vcpu *vcpu);
+extern int kvmppc_xlate(struct kvm_vcpu *vcpu, ulong eaddr,
+			enum xlate_instdata xlid, enum xlate_readwrite xlrw,
+			struct kvmppc_pte *pte);
 
 extern struct kvm_vcpu *kvmppc_core_vcpu_create(struct kvm *kvm,
                                                 unsigned int id);
@@ -106,6 +138,14 @@ extern void kvmppc_core_dequeue_dec(struct kvm_vcpu *vcpu);
 extern void kvmppc_core_queue_external(struct kvm_vcpu *vcpu,
                                        struct kvm_interrupt *irq);
 extern void kvmppc_core_dequeue_external(struct kvm_vcpu *vcpu);
+extern void kvmppc_core_queue_dtlb_miss(struct kvm_vcpu *vcpu, ulong dear_flags,
+					ulong esr_flags);
+extern void kvmppc_core_queue_data_storage(struct kvm_vcpu *vcpu,
+					   ulong dear_flags,
+					   ulong esr_flags);
+extern void kvmppc_core_queue_itlb_miss(struct kvm_vcpu *vcpu);
+extern void kvmppc_core_queue_inst_storage(struct kvm_vcpu *vcpu,
+					   ulong esr_flags);
 extern void kvmppc_core_flush_tlb(struct kvm_vcpu *vcpu);
 extern int kvmppc_core_check_requests(struct kvm_vcpu *vcpu);
 
@@ -145,10 +185,11 @@ extern int kvmppc_core_create_memslot(struct kvm *kvm,
 				      unsigned long npages);
 extern int kvmppc_core_prepare_memory_region(struct kvm *kvm,
 				struct kvm_memory_slot *memslot,
-				struct kvm_userspace_memory_region *mem);
+				const struct kvm_userspace_memory_region *mem);
 extern void kvmppc_core_commit_memory_region(struct kvm *kvm,
-				struct kvm_userspace_memory_region *mem,
-				const struct kvm_memory_slot *old);
+				const struct kvm_userspace_memory_region *mem,
+				const struct kvm_memory_slot *old,
+				const struct kvm_memory_slot *new);
 extern int kvm_vm_ioctl_get_smmu_info(struct kvm *kvm,
 				      struct kvm_ppc_smmu_info *info);
 extern void kvmppc_core_flush_memslot(struct kvm *kvm,
@@ -203,10 +244,11 @@ struct kvmppc_ops {
 	void (*flush_memslot)(struct kvm *kvm, struct kvm_memory_slot *memslot);
 	int (*prepare_memory_region)(struct kvm *kvm,
 				     struct kvm_memory_slot *memslot,
-				     struct kvm_userspace_memory_region *mem);
+				     const struct kvm_userspace_memory_region *mem);
 	void (*commit_memory_region)(struct kvm *kvm,
-				     struct kvm_userspace_memory_region *mem,
-				     const struct kvm_memory_slot *old);
+				     const struct kvm_userspace_memory_region *mem,
+				     const struct kvm_memory_slot *old,
+				     const struct kvm_memory_slot *new);
 	int (*unmap_hva)(struct kvm *kvm, unsigned long hva);
 	int (*unmap_hva_range)(struct kvm *kvm, unsigned long start,
 			   unsigned long end);
@@ -233,6 +275,29 @@ struct kvmppc_ops {
 
 extern struct kvmppc_ops *kvmppc_hv_ops;
 extern struct kvmppc_ops *kvmppc_pr_ops;
+
+static inline int kvmppc_get_last_inst(struct kvm_vcpu *vcpu,
+					enum instruction_type type, u32 *inst)
+{
+	int ret = EMULATE_DONE;
+	u32 fetched_inst;
+
+	/* Load the instruction manually if it failed to do so in the
+	 * exit path */
+	if (vcpu->arch.last_inst == KVM_INST_FETCH_FAILED)
+		ret = kvmppc_load_last_inst(vcpu, type, &vcpu->arch.last_inst);
+
+	/*  Write fetch_failed unswapped if the fetch failed */
+	if (ret == EMULATE_DONE)
+		fetched_inst = kvmppc_need_byteswap(vcpu) ?
+				swab32(vcpu->arch.last_inst) :
+				vcpu->arch.last_inst;
+	else
+		fetched_inst = vcpu->arch.last_inst;
+
+	*inst = fetched_inst;
+	return ret;
+}
 
 static inline bool is_kvmppc_hv_enabled(struct kvm *kvm)
 {

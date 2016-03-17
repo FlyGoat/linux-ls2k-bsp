@@ -74,15 +74,6 @@ struct uprobe {
 	struct arch_uprobe	arch;
 };
 
-struct return_instance {
-	struct uprobe		*uprobe;
-	unsigned long		func;
-	unsigned long		orig_ret_vaddr; /* original return address */
-	bool			chained;	/* true, if instance is nested */
-
-	struct return_instance	*next;		/* keep as stack */
-};
-
 /*
  * valid_vma: Verify if the specified vma is an executable vma
  * Relax restrictions while unregistering: vm_flags might have
@@ -151,7 +142,7 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	}
 
 	flush_cache_page(vma, addr, pte_pfn(*ptep));
-	ptep_clear_flush(vma, addr, ptep);
+	ptep_clear_flush_notify(vma, addr, ptep);
 	set_pte_at_notify(mm, addr, ptep, mk_pte(kpage, vma->vm_page_prot));
 
 	page_remove_rmap(page);
@@ -331,6 +322,18 @@ set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long v
 	return write_opcode(mm, vaddr, *(uprobe_opcode_t *)&auprobe->insn);
 }
 
+static struct uprobe *get_uprobe(struct uprobe *uprobe)
+{
+	atomic_inc(&uprobe->ref);
+	return uprobe;
+}
+
+static void put_uprobe(struct uprobe *uprobe)
+{
+	if (atomic_dec_and_test(&uprobe->ref))
+		kfree(uprobe);
+}
+
 static int match_uprobe(struct uprobe *l, struct uprobe *r)
 {
 	if (l->inode < r->inode)
@@ -358,10 +361,8 @@ static struct uprobe *__find_uprobe(struct inode *inode, loff_t offset)
 	while (n) {
 		uprobe = rb_entry(n, struct uprobe, rb_node);
 		match = match_uprobe(&u, uprobe);
-		if (!match) {
-			atomic_inc(&uprobe->ref);
-			return uprobe;
-		}
+		if (!match)
+			return get_uprobe(uprobe);
 
 		if (match < 0)
 			n = n->rb_left;
@@ -397,10 +398,8 @@ static struct uprobe *__insert_uprobe(struct uprobe *uprobe)
 		parent = *p;
 		u = rb_entry(parent, struct uprobe, rb_node);
 		match = match_uprobe(uprobe, u);
-		if (!match) {
-			atomic_inc(&u->ref);
-			return u;
-		}
+		if (!match)
+			return get_uprobe(u);
 
 		if (match < 0)
 			p = &parent->rb_left;
@@ -435,12 +434,6 @@ static struct uprobe *insert_uprobe(struct uprobe *uprobe)
 	spin_unlock(&uprobes_treelock);
 
 	return u;
-}
-
-static void put_uprobe(struct uprobe *uprobe)
-{
-	if (atomic_dec_and_test(&uprobe->ref))
-		kfree(uprobe);
 }
 
 static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset)
@@ -1000,14 +993,14 @@ static void build_probe_list(struct inode *inode,
 			if (u->inode != inode || u->offset < min)
 				break;
 			list_add(&u->pending_list, head);
-			atomic_inc(&u->ref);
+			get_uprobe(u);
 		}
 		for (t = n; (t = rb_next(t)); ) {
 			u = rb_entry(t, struct uprobe, rb_node);
 			if (u->inode != inode || u->offset > max)
 				break;
 			list_add(&u->pending_list, head);
-			atomic_inc(&u->ref);
+			get_uprobe(u);
 		}
 	}
 	spin_unlock(&uprobes_treelock);
@@ -1317,6 +1310,14 @@ unsigned long __weak uprobe_get_swbp_addr(struct pt_regs *regs)
 	return instruction_pointer(regs) - UPROBE_SWBP_INSN_SIZE;
 }
 
+static struct return_instance *free_ret_instance(struct return_instance *ri)
+{
+	struct return_instance *next = ri->next;
+	put_uprobe(ri->uprobe);
+	kfree(ri);
+	return next;
+}
+
 /*
  * Called with no locks held.
  * Called in context of a exiting or a exec-ing thread.
@@ -1324,7 +1325,7 @@ unsigned long __weak uprobe_get_swbp_addr(struct pt_regs *regs)
 void uprobe_free_utask(struct task_struct *t)
 {
 	struct uprobe_task *utask = t->utask;
-	struct return_instance *ri, *tmp;
+	struct return_instance *ri;
 
 	if (!utask)
 		return;
@@ -1333,13 +1334,8 @@ void uprobe_free_utask(struct task_struct *t)
 		put_uprobe(utask->active_uprobe);
 
 	ri = utask->return_instances;
-	while (ri) {
-		tmp = ri;
-		ri = ri->next;
-
-		put_uprobe(tmp->uprobe);
-		kfree(tmp);
-	}
+	while (ri)
+		ri = free_ret_instance(ri);
 
 	xol_free_insn_slot(t);
 	kfree(utask);
@@ -1378,7 +1374,7 @@ static int dup_utask(struct task_struct *t, struct uprobe_task *o_utask)
 			return -ENOMEM;
 
 		*n = *o;
-		atomic_inc(&n->uprobe->ref);
+		get_uprobe(n->uprobe);
 		n->next = NULL;
 
 		*p = n;
@@ -1464,12 +1460,25 @@ static unsigned long get_trampoline_vaddr(void)
 	return trampoline_vaddr;
 }
 
+static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
+					struct pt_regs *regs)
+{
+	struct return_instance *ri = utask->return_instances;
+	enum rp_check ctx = chained ? RP_CHECK_CHAIN_CALL : RP_CHECK_CALL;
+
+	while (ri && !arch_uretprobe_is_alive(ri, ctx, regs)) {
+		ri = free_ret_instance(ri);
+		utask->depth--;
+	}
+	utask->return_instances = ri;
+}
+
 static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 {
 	struct return_instance *ri;
 	struct uprobe_task *utask;
 	unsigned long orig_ret_vaddr, trampoline_vaddr;
-	bool chained = false;
+	bool chained;
 
 	if (!get_xol_area())
 		return;
@@ -1485,49 +1494,47 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 		return;
 	}
 
-	ri = kzalloc(sizeof(struct return_instance), GFP_KERNEL);
+	ri = kmalloc(sizeof(struct return_instance), GFP_KERNEL);
 	if (!ri)
-		goto fail;
+		return;
 
 	trampoline_vaddr = get_trampoline_vaddr();
 	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs);
 	if (orig_ret_vaddr == -1)
 		goto fail;
 
+	/* drop the entries invalidated by longjmp() */
+	chained = (orig_ret_vaddr == trampoline_vaddr);
+	cleanup_return_instances(utask, chained, regs);
+
 	/*
 	 * We don't want to keep trampoline address in stack, rather keep the
 	 * original return address of first caller thru all the consequent
 	 * instances. This also makes breakpoint unwrapping easier.
 	 */
-	if (orig_ret_vaddr == trampoline_vaddr) {
+	if (chained) {
 		if (!utask->return_instances) {
 			/*
 			 * This situation is not possible. Likely we have an
 			 * attack from user-space.
 			 */
-			pr_warn("uprobe: unable to set uretprobe pid/tgid=%d/%d\n",
-						current->pid, current->tgid);
+			uprobe_warn(current, "handle tail call");
 			goto fail;
 		}
-
-		chained = true;
 		orig_ret_vaddr = utask->return_instances->orig_ret_vaddr;
 	}
 
-	atomic_inc(&uprobe->ref);
-	ri->uprobe = uprobe;
+	ri->uprobe = get_uprobe(uprobe);
 	ri->func = instruction_pointer(regs);
+	ri->stack = user_stack_pointer(regs);
 	ri->orig_ret_vaddr = orig_ret_vaddr;
 	ri->chained = chained;
 
 	utask->depth++;
-
-	/* add instance to the stack */
 	ri->next = utask->return_instances;
 	utask->return_instances = ri;
 
 	return;
-
  fail:
 	kfree(ri);
 }
@@ -1716,45 +1723,63 @@ handle_uretprobe_chain(struct return_instance *ri, struct pt_regs *regs)
 	up_read(&uprobe->register_rwsem);
 }
 
-static bool handle_trampoline(struct pt_regs *regs)
+static struct return_instance *find_next_ret_chain(struct return_instance *ri)
+{
+	bool chained;
+
+	do {
+		chained = ri->chained;
+		ri = ri->next;	/* can't be NULL if chained */
+	} while (chained);
+
+	return ri;
+}
+
+static void handle_trampoline(struct pt_regs *regs)
 {
 	struct uprobe_task *utask;
-	struct return_instance *ri, *tmp;
-	bool chained;
+	struct return_instance *ri, *next;
+	bool valid;
 
 	utask = current->utask;
 	if (!utask)
-		return false;
+		goto sigill;
 
 	ri = utask->return_instances;
 	if (!ri)
-		return false;
+		goto sigill;
 
-	/*
-	 * TODO: we should throw out return_instance's invalidated by
-	 * longjmp(), currently we assume that the probed function always
-	 * returns.
-	 */
-	instruction_pointer_set(regs, ri->orig_ret_vaddr);
+	do {
+		/*
+		 * We should throw out the frames invalidated by longjmp().
+		 * If this chain is valid, then the next one should be alive
+		 * or NULL; the latter case means that nobody but ri->func
+		 * could hit this trampoline on return. TODO: sigaltstack().
+		 */
+		next = find_next_ret_chain(ri);
+		valid = !next || arch_uretprobe_is_alive(next, RP_CHECK_RET, regs);
 
-	for (;;) {
-		handle_uretprobe_chain(ri, regs);
-
-		chained = ri->chained;
-		put_uprobe(ri->uprobe);
-
-		tmp = ri;
-		ri = ri->next;
-		kfree(tmp);
-		utask->depth--;
-
-		if (!chained)
-			break;
-		BUG_ON(!ri);
-	}
+		instruction_pointer_set(regs, ri->orig_ret_vaddr);
+		do {
+			if (valid)
+				handle_uretprobe_chain(ri, regs);
+			ri = free_ret_instance(ri);
+			utask->depth--;
+		} while (ri != next);
+	} while (!valid);
 
 	utask->return_instances = ri;
+	return;
 
+ sigill:
+	uprobe_warn(current, "handle uretprobe, sending SIGILL.");
+	force_sig_info(SIGILL, SEND_SIG_FORCED, current);
+
+}
+
+bool __weak arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check ctx,
+					struct pt_regs *regs)
+{
 	return true;
 }
 
@@ -1769,13 +1794,8 @@ static void handle_swbp(struct pt_regs *regs)
 	int uninitialized_var(is_swbp);
 
 	bp_vaddr = uprobe_get_swbp_addr(regs);
-	if (bp_vaddr == get_trampoline_vaddr()) {
-		if (handle_trampoline(regs))
-			return;
-
-		pr_warn("uprobe: unable to handle uretprobe pid/tgid=%d/%d\n",
-						current->pid, current->tgid);
-	}
+	if (bp_vaddr == get_trampoline_vaddr())
+		return handle_trampoline(regs);
 
 	uprobe = find_active_uprobe(bp_vaddr, &is_swbp);
 	if (!uprobe) {

@@ -78,7 +78,7 @@ static int allow_vf_ioctls;
 module_param(allow_vf_ioctls, int, S_IRUGO);
 MODULE_PARM_DESC(allow_vf_ioctls, "Allow ioctls in SR-IOV VF mode. Default: 0");
 
-static int throttlequeuedepth = MEGASAS_THROTTLE_QUEUE_DEPTH;
+static unsigned int throttlequeuedepth = MEGASAS_THROTTLE_QUEUE_DEPTH;
 module_param(throttlequeuedepth, int, S_IRUGO);
 MODULE_PARM_DESC(throttlequeuedepth,
 	"Adapter queue depth when throttled due to I/O timeout. Default: 16");
@@ -94,8 +94,8 @@ MODULE_PARM_DESC(smp_affinity_enable, "SMP affinity feature enable/disbale Defau
 
 MODULE_LICENSE("GPL");
 MODULE_VERSION(MEGASAS_VERSION);
-MODULE_AUTHOR("megaraidlinux@lsi.com");
-MODULE_DESCRIPTION("LSI MegaRAID SAS Driver");
+MODULE_AUTHOR("megaraidlinux.pdl@avagotech.com");
+MODULE_DESCRIPTION("Avago MegaRAID SAS Driver");
 
 int megasas_transition_to_ready(struct megasas_instance *instance, int ocr);
 static int megasas_get_pd_list(struct megasas_instance *instance);
@@ -215,45 +215,12 @@ struct megasas_cmd *megasas_get_cmd(struct megasas_instance
 		cmd = list_entry((&instance->cmd_pool)->next,
 				 struct megasas_cmd, list);
 		list_del_init(&cmd->list);
-		atomic_set(&cmd->mfi_mpt_pthr, MFI_MPT_DETACHED);
 	} else {
 		printk(KERN_ERR "megasas: Command pool empty!\n");
 	}
 
 	spin_unlock_irqrestore(&instance->mfi_pool_lock, flags);
 	return cmd;
-}
-
-/**
- * __megasas_return_cmd -	Return a cmd to free command pool
- * @instance:		Adapter soft state
- * @cmd:		Command packet to be returned to free command pool
- */
-inline void
-__megasas_return_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd)
-{
-	/*
-	 * Don't go ahead and free the MFI frame, if corresponding
-	 * MPT frame is not freed(valid for only fusion adapters).
-	 * In case of MFI adapters, anyways for any allocated MFI
-	 * frame will have cmd->mfi_mpt_mpthr set to MFI_MPT_DETACHED
-	 */
-	if (atomic_read(&cmd->mfi_mpt_pthr) != MFI_MPT_DETACHED)
-		return;
-
-	cmd->scmd = NULL;
-	cmd->frame_count = 0;
-	cmd->is_wait_event = 0;
-	cmd->mpt_pthr_cmd_blocked = NULL;
-
-	if ((instance->pdev->device != PCI_DEVICE_ID_LSI_FUSION) &&
-	    (instance->pdev->device != PCI_DEVICE_ID_LSI_INVADER) &&
-	    (instance->pdev->device != PCI_DEVICE_ID_LSI_FURY) &&
-	    (reset_devices))
-		cmd->frame->hdr.cmd = MFI_CMD_INVALID;
-
-	atomic_set(&cmd->mfi_mpt_pthr, MFI_LIST_ADDED);
-	list_add(&cmd->list, (&instance->cmd_pool)->next);
 }
 
 /**
@@ -265,12 +232,33 @@ inline void
 megasas_return_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd)
 {
 	unsigned long flags;
+	u32 blk_tags;
+	struct megasas_cmd_fusion *cmd_fusion;
+	struct fusion_context *fusion = instance->ctrl_context;
+
+	/* This flag is used only for fusion adapter.
+	 * Wait for Interrupt for Polled mode DCMD
+	 */
+	if (cmd->flags & DRV_DCMD_POLLED_MODE)
+		return;
 
 	spin_lock_irqsave(&instance->mfi_pool_lock, flags);
-	__megasas_return_cmd(instance, cmd);
-	spin_unlock_irqrestore(&instance->mfi_pool_lock, flags);
-}
 
+	if (fusion) {
+		blk_tags = instance->max_scsi_cmds + cmd->index;
+		cmd_fusion = fusion->cmd_list[blk_tags];
+		megasas_return_cmd_fusion(instance, cmd_fusion);
+	}
+	cmd->scmd = NULL;
+	cmd->frame_count = 0;
+	cmd->flags = 0;
+	if (!fusion && reset_devices)
+		cmd->frame->hdr.cmd = MFI_CMD_INVALID;
+	list_add(&cmd->list, (&instance->cmd_pool)->next);
+
+	spin_unlock_irqrestore(&instance->mfi_pool_lock, flags);
+
+}
 
 /**
 *	The following functions are defined for xscale
@@ -814,8 +802,8 @@ megasas_adp_reset_gen2(struct megasas_instance *instance,
 {
 	u32			retry = 0 ;
 	u32			HostDiag;
-	u32			*seq_offset = &reg_set->seq_offset;
-	u32			*hostdiag_offset = &reg_set->host_diag;
+	u32 __iomem		*seq_offset = &reg_set->seq_offset;
+	u32 __iomem		*hostdiag_offset = &reg_set->host_diag;
 
 	if (instance->instancet == &megasas_instance_template_skinny) {
 		seq_offset = &reg_set->fusion_seq_offset;
@@ -910,7 +898,7 @@ extern struct megasas_instance_template megasas_instance_template_fusion;
  * @instance:			Adapter soft state
  * @cmd:			Command packet to be issued
  *
- * For polling, MFI requires the cmd_status to be set to 0xFF before posting.
+ * For polling, MFI requires the cmd_status to be set to MFI_STAT_INVALID_STATUS before posting.
  */
 int
 megasas_issue_polled(struct megasas_instance *instance, struct megasas_cmd *cmd)
@@ -952,20 +940,20 @@ megasas_issue_blocked_cmd(struct megasas_instance *instance,
 			  struct megasas_cmd *cmd, int timeout)
 {
 	int ret = 0;
-	cmd->cmd_status = ENODATA;
+	cmd->cmd_status_drv = MFI_STAT_INVALID_STATUS;
 
-	cmd->is_wait_event = 1;
 	instance->instancet->issue_dcmd(instance, cmd);
 	if (timeout) {
 		ret = wait_event_timeout(instance->int_cmd_wait_q,
-				cmd->cmd_status != ENODATA, timeout * HZ);
+				cmd->cmd_status_drv != MFI_STAT_INVALID_STATUS, timeout * HZ);
 		if (!ret)
 			return 1;
 	} else
 		wait_event(instance->int_cmd_wait_q,
-				cmd->cmd_status != ENODATA);
+				cmd->cmd_status_drv != MFI_STAT_INVALID_STATUS);
 
-	return 0;
+	return (cmd->cmd_status_drv == MFI_STAT_OK) ?
+		0 : 1;
 }
 
 /**
@@ -998,7 +986,7 @@ megasas_issue_blocked_abort_cmd(struct megasas_instance *instance,
 	 * Prepare and issue the abort frame
 	 */
 	abort_fr->cmd = MFI_CMD_ABORT;
-	abort_fr->cmd_status = 0xFF;
+	abort_fr->cmd_status = MFI_STAT_INVALID_STATUS;
 	abort_fr->flags = cpu_to_le16(0);
 	abort_fr->abort_context = cpu_to_le32(cmd_to_abort->index);
 	abort_fr->abort_mfi_phys_addr_lo =
@@ -1007,13 +995,13 @@ megasas_issue_blocked_abort_cmd(struct megasas_instance *instance,
 		cpu_to_le32(upper_32_bits(cmd_to_abort->frame_phys_addr));
 
 	cmd->sync_cmd = 1;
-	cmd->cmd_status = ENODATA;
+	cmd->cmd_status_drv = MFI_STAT_INVALID_STATUS;
 
 	instance->instancet->issue_dcmd(instance, cmd);
 
 	if (timeout) {
 		ret = wait_event_timeout(instance->abort_cmd_wait_q,
-				cmd->cmd_status != ENODATA, timeout * HZ);
+				cmd->cmd_status_drv != MFI_STAT_INVALID_STATUS, timeout * HZ);
 		if (!ret) {
 			dev_err(&instance->pdev->dev, "Command timedout"
 				"from %s\n", __func__);
@@ -1021,7 +1009,7 @@ megasas_issue_blocked_abort_cmd(struct megasas_instance *instance,
 		}
 	} else
 		wait_event(instance->abort_cmd_wait_q,
-				cmd->cmd_status != ENODATA);
+				cmd->cmd_status_drv != MFI_STAT_INVALID_STATUS);
 
 	cmd->sync_cmd = 0;
 
@@ -1196,7 +1184,7 @@ megasas_build_dcdb(struct megasas_instance *instance, struct scsi_cmnd *scp,
 	struct megasas_pthru_frame *pthru;
 
 	is_logical = MEGASAS_IS_LOGICAL(scp);
-	device_id = MEGASAS_DEV_INDEX(instance, scp);
+	device_id = MEGASAS_DEV_INDEX(scp);
 	pthru = (struct megasas_pthru_frame *)cmd->frame;
 
 	if (scp->sc_data_direction == PCI_DMA_TODEVICE)
@@ -1232,7 +1220,7 @@ megasas_build_dcdb(struct megasas_instance *instance, struct scsi_cmnd *scp,
 	*/
 	if (scp->device->type == TYPE_TAPE) {
 		if ((scp->request->timeout / HZ) > 0xFFFF)
-			pthru->timeout = 0xFFFF;
+			pthru->timeout = cpu_to_le16(0xFFFF);
 		else
 			pthru->timeout = cpu_to_le16(scp->request->timeout / HZ);
 	}
@@ -1294,7 +1282,7 @@ megasas_build_ldio(struct megasas_instance *instance, struct scsi_cmnd *scp,
 	u16 flags = 0;
 	struct megasas_io_frame *ldio;
 
-	device_id = MEGASAS_DEV_INDEX(instance, scp);
+	device_id = MEGASAS_DEV_INDEX(scp);
 	ldio = (struct megasas_io_frame *)cmd->frame;
 
 	if (scp->sc_data_direction == PCI_DMA_TODEVICE)
@@ -1417,16 +1405,15 @@ megasas_build_ldio(struct megasas_instance *instance, struct scsi_cmnd *scp,
 }
 
 /**
- * megasas_is_ldio -		Checks if the cmd is for logical drive
+ * megasas_cmd_type -		Checks if the cmd is for logical drive/sysPD
+ *				and whether it's RW or non RW
  * @scmd:			SCSI command
  *
- * Called by megasas_queue_command to find out if the command to be queued
- * is a logical drive command
  */
-inline int megasas_is_ldio(struct scsi_cmnd *cmd)
+inline int megasas_cmd_type(struct scsi_cmnd *cmd)
 {
-	if (!MEGASAS_IS_LOGICAL(cmd))
-		return 0;
+	int ret;
+
 	switch (cmd->cmnd[0]) {
 	case READ_10:
 	case WRITE_10:
@@ -1436,10 +1423,14 @@ inline int megasas_is_ldio(struct scsi_cmnd *cmd)
 	case WRITE_6:
 	case READ_16:
 	case WRITE_16:
-		return 1;
+		ret = (MEGASAS_IS_LOGICAL(cmd)) ?
+			READ_WRITE_LDIO : READ_WRITE_SYSPDIO;
+		break;
 	default:
-		return 0;
+		ret = (MEGASAS_IS_LOGICAL(cmd)) ?
+			NON_READ_WRITE_LDIO : NON_READ_WRITE_SYSPDIO;
 	}
+	return ret;
 }
 
  /**
@@ -1471,7 +1462,7 @@ megasas_dump_pending_frames(struct megasas_instance *instance)
 		if(!cmd->scmd)
 			continue;
 		printk(KERN_ERR "megasas[%d]: Frame addr :0x%08lx : ",instance->host->host_no,(unsigned long)cmd->frame_phys_addr);
-		if (megasas_is_ldio(cmd->scmd)){
+		if (megasas_cmd_type(cmd->scmd) == READ_WRITE_LDIO) {
 			ldio = (struct megasas_io_frame *)cmd->frame;
 			mfi_sgl = &ldio->sgl;
 			sgcount = ldio->sge_count;
@@ -1531,7 +1522,7 @@ megasas_build_and_issue_cmd(struct megasas_instance *instance,
 	/*
 	 * Logical drive command
 	 */
-	if (megasas_is_ldio(scmd))
+	if (megasas_cmd_type(scmd) == READ_WRITE_LDIO)
 		frame_count = megasas_build_ldio(instance, scmd, cmd);
 	else
 		frame_count = megasas_build_dcdb(instance, scmd, cmd);
@@ -1682,29 +1673,78 @@ static int megasas_slave_alloc(struct scsi_device *sdev)
 			sdev->id;
 		if (instance->pd_list[pd_index].driveState ==
 					MR_PD_STATE_SYSTEM) {
-			return 0;
+			goto scan_target;
 		}
 		return -ENXIO;
 	}
+
+scan_target:
+	sdev->tagged_supported = 1;
+	scsi_activate_tcq(sdev, sdev->queue_depth);
+
 	return 0;
 }
 
+/*
+* megasas_complete_outstanding_ioctls - Complete outstanding ioctls after a
+*                                       kill adapter
+* @instance:				Adapter soft state
+*
+*/
+static void megasas_complete_outstanding_ioctls(struct megasas_instance *instance)
+{
+	int i;
+	struct megasas_cmd *cmd_mfi;
+	struct megasas_cmd_fusion *cmd_fusion;
+	struct fusion_context *fusion = instance->ctrl_context;
+
+	/* Find all outstanding ioctls */
+	if (fusion) {
+		for (i = 0; i < instance->max_fw_cmds; i++) {
+			cmd_fusion = fusion->cmd_list[i];
+			if (cmd_fusion->sync_cmd_idx != (u32)ULONG_MAX) {
+				cmd_mfi = instance->cmd_list[cmd_fusion->sync_cmd_idx];
+				if (cmd_mfi->sync_cmd &&
+					cmd_mfi->frame->hdr.cmd != MFI_CMD_ABORT)
+					megasas_complete_cmd(instance,
+							     cmd_mfi, DID_OK);
+			}
+		}
+	} else {
+		for (i = 0; i < instance->max_fw_cmds; i++) {
+			cmd_mfi = instance->cmd_list[i];
+			if (cmd_mfi->sync_cmd && cmd_mfi->frame->hdr.cmd !=
+				MFI_CMD_ABORT)
+				megasas_complete_cmd(instance, cmd_mfi, DID_OK);
+		}
+	}
+}
+
+
 void megaraid_sas_kill_hba(struct megasas_instance *instance)
 {
+	/* Set critical error to block I/O & ioctls in case caller didn't */
+	instance->adprecovery = MEGASAS_HW_CRITICAL_ERROR;
+	/* Wait 1 second to ensure IO or ioctls in build have posted */
+	msleep(1000);
 	if ((instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0073SKINNY) ||
-	    (instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0071SKINNY) ||
-	    (instance->pdev->device == PCI_DEVICE_ID_LSI_FUSION) ||
-	    (instance->pdev->device == PCI_DEVICE_ID_LSI_PLASMA) ||
-	    (instance->pdev->device == PCI_DEVICE_ID_LSI_INVADER) ||
-	    (instance->pdev->device == PCI_DEVICE_ID_LSI_FURY)) {
-		writel(MFI_STOP_ADP, &instance->reg_set->doorbell);
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0071SKINNY) ||
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_FUSION) ||
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_PLASMA) ||
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_INVADER) ||
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_FURY)) {
+		writel(MFI_STOP_ADP,
+			&instance->reg_set->doorbell);
 		/* Flush */
 		readl(&instance->reg_set->doorbell);
 		if (instance->mpio && instance->requestorId)
 			memset(instance->ld_ids, 0xff, MEGASAS_MAX_LD_IDS);
 	} else {
-		writel(MFI_STOP_ADP, &instance->reg_set->inbound_doorbell);
+		writel(MFI_STOP_ADP,
+			&instance->reg_set->inbound_doorbell);
 	}
+	/* Complete outstanding ioctls when adapter is killed */
+	megasas_complete_outstanding_ioctls(instance);
 }
 
  /**
@@ -1717,6 +1757,7 @@ void
 megasas_check_and_restore_queue_depth(struct megasas_instance *instance)
 {
 	unsigned long flags;
+
 	if (instance->flag & MEGASAS_FW_BUSY
 	    && time_after(jiffies, instance->last_time + 5 * HZ)
 	    && atomic_read(&instance->fw_outstanding) <
@@ -1724,13 +1765,8 @@ megasas_check_and_restore_queue_depth(struct megasas_instance *instance)
 
 		spin_lock_irqsave(instance->host->host_lock, flags);
 		instance->flag &= ~MEGASAS_FW_BUSY;
-		if (instance->is_imr) {
-			instance->host->can_queue =
-				instance->max_fw_cmds - MEGASAS_SKINNY_INT_CMDS;
-		} else
-			instance->host->can_queue =
-				instance->max_fw_cmds - MEGASAS_INT_CMDS;
 
+		instance->host->can_queue = instance->max_scsi_cmds;
 		spin_unlock_irqrestore(instance->host->host_lock, flags);
 	}
 }
@@ -1879,22 +1915,24 @@ static int megasas_get_ld_vf_affiliation_111(struct megasas_instance *instance,
 	memset(dcmd->mbox.b, 0, MFI_MBOX_SIZE);
 
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
-	dcmd->flags = MFI_FRAME_DIR_BOTH;
+	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_BOTH);
 	dcmd->timeout = 0;
 	dcmd->pad_0 = 0;
-	dcmd->data_xfer_len = sizeof(struct MR_LD_VF_AFFILIATION_111);
-	dcmd->opcode = MR_DCMD_LD_VF_MAP_GET_ALL_LDS_111;
+	dcmd->data_xfer_len =
+		cpu_to_le32(sizeof(struct MR_LD_VF_AFFILIATION_111));
+	dcmd->opcode = cpu_to_le32(MR_DCMD_LD_VF_MAP_GET_ALL_LDS_111);
 
 	if (initial)
 		dcmd->sgl.sge32[0].phys_addr =
-			instance->vf_affiliation_111_h;
+			cpu_to_le32(instance->vf_affiliation_111_h);
 	else
-		dcmd->sgl.sge32[0].phys_addr = new_affiliation_111_h;
+		dcmd->sgl.sge32[0].phys_addr =
+			cpu_to_le32(new_affiliation_111_h);
 
-	dcmd->sgl.sge32[0].length =
-		sizeof(struct MR_LD_VF_AFFILIATION_111);
+	dcmd->sgl.sge32[0].length = cpu_to_le32(
+		sizeof(struct MR_LD_VF_AFFILIATION_111));
 
 	printk(KERN_WARNING "megasas: SR-IOV: Getting LD/VF affiliation for "
 	       "scsi%d\n", instance->host->host_no);
@@ -1933,11 +1971,7 @@ out:
 				    new_affiliation_111_h);
 	}
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return retval;
 }
@@ -1994,22 +2028,24 @@ static int megasas_get_ld_vf_affiliation_12(struct megasas_instance *instance,
 	memset(dcmd->mbox.b, 0, MFI_MBOX_SIZE);
 
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
-	dcmd->flags = MFI_FRAME_DIR_BOTH;
+	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_BOTH);
 	dcmd->timeout = 0;
 	dcmd->pad_0 = 0;
-	dcmd->data_xfer_len = (MAX_LOGICAL_DRIVES + 1) *
-		sizeof(struct MR_LD_VF_AFFILIATION);
-	dcmd->opcode = MR_DCMD_LD_VF_MAP_GET_ALL_LDS;
+	dcmd->data_xfer_len = cpu_to_le32((MAX_LOGICAL_DRIVES + 1) *
+		sizeof(struct MR_LD_VF_AFFILIATION));
+	dcmd->opcode = cpu_to_le32(MR_DCMD_LD_VF_MAP_GET_ALL_LDS);
 
 	if (initial)
-		dcmd->sgl.sge32[0].phys_addr = instance->vf_affiliation_h;
+		dcmd->sgl.sge32[0].phys_addr =
+			cpu_to_le32(instance->vf_affiliation_h);
 	else
-		dcmd->sgl.sge32[0].phys_addr = new_affiliation_h;
+		dcmd->sgl.sge32[0].phys_addr =
+			cpu_to_le32(new_affiliation_h);
 
-	dcmd->sgl.sge32[0].length = (MAX_LOGICAL_DRIVES + 1) *
-		sizeof(struct MR_LD_VF_AFFILIATION);
+	dcmd->sgl.sge32[0].length = cpu_to_le32((MAX_LOGICAL_DRIVES + 1) *
+		sizeof(struct MR_LD_VF_AFFILIATION));
 
 	printk(KERN_WARNING "megasas: SR-IOV: Getting LD/VF affiliation for "
 	       "scsi%d\n", instance->host->host_no);
@@ -2104,11 +2140,7 @@ out:
 				    (MAX_LOGICAL_DRIVES + 1) *
 				    sizeof(struct MR_LD_VF_AFFILIATION),
 				    new_affiliation, new_affiliation_h);
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return retval;
 }
@@ -2147,9 +2179,9 @@ int megasas_sriov_start_heartbeat(struct megasas_instance *instance,
 
 	if (initial) {
 		instance->hb_host_mem =
-			pci_alloc_consistent(instance->pdev,
-					     sizeof(struct MR_CTRL_HB_HOST_MEM),
-					     &instance->hb_host_mem_h);
+			pci_zalloc_consistent(instance->pdev,
+					      sizeof(struct MR_CTRL_HB_HOST_MEM),
+					      &instance->hb_host_mem_h);
 		if (!instance->hb_host_mem) {
 			printk(KERN_DEBUG "megasas: SR-IOV: Couldn't allocate"
 			       " memory for heartbeat host memory for "
@@ -2157,45 +2189,37 @@ int megasas_sriov_start_heartbeat(struct megasas_instance *instance,
 			retval = -ENOMEM;
 			goto out;
 		}
-		memset(instance->hb_host_mem, 0,
-		       sizeof(struct MR_CTRL_HB_HOST_MEM));
 	}
 
 	memset(dcmd->mbox.b, 0, MFI_MBOX_SIZE);
 
-	dcmd->mbox.s[0] = sizeof(struct MR_CTRL_HB_HOST_MEM);
+	dcmd->mbox.s[0] = cpu_to_le16(sizeof(struct MR_CTRL_HB_HOST_MEM));
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
-	dcmd->flags = MFI_FRAME_DIR_BOTH;
+	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_BOTH);
 	dcmd->timeout = 0;
 	dcmd->pad_0 = 0;
-	dcmd->data_xfer_len = sizeof(struct MR_CTRL_HB_HOST_MEM);
-	dcmd->opcode = MR_DCMD_CTRL_SHARED_HOST_MEM_ALLOC;
-	dcmd->sgl.sge32[0].phys_addr = instance->hb_host_mem_h;
-	dcmd->sgl.sge32[0].length = sizeof(struct MR_CTRL_HB_HOST_MEM);
+	dcmd->data_xfer_len = cpu_to_le32(sizeof(struct MR_CTRL_HB_HOST_MEM));
+	dcmd->opcode = cpu_to_le32(MR_DCMD_CTRL_SHARED_HOST_MEM_ALLOC);
+	dcmd->sgl.sge32[0].phys_addr = cpu_to_le32(instance->hb_host_mem_h);
+	dcmd->sgl.sge32[0].length = cpu_to_le32(sizeof(struct MR_CTRL_HB_HOST_MEM));
 
 	printk(KERN_WARNING "megasas: SR-IOV: Starting heartbeat for scsi%d\n",
 	       instance->host->host_no);
 
-	if (!megasas_issue_polled(instance, cmd)) {
-		retval = 0;
-	} else {
-		printk(KERN_WARNING "megasas: SR-IOV: MR_DCMD_CTRL_SHARED_HOST"
-		       "_MEM_ALLOC DCMD timed out for scsi%d\n",
-		       instance->host->host_no);
-		retval = 1;
-		goto out;
-	}
+	if (instance->ctrl_context && !instance->mask_interrupts)
+		retval = megasas_issue_blocked_cmd(instance, cmd,
+			MEGASAS_ROUTINE_WAIT_TIME_VF);
+	else
+		retval = megasas_issue_polled(instance, cmd);
 
-
-	if (dcmd->cmd_status) {
-		printk(KERN_WARNING "megasas: SR-IOV: MR_DCMD_CTRL_SHARED_HOST"
-		       "_MEM_ALLOC DCMD failed with status 0x%x for scsi%d\n",
-		       dcmd->cmd_status,
-		       instance->host->host_no);
+	if (retval) {
+		dev_warn(&instance->pdev->dev, "SR-IOV: MR_DCMD_CTRL_SHARED_HOST"
+			"_MEM_ALLOC DCMD %s for scsi%d\n",
+			(dcmd->cmd_status == MFI_STAT_INVALID_STATUS) ?
+			"timed out" : "failed", instance->host->host_no);
 		retval = 1;
-		goto out;
 	}
 
 out:
@@ -2291,7 +2315,7 @@ static int megasas_wait_for_outstanding(struct megasas_instance *instance)
 						"reset queue\n",
 						reset_cmd);
 
-				reset_cmd->cmd_status = ENODATA;
+				reset_cmd->cmd_status_drv = MFI_STAT_INVALID_STATUS;
 				instance->instancet->fire_cmd(instance,
 						reset_cmd->frame_phys_addr,
 						0, instance->reg_set);
@@ -2571,11 +2595,7 @@ megasas_service_aen(struct megasas_instance *instance, struct megasas_cmd *cmd)
 
 	instance->aen_cmd = NULL;
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	if ((instance->unload == 0) &&
 		((instance->issuepend_done == 1))) {
@@ -2759,7 +2779,7 @@ struct device_attribute *megaraid_host_attrs[] = {
 static struct scsi_host_template megasas_template = {
 
 	.module = THIS_MODULE,
-	.name = "LSI SAS based MegaRAID driver",
+	.name = "Avago SAS based MegaRAID driver",
 	.proc_name = "megaraid_sas",
 	.slave_configure = megasas_slave_configure,
 	.slave_alloc = megasas_slave_alloc,
@@ -2788,11 +2808,7 @@ static void
 megasas_complete_int_cmd(struct megasas_instance *instance,
 			 struct megasas_cmd *cmd)
 {
-	cmd->cmd_status = cmd->frame->io.cmd_status;
-
-	if (cmd->cmd_status == ENODATA) {
-		cmd->cmd_status = 0;
-	}
+	cmd->cmd_status_drv = cmd->frame->io.cmd_status;
 	wake_up(&instance->int_cmd_wait_q);
 }
 
@@ -2811,7 +2827,7 @@ megasas_complete_abort(struct megasas_instance *instance,
 {
 	if (cmd->sync_cmd) {
 		cmd->sync_cmd = 0;
-		cmd->cmd_status = 0;
+		cmd->cmd_status_drv = 0;
 		wake_up(&instance->abort_cmd_wait_q);
 	}
 
@@ -2951,8 +2967,7 @@ megasas_complete_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd,
 					       "failed, status = 0x%x.\n",
 					       cmd->frame->hdr.cmd_status);
 				else {
-					megasas_return_mfi_mpt_pthr(instance,
-						cmd, cmd->mpt_pthr_cmd_blocked);
+					megasas_return_cmd(instance, cmd);
 					spin_unlock_irqrestore(
 						instance->host->host_lock,
 						flags);
@@ -2960,8 +2975,7 @@ megasas_complete_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd,
 				}
 			} else
 				instance->map_id++;
-			megasas_return_mfi_mpt_pthr(instance, cmd,
-				cmd->mpt_pthr_cmd_blocked);
+			megasas_return_cmd(instance, cmd);
 
 			/*
 			 * Set fast path IO to ZERO.
@@ -3044,10 +3058,9 @@ megasas_issue_pending_cmds_again(struct megasas_instance *instance)
 					"was tried multiple times during reset."
 					"Shutting down the HBA\n",
 					cmd, cmd->scmd, cmd->sync_cmd);
+				instance->instancet->disable_intr(instance);
+				atomic_set(&instance->fw_reset_no_pci_access, 1);
 				megaraid_sas_kill_hba(instance);
-
-				instance->adprecovery =
-						MEGASAS_HW_CRITICAL_ERROR;
 				return;
 			}
 		}
@@ -3060,7 +3073,7 @@ megasas_issue_pending_cmds_again(struct megasas_instance *instance)
 			printk(KERN_NOTICE "megasas: %p synchronous cmd"
 						"on the internal reset queue,"
 						"issue it again.\n", cmd);
-			cmd->cmd_status = ENODATA;
+			cmd->cmd_status_drv = MFI_STAT_INVALID_STATUS;
 			instance->instancet->fire_cmd(instance,
 							cmd->frame_phys_addr ,
 							0, instance->reg_set);
@@ -3181,8 +3194,8 @@ process_fw_state_change_wq(struct work_struct *work)
 		if (megasas_transition_to_ready(instance, 1)) {
 			printk(KERN_NOTICE "megaraid_sas:adapter not ready\n");
 
+			atomic_set(&instance->fw_reset_no_pci_access, 1);
 			megaraid_sas_kill_hba(instance);
-			instance->adprecovery	= MEGASAS_HW_CRITICAL_ERROR;
 			return ;
 		}
 
@@ -3740,7 +3753,6 @@ int megasas_alloc_cmds(struct megasas_instance *instance)
 		cmd = instance->cmd_list[i];
 		memset(cmd, 0, sizeof(struct megasas_cmd));
 		cmd->index = i;
-		atomic_set(&cmd->mfi_mpt_pthr, MFI_LIST_ADDED);
 		cmd->scmd = NULL;
 		cmd->instance = instance;
 
@@ -3801,7 +3813,7 @@ megasas_get_pd_list(struct megasas_instance *instance)
 	dcmd->mbox.b[0] = MR_PD_QUERY_TYPE_EXPOSED_TO_HOST;
 	dcmd->mbox.b[1] = 0;
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
 	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_READ);
 	dcmd->timeout = 0;
@@ -3848,11 +3860,7 @@ megasas_get_pd_list(struct megasas_instance *instance)
 				MEGASAS_MAX_PD * sizeof(struct MR_PD_LIST),
 				ci, ci_h);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return ret;
 }
@@ -3901,7 +3909,7 @@ megasas_get_ld_list(struct megasas_instance *instance)
 	if (instance->supportmax256vd)
 		dcmd->mbox.b[0] = 1;
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
 	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_READ);
 	dcmd->timeout = 0;
@@ -3939,11 +3947,7 @@ megasas_get_ld_list(struct megasas_instance *instance)
 				ci,
 				ci_h);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 	return ret;
 }
 
@@ -3994,7 +3998,7 @@ megasas_ld_list_query(struct megasas_instance *instance, u8 query_type)
 		dcmd->mbox.b[2] = 1;
 
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
 	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_READ);
 	dcmd->timeout = 0;
@@ -4024,11 +4028,7 @@ megasas_ld_list_query(struct megasas_instance *instance, u8 query_type)
 	pci_free_consistent(instance->pdev, sizeof(struct MR_LD_TARGETID_LIST),
 			    ci, ci_h);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return ret;
 }
@@ -4065,12 +4065,11 @@ static void megasas_update_ext_vd_details(struct megasas_instance *instance)
 		instance->fw_supported_vd_count = MAX_LOGICAL_DRIVES;
 		instance->fw_supported_pd_count = MAX_PHYSICAL_DEVICES;
 	}
-	dev_info(&instance->pdev->dev, "Firmware supports %d VD %d PD\n",
-		instance->fw_supported_vd_count,
-		instance->fw_supported_pd_count);
-	dev_info(&instance->pdev->dev, "Driver supports %d VD  %d PD\n",
-		instance->drv_supported_vd_count,
-		instance->drv_supported_pd_count);
+
+	dev_info(&instance->pdev->dev,
+		"firmware type\t: %s\n",
+		instance->supportmax256vd ? "Extended VD(240 VD)firmware" :
+		"Legacy(64 VD) firmware");
 
 	old_map_sz =  sizeof(struct MR_FW_RAID_MAP) +
 				(sizeof(struct MR_LD_SPAN_MAP) *
@@ -4132,7 +4131,7 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 	memset(dcmd->mbox.b, 0, MFI_MBOX_SIZE);
 
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
 	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_READ);
 	dcmd->timeout = 0;
@@ -4155,16 +4154,17 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 		le32_to_cpus((u32 *)&ctrl_info->adapterOperations2);
 		le32_to_cpus((u32 *)&ctrl_info->adapterOperations3);
 		megasas_update_ext_vd_details(instance);
+		instance->is_imr = (ctrl_info->memory_size ? 0 : 1);
+		dev_info(&instance->pdev->dev,
+				"controller type\t: %s(%dMB)\n",
+				instance->is_imr ? "iMR" : "MR",
+				le16_to_cpu(ctrl_info->memory_size));
 	}
 
 	pci_free_consistent(instance->pdev, sizeof(struct megasas_ctrl_info),
 			    ci, ci_h);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 	return ret;
 }
 
@@ -4203,7 +4203,7 @@ int megasas_set_crash_dump_params(struct megasas_instance *instance,
 	memset(dcmd->mbox.b, 0, MFI_MBOX_SIZE);
 	dcmd->mbox.b[0] = crash_buf_state;
 	dcmd->cmd = MFI_CMD_DCMD;
-	dcmd->cmd_status = 0xFF;
+	dcmd->cmd_status = MFI_STAT_INVALID_STATUS;
 	dcmd->sge_count = 1;
 	dcmd->flags = cpu_to_le16(MFI_FRAME_DIR_NONE);
 	dcmd->timeout = 0;
@@ -4219,11 +4219,7 @@ int megasas_set_crash_dump_params(struct megasas_instance *instance,
 	else
 		ret = megasas_issue_polled(instance, cmd);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 	return ret;
 }
 
@@ -4236,7 +4232,7 @@ int megasas_set_crash_dump_params(struct megasas_instance *instance,
 static int
 megasas_issue_init_mfi(struct megasas_instance *instance)
 {
-	u32 context;
+	__le32 context;
 
 	struct megasas_cmd *cmd;
 
@@ -4274,7 +4270,7 @@ megasas_issue_init_mfi(struct megasas_instance *instance)
 	initq_info->consumer_index_phys_addr_lo = cpu_to_le32(instance->consumer_h);
 
 	init_frame->cmd = MFI_CMD_INIT;
-	init_frame->cmd_status = 0xFF;
+	init_frame->cmd_status = MFI_STAT_INVALID_STATUS;
 	init_frame->queue_info_new_phys_addr_lo =
 		cpu_to_le32(lower_32_bits(initq_info_h));
 	init_frame->queue_info_new_phys_addr_hi =
@@ -4327,6 +4323,21 @@ megasas_init_adapter_mfi(struct megasas_instance *instance)
 	instance->max_mfi_cmds = instance->max_fw_cmds;
 	instance->max_num_sge = (instance->instancet->read_fw_status_reg(reg_set) & 0xFF0000) >>
 					0x10;
+	/*
+	 * For MFI skinny adapters, MEGASAS_SKINNY_INT_CMDS commands
+	 * are reserved for IOCTL + driver's internal DCMDs.
+	 */
+	if ((instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0073SKINNY) ||
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0071SKINNY)) {
+		instance->max_scsi_cmds = (instance->max_fw_cmds -
+			MEGASAS_SKINNY_INT_CMDS);
+		sema_init(&instance->ioctl_sem, MEGASAS_SKINNY_INT_CMDS);
+	} else {
+		instance->max_scsi_cmds = (instance->max_fw_cmds -
+			MEGASAS_INT_CMDS);
+		sema_init(&instance->ioctl_sem, (MEGASAS_MFI_IOCTL_CMDS));
+	}
+
 	/*
 	 * Create a pool of commands
 	 */
@@ -4386,6 +4397,107 @@ fail_reply_queue:
 
 fail_alloc_cmds:
 	return 1;
+}
+
+/*
+ * megasas_setup_irqs_msix -		register legacy interrupts.
+ * @instance:				Adapter soft state
+ *
+ * Do not enable interrupt, only setup ISRs.
+ *
+ * Return 0 on success.
+ */
+static int
+megasas_setup_irqs_ioapic(struct megasas_instance *instance)
+{
+	struct pci_dev *pdev;
+
+	pdev = instance->pdev;
+	instance->irq_context[0].instance = instance;
+	instance->irq_context[0].MSIxIndex = 0;
+	if (request_irq(pdev->irq, instance->instancet->service_isr,
+		IRQF_SHARED, "megasas", &instance->irq_context[0])) {
+		dev_err(&instance->pdev->dev,
+				"Failed to register IRQ from %s %d\n",
+				__func__, __LINE__);
+		return -1;
+	}
+	return 0;
+}
+
+/**
+ * megasas_setup_irqs_msix -		register MSI-x interrupts.
+ * @instance:				Adapter soft state
+ * @is_probe:				Driver probe check
+ *
+ * Do not enable interrupt, only setup ISRs.
+ *
+ * Return 0 on success.
+ */
+static int
+megasas_setup_irqs_msix(struct megasas_instance *instance, u8 is_probe)
+{
+	int i, j, cpu;
+	struct pci_dev *pdev;
+
+	pdev = instance->pdev;
+
+	/* Try MSI-x */
+	cpu = cpumask_first(cpu_online_mask);
+	for (i = 0; i < instance->msix_vectors; i++) {
+		instance->irq_context[i].instance = instance;
+		instance->irq_context[i].MSIxIndex = i;
+		if (request_irq(instance->msixentry[i].vector,
+			instance->instancet->service_isr, 0, "megasas",
+			&instance->irq_context[i])) {
+			dev_err(&instance->pdev->dev,
+				"Failed to register IRQ for vector %d.\n", i);
+			for (j = 0; j < i; j++) {
+				if (smp_affinity_enable)
+					irq_set_affinity_hint(
+						instance->msixentry[j].vector, NULL);
+				free_irq(instance->msixentry[j].vector,
+					&instance->irq_context[j]);
+			}
+			/* Retry irq register for IO_APIC*/
+			instance->msix_vectors = 0;
+			if (is_probe)
+				return megasas_setup_irqs_ioapic(instance);
+			else
+				return -1;
+		}
+		if (smp_affinity_enable) {
+			if (irq_set_affinity_hint(instance->msixentry[i].vector,
+				get_cpu_mask(cpu)))
+				dev_err(&instance->pdev->dev,
+					"Failed to set affinity hint"
+					" for cpu %d\n", cpu);
+			cpu = cpumask_next(cpu, cpu_online_mask);
+		}
+	}
+	return 0;
+}
+
+/*
+ * megasas_destroy_irqs-		unregister interrupts.
+ * @instance:				Adapter soft state
+ * return:				void
+ */
+static void
+megasas_destroy_irqs(struct megasas_instance *instance) {
+
+	int i;
+
+	if (instance->msix_vectors)
+		for (i = 0; i < instance->msix_vectors; i++) {
+			if (smp_affinity_enable)
+				irq_set_affinity_hint(
+					instance->msixentry[i].vector, NULL);
+			free_irq(instance->msixentry[i].vector,
+				 &instance->irq_context[i]);
+		}
+	else
+		free_irq(instance->pdev->irq, &instance->irq_context[0]);
 }
 
 /**
@@ -4473,7 +4585,7 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	 * It is used for all MPT based Adapters.
 	 */
 	instance->reply_post_host_index_addr[0] =
-		(u32 *)((u8 *)instance->reg_set +
+		(u32 __iomem *)((u8 __iomem *)instance->reg_set +
 		MPI2_REPLY_POST_HOST_INDEX_OFFSET);
 
 	/* Check if MSI-X is supported while in ready state */
@@ -4505,7 +4617,8 @@ static int megasas_init_fw(struct megasas_instance *instance)
 			 */
 			for (loop = 1; loop < MR_MAX_MSIX_REG_ARRAY; loop++) {
 				instance->reply_post_host_index_addr[loop] =
-					(u32 *)((u8 *)instance->reg_set +
+					(u32 __iomem *)
+					((u8 __iomem *)instance->reg_set +
 					MPI2_SUP_REPLY_POST_HOST_INDEX_OFFSET
 					+ (loop * 0x10));
 			}
@@ -4519,25 +4632,27 @@ static int megasas_init_fw(struct megasas_instance *instance)
 					     (unsigned int)num_online_cpus());
 		for (i = 0; i < instance->msix_vectors; i++)
 			instance->msixentry[i].entry = i;
-		i = pci_enable_msix(instance->pdev, instance->msixentry,
-				    instance->msix_vectors);
-		if (i >= 0) {
-			if (i) {
-				if (!pci_enable_msix(instance->pdev,
-						     instance->msixentry, i))
-					instance->msix_vectors = i;
-				else
-					instance->msix_vectors = 0;
-			}
-		} else
+		i = pci_enable_msix_range(instance->pdev, instance->msixentry,
+					  1, instance->msix_vectors);
+		if (i > 0)
+			instance->msix_vectors = i;
+		else
 			instance->msix_vectors = 0;
-
-		dev_info(&instance->pdev->dev, "[scsi%d]: FW supports"
-			"<%d> MSIX vector,Online CPUs: <%d>,"
-			"Current MSIX <%d>\n", instance->host->host_no,
-			fw_msix_count, (unsigned int)num_online_cpus(),
-			instance->msix_vectors);
 	}
+
+	dev_info(&instance->pdev->dev,
+		"firmware supports msix\t: (%d)", fw_msix_count);
+	dev_info(&instance->pdev->dev,
+		"current msix/online cpus\t: (%d/%d)\n",
+		instance->msix_vectors, (unsigned int)num_online_cpus());
+
+	tasklet_init(&instance->isr_tasklet, instance->instancet->tasklet,
+		(unsigned long)instance);
+
+	if (instance->msix_vectors ?
+		megasas_setup_irqs_msix(instance, 1) :
+		megasas_setup_irqs_ioapic(instance))
+		goto fail_setup_irqs;
 
 	instance->ctrl_info = kzalloc(sizeof(struct megasas_ctrl_info),
 				GFP_KERNEL);
@@ -4554,6 +4669,8 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	if (instance->instancet->init_adapter(instance))
 		goto fail_init_adapter;
 
+	instance->instancet->enable_intr(instance);
+
 	printk(KERN_ERR "megasas: INIT adapter done\n");
 
 	/** for passthrough
@@ -4564,7 +4681,7 @@ static int megasas_init_fw(struct megasas_instance *instance)
 		(MEGASAS_MAX_PD * sizeof(struct megasas_pd_list)));
 	if (megasas_get_pd_list(instance) < 0) {
 		printk(KERN_ERR "megasas: failed to get PD list\n");
-		goto fail_init_adapter;
+		goto fail_get_pd_list;
 	}
 
 	memset(instance->ld_ids, 0xff, MEGASAS_MAX_LD_IDS);
@@ -4590,17 +4707,6 @@ static int megasas_init_fw(struct megasas_instance *instance)
 
 	tmp_sectors = min_t(u32, max_sectors_1 , max_sectors_2);
 
-	/*Check whether controller is iMR or MR */
-	if (ctrl_info->memory_size) {
-		instance->is_imr = 0;
-		dev_info(&instance->pdev->dev, "Controller type: MR,"
-			"Memory size is: %dMB\n",
-			le16_to_cpu(ctrl_info->memory_size));
-	} else {
-		instance->is_imr = 1;
-		dev_info(&instance->pdev->dev,
-			"Controller type: iMR\n");
-	}
 	instance->disableOnlineCtrlReset =
 	ctrl_info->properties.OnOffProperties.disableOnlineCtrlReset;
 	instance->mpio = ctrl_info->adapterOperations2.mpio;
@@ -4608,9 +4714,6 @@ static int megasas_init_fw(struct megasas_instance *instance)
 		ctrl_info->adapterOperations2.supportUnevenSpans;
 	if (instance->UnevenSpanSupport) {
 		struct fusion_context *fusion = instance->ctrl_context;
-
-		dev_info(&instance->pdev->dev, "FW supports: "
-		"UnevenSpanSupport=%x\n", instance->UnevenSpanSupport);
 		if (MR_ValidateMapInfo(instance))
 			fusion->fast_path_io = 1;
 		else
@@ -4618,18 +4721,22 @@ static int megasas_init_fw(struct megasas_instance *instance)
 
 	}
 	if (ctrl_info->host_interface.SRIOV) {
-		if (!ctrl_info->adapterOperations2.activePassive)
-			instance->PlasmaFW111 = 1;
+		instance->requestorId = ctrl_info->iov.requestorId;
+		if (instance->pdev->device == PCI_DEVICE_ID_LSI_PLASMA) {
+			if (!ctrl_info->adapterOperations2.activePassive)
+			    instance->PlasmaFW111 = 1;
 
-		if (!instance->PlasmaFW111)
-			instance->requestorId =
-				ctrl_info->iov.requestorId;
-		else {
-			iovPtr = (struct IOV_111 *)((unsigned char *)ctrl_info + IOV_111_OFFSET);
-			instance->requestorId = iovPtr->requestorId;
+			dev_info(&instance->pdev->dev, "SR-IOV: firmware type: %s\n",
+			    instance->PlasmaFW111 ? "1.11" : "new");
+
+			if (instance->PlasmaFW111) {
+			    iovPtr = (struct IOV_111 *)
+				((unsigned char *)ctrl_info + IOV_111_OFFSET);
+			    instance->requestorId = iovPtr->requestorId;
+			}
 		}
-		dev_warn(&instance->pdev->dev, "I am VF "
-		       "requestorId %d\n", instance->requestorId);
+		dev_info(&instance->pdev->dev, "SRIOV: VF requestorId %d\n",
+			instance->requestorId);
 	}
 
 	instance->crash_dump_fw_support =
@@ -4637,13 +4744,11 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	instance->crash_dump_drv_support =
 		(instance->crash_dump_fw_support &&
 		instance->crash_dump_buf);
-	if (instance->crash_dump_drv_support) {
-		dev_info(&instance->pdev->dev, "Firmware Crash dump "
-			"feature is supported\n");
+	if (instance->crash_dump_drv_support)
 		megasas_set_crash_dump_params(instance,
 			MR_CRASH_BUF_TURN_OFF);
 
-	} else {
+	else {
 		if (instance->crash_dump_buf)
 			pci_free_consistent(instance->pdev,
 				CRASH_DMA_BUF_SIZE,
@@ -4651,34 +4756,39 @@ static int megasas_init_fw(struct megasas_instance *instance)
 				instance->crash_dump_h);
 		instance->crash_dump_buf = NULL;
 	}
+
+	instance->secure_jbod_support =
+		ctrl_info->adapterOperations3.supportSecurityonJBOD;
+
+	dev_info(&instance->pdev->dev,
+		"pci id\t\t: (0x%04x)/(0x%04x)/(0x%04x)/(0x%04x)\n",
+		le16_to_cpu(ctrl_info->pci.vendor_id),
+		le16_to_cpu(ctrl_info->pci.device_id),
+		le16_to_cpu(ctrl_info->pci.sub_vendor_id),
+		le16_to_cpu(ctrl_info->pci.sub_device_id));
+	dev_info(&instance->pdev->dev, "unevenspan support	: %s\n",
+		instance->UnevenSpanSupport ? "yes" : "no");
+	dev_info(&instance->pdev->dev, "disable ocr		: %s\n",
+		instance->disableOnlineCtrlReset ? "yes" : "no");
+	dev_info(&instance->pdev->dev, "firmware crash dump	: %s\n",
+		instance->crash_dump_drv_support ? "yes" : "no");
+	dev_info(&instance->pdev->dev, "secure jbod		: %s\n",
+		instance->secure_jbod_support ? "yes" : "no");
+
+
 	instance->max_sectors_per_req = instance->max_num_sge *
 						PAGE_SIZE / 512;
 	if (tmp_sectors && (instance->max_sectors_per_req > tmp_sectors))
 		instance->max_sectors_per_req = tmp_sectors;
 
 	/* Check for valid throttlequeuedepth module parameter */
-	if (instance->is_imr) {
-		if (throttlequeuedepth > (instance->max_fw_cmds -
-					  MEGASAS_SKINNY_INT_CMDS))
-			instance->throttlequeuedepth =
+	if (throttlequeuedepth &&
+			throttlequeuedepth <= instance->max_scsi_cmds)
+		instance->throttlequeuedepth = throttlequeuedepth;
+	else
+		instance->throttlequeuedepth =
 				MEGASAS_THROTTLE_QUEUE_DEPTH;
-		else
-			instance->throttlequeuedepth = throttlequeuedepth;
-	} else {
-		if (throttlequeuedepth > (instance->max_fw_cmds -
-					  MEGASAS_INT_CMDS))
-			instance->throttlequeuedepth =
-				MEGASAS_THROTTLE_QUEUE_DEPTH;
-		else
-			instance->throttlequeuedepth = throttlequeuedepth;
-	}
 
-        /*
-	* Setup tasklet for cmd completion
-	*/
-
-	tasklet_init(&instance->isr_tasklet, instance->instancet->tasklet,
-		(unsigned long)instance);
 
 	/* Launch SR-IOV heartbeat timer */
 	if (instance->requestorId) {
@@ -4693,7 +4803,14 @@ static int megasas_init_fw(struct megasas_instance *instance)
 
 	return 0;
 
+fail_get_pd_list:
+	instance->instancet->disable_intr(instance);
 fail_init_adapter:
+	megasas_destroy_irqs(instance);
+fail_setup_irqs:
+	if (instance->msix_vectors)
+		pci_disable_msix(instance->pdev);
+	instance->msix_vectors = 0;
 fail_ready_state:
 	kfree(instance->ctrl_info);
 	instance->ctrl_info = NULL;
@@ -4782,21 +4899,17 @@ megasas_get_seq_num(struct megasas_instance *instance,
 		/*
 		 * Copy the data back into callers buffer
 		 */
-		eli->newest_seq_num = le32_to_cpu(el_info->newest_seq_num);
-		eli->oldest_seq_num = le32_to_cpu(el_info->oldest_seq_num);
-		eli->clear_seq_num = le32_to_cpu(el_info->clear_seq_num);
-		eli->shutdown_seq_num = le32_to_cpu(el_info->shutdown_seq_num);
-		eli->boot_seq_num = le32_to_cpu(el_info->boot_seq_num);
+		eli->newest_seq_num = el_info->newest_seq_num;
+		eli->oldest_seq_num = el_info->oldest_seq_num;
+		eli->clear_seq_num = el_info->clear_seq_num;
+		eli->shutdown_seq_num = el_info->shutdown_seq_num;
+		eli->boot_seq_num = el_info->boot_seq_num;
 	}
 
 	pci_free_consistent(instance->pdev, sizeof(struct megasas_evt_log_info),
 			    el_info, el_info_h);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return 0;
 }
@@ -4837,8 +4950,8 @@ megasas_register_aen(struct megasas_instance *instance, u32 seq_num,
 
 	if (instance->aen_cmd) {
 
-		prev_aen.word = instance->aen_cmd->frame->dcmd.mbox.w[1];
-		prev_aen.members.locale = le16_to_cpu(prev_aen.members.locale);
+		prev_aen.word =
+			le32_to_cpu(instance->aen_cmd->frame->dcmd.mbox.w[1]);
 
 		/*
 		 * A class whose enum value is smaller is inclusive of all
@@ -4950,7 +5063,7 @@ static int megasas_start_aen(struct megasas_instance *instance)
 	class_locale.members.class = MR_EVT_CLASS_DEBUG;
 
 	return megasas_register_aen(instance,
-			eli.newest_seq_num + 1,
+			le32_to_cpu(eli.newest_seq_num) + 1,
 			class_locale.word);
 }
 
@@ -4961,18 +5074,14 @@ static int megasas_start_aen(struct megasas_instance *instance)
 static int megasas_io_attach(struct megasas_instance *instance)
 {
 	struct Scsi_Host *host = instance->host;
+	u32		error;
 
 	/*
 	 * Export parameters required by SCSI mid-layer
 	 */
 	host->irq = instance->pdev->irq;
 	host->unique_id = instance->unique_id;
-	if (instance->is_imr) {
-		host->can_queue =
-			instance->max_fw_cmds - MEGASAS_SKINNY_INT_CMDS;
-	} else
-		host->can_queue =
-			instance->max_fw_cmds - MEGASAS_INT_CMDS;
+	host->can_queue = instance->max_scsi_cmds;
 	host->this_id = instance->init_id;
 	host->sg_tablesize = instance->max_num_sge;
 
@@ -5015,12 +5124,21 @@ static int megasas_io_attach(struct megasas_instance *instance)
 		host->hostt->eh_device_reset_handler = NULL;
 		host->hostt->eh_bus_reset_handler = NULL;
 	}
+	error = scsi_init_shared_tag_map(host, host->can_queue);
+	if (error) {
+		dev_err(&instance->pdev->dev,
+			"Failed to shared tag from %s %d\n",
+			__func__, __LINE__);
+		return -ENODEV;
+	}
 
 	/*
 	 * Notify the mid-layer about the new controller
 	 */
 	if (scsi_add_host(host, &instance->pdev->dev)) {
-		printk(KERN_DEBUG "megasas: scsi_add_host failed\n");
+		dev_err(&instance->pdev->dev,
+			"Failed to add host from %s %d\n",
+			__func__, __LINE__);
 		return -ENODEV;
 	}
 
@@ -5071,7 +5189,7 @@ fail_set_dma_mask:
 static int megasas_probe_one(struct pci_dev *pdev,
 			     const struct pci_device_id *id)
 {
-	int rval, pos, i, j, cpu;
+	int rval, pos;
 	struct Scsi_Host *host;
 	struct megasas_instance *instance;
 	u16 control = 0;
@@ -5092,16 +5210,6 @@ static int megasas_probe_one(struct pci_dev *pdev,
 			}
 		}
 	}
-
-	/*
-	 * Announce PCI information
-	 */
-	printk(KERN_INFO "megasas: %#4.04x:%#4.04x:%#4.04x:%#4.04x: ",
-	       pdev->vendor, pdev->device, pdev->subsystem_vendor,
-	       pdev->subsystem_device);
-
-	printk("bus %d:slot %d:func %d\n",
-	       pdev->bus->number, PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 
 	/*
 	 * PCI prepping: enable device set bus mastering and dma mask
@@ -5148,10 +5256,6 @@ static int megasas_probe_one(struct pci_dev *pdev,
 		fusion = instance->ctrl_context;
 		memset(fusion, 0,
 			((1 << PAGE_SHIFT) << instance->ctrl_context_pages));
-		INIT_LIST_HEAD(&fusion->cmd_pool);
-		spin_lock_init(&fusion->mpt_pool_lock);
-		memset(fusion->load_balance_info, 0,
-			sizeof(struct LD_LOAD_BALANCE_INFO) * MAX_LOGICAL_DRIVES_EXT);
 	}
 	break;
 	default: /* For all other supported controllers */
@@ -5173,6 +5277,13 @@ static int megasas_probe_one(struct pci_dev *pdev,
 		*instance->consumer = 0;
 		break;
 	}
+
+	instance->system_info_buf = pci_zalloc_consistent(pdev,
+					sizeof(struct MR_DRV_SYSTEM_INFO),
+					&instance->system_info_h);
+
+	if (!instance->system_info_buf)
+		dev_info(&instance->pdev->dev, "Can't allocate system info buffer\n");
 
 	/* Crash dump feature related initialisation*/
 	instance->drv_buf_index = 0;
@@ -5235,12 +5346,10 @@ static int megasas_probe_one(struct pci_dev *pdev,
 	instance->init_id = MEGASAS_DEFAULT_INIT_ID;
 	instance->ctrl_info = NULL;
 
+
 	if ((instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0073SKINNY) ||
-		(instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0071SKINNY)) {
+		(instance->pdev->device == PCI_DEVICE_ID_LSI_SAS0071SKINNY))
 		instance->flag_ieee = 1;
-		sema_init(&instance->ioctl_sem, MEGASAS_SKINNY_INT_CMDS);
-	} else
-		sema_init(&instance->ioctl_sem, (MEGASAS_INT_CMDS - 5));
 
 	megasas_dbg_lvl = 0;
 	instance->flag = 0;
@@ -5283,55 +5392,6 @@ static int megasas_probe_one(struct pci_dev *pdev,
 				       "memory for VF affiliation buffer\n");
 		}
 	}
-
-retry_irq_register:
-	/*
-	 * Register IRQ
-	 */
-	if (instance->msix_vectors) {
-		cpu = cpumask_first(cpu_online_mask);
-		for (i = 0; i < instance->msix_vectors; i++) {
-			instance->irq_context[i].instance = instance;
-			instance->irq_context[i].MSIxIndex = i;
-			if (request_irq(instance->msixentry[i].vector,
-					instance->instancet->service_isr, 0,
-					"megasas",
-					&instance->irq_context[i])) {
-				printk(KERN_DEBUG "megasas: Failed to "
-				       "register IRQ for vector %d.\n", i);
-				for (j = 0; j < i; j++) {
-					if (smp_affinity_enable)
-						irq_set_affinity_hint(
-							instance->msixentry[j].vector, NULL);
-					free_irq(
-						instance->msixentry[j].vector,
-						&instance->irq_context[j]);
-				}
-				/* Retry irq register for IO_APIC */
-				instance->msix_vectors = 0;
-				goto retry_irq_register;
-			}
-			if (smp_affinity_enable) {
-				if (irq_set_affinity_hint(instance->msixentry[i].vector,
-					get_cpu_mask(cpu)))
-					dev_err(&instance->pdev->dev,
-						"Error setting affinity hint "
-						"for cpu %d\n", cpu);
-				cpu = cpumask_next(cpu, cpu_online_mask);
-			}
-		}
-	} else {
-		instance->irq_context[0].instance = instance;
-		instance->irq_context[0].MSIxIndex = 0;
-		if (request_irq(pdev->irq, instance->instancet->service_isr,
-				IRQF_SHARED, "megasas",
-				&instance->irq_context[0])) {
-			printk(KERN_DEBUG "megasas: Failed to register IRQ\n");
-			goto fail_irq;
-		}
-	}
-
-	instance->instancet->enable_intr(instance);
 
 	/*
 	 * Store instance in PCI softstate
@@ -5378,19 +5438,9 @@ retry_irq_register:
 	megasas_mgmt_info.instance[megasas_mgmt_info.max_index] = NULL;
 	megasas_mgmt_info.max_index--;
 
-	pci_set_drvdata(pdev, NULL);
 	instance->instancet->disable_intr(instance);
-	if (instance->msix_vectors)
-		for (i = 0; i < instance->msix_vectors; i++) {
-			if (smp_affinity_enable)
-				irq_set_affinity_hint(
-					instance->msixentry[i].vector, NULL);
-			free_irq(instance->msixentry[i].vector,
-				 &instance->irq_context[i]);
-		}
-	else
-		free_irq(instance->pdev->irq, &instance->irq_context[0]);
-fail_irq:
+	megasas_destroy_irqs(instance);
+
 	if ((instance->pdev->device == PCI_DEVICE_ID_LSI_FUSION) ||
 	    (instance->pdev->device == PCI_DEVICE_ID_LSI_PLASMA) ||
 	    (instance->pdev->device == PCI_DEVICE_ID_LSI_INVADER) ||
@@ -5398,9 +5448,9 @@ fail_irq:
 		megasas_release_fusion(instance);
 	else
 		megasas_release_mfi(instance);
-      fail_init_mfi:
 	if (instance->msix_vectors)
 		pci_disable_msix(instance->pdev);
+fail_init_mfi:
       fail_alloc_dma_buf:
 	if (instance->evt_detail)
 		pci_free_consistent(pdev, sizeof(struct megasas_evt_detail),
@@ -5457,11 +5507,7 @@ static void megasas_flush_cache(struct megasas_instance *instance)
 		dev_err(&instance->pdev->dev, "Command timedout"
 			" from %s\n", __func__);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return;
 }
@@ -5508,11 +5554,7 @@ static void megasas_shutdown_controller(struct megasas_instance *instance,
 		dev_err(&instance->pdev->dev, "Command timedout"
 			"from %s\n", __func__);
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 
 	return;
 }
@@ -5528,7 +5570,6 @@ megasas_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct Scsi_Host *host;
 	struct megasas_instance *instance;
-	int i;
 
 	instance = pci_get_drvdata(pdev);
 	host = instance->host;
@@ -5553,16 +5594,8 @@ megasas_suspend(struct pci_dev *pdev, pm_message_t state)
 	pci_set_drvdata(instance->pdev, instance);
 	instance->instancet->disable_intr(instance);
 
-	if (instance->msix_vectors)
-		for (i = 0; i < instance->msix_vectors; i++) {
-			if (smp_affinity_enable)
-				irq_set_affinity_hint(
-					instance->msixentry[i].vector, NULL);
-			free_irq(instance->msixentry[i].vector,
-				 &instance->irq_context[i]);
-		}
-	else
-		free_irq(instance->pdev->irq, &instance->irq_context[0]);
+	megasas_destroy_irqs(instance);
+
 	if (instance->msix_vectors)
 		pci_disable_msix(instance->pdev);
 
@@ -5581,7 +5614,7 @@ megasas_suspend(struct pci_dev *pdev, pm_message_t state)
 static int
 megasas_resume(struct pci_dev *pdev)
 {
-	int rval, i, j, cpu;
+	int rval;
 	struct Scsi_Host *host;
 	struct megasas_instance *instance;
 
@@ -5620,8 +5653,8 @@ megasas_resume(struct pci_dev *pdev)
 
 	/* Now re-enable MSI-X */
 	if (instance->msix_vectors &&
-	    pci_enable_msix(instance->pdev, instance->msixentry,
-			    instance->msix_vectors))
+	    pci_enable_msix_exact(instance->pdev, instance->msixentry,
+				  instance->msix_vectors))
 		goto fail_reenable_msix;
 
 	switch (instance->pdev->device) {
@@ -5651,50 +5684,10 @@ megasas_resume(struct pci_dev *pdev)
 	tasklet_init(&instance->isr_tasklet, instance->instancet->tasklet,
 		     (unsigned long)instance);
 
-	/*
-	 * Register IRQ
-	 */
-	if (instance->msix_vectors) {
-		cpu = cpumask_first(cpu_online_mask);
-		for (i = 0 ; i < instance->msix_vectors; i++) {
-			instance->irq_context[i].instance = instance;
-			instance->irq_context[i].MSIxIndex = i;
-			if (request_irq(instance->msixentry[i].vector,
-					instance->instancet->service_isr, 0,
-					"megasas",
-					&instance->irq_context[i])) {
-				printk(KERN_DEBUG "megasas: Failed to "
-				       "register IRQ for vector %d.\n", i);
-				for (j = 0; j < i; j++) {
-					if (smp_affinity_enable)
-						irq_set_affinity_hint(
-							instance->msixentry[j].vector, NULL);
-					free_irq(
-						instance->msixentry[j].vector,
-						&instance->irq_context[j]);
-				}
-				goto fail_irq;
-			}
-
-			if (smp_affinity_enable) {
-				if (irq_set_affinity_hint(instance->msixentry[i].vector,
-					get_cpu_mask(cpu)))
-					dev_err(&instance->pdev->dev, "Error "
-						"setting affinity hint for cpu "
-						"%d\n", cpu);
-				cpu = cpumask_next(cpu, cpu_online_mask);
-			}
-		}
-	} else {
-		instance->irq_context[0].instance = instance;
-		instance->irq_context[0].MSIxIndex = 0;
-		if (request_irq(pdev->irq, instance->instancet->service_isr,
-				IRQF_SHARED, "megasas",
-				&instance->irq_context[0])) {
-			printk(KERN_DEBUG "megasas: Failed to register IRQ\n");
-			goto fail_irq;
-		}
-	}
+	if (instance->msix_vectors ?
+			megasas_setup_irqs_msix(instance, 0) :
+			megasas_setup_irqs_ioapic(instance))
+		goto fail_init_mfi;
 
 	/* Re-launch SR-IOV heartbeat timer */
 	if (instance->requestorId) {
@@ -5703,8 +5696,10 @@ megasas_resume(struct pci_dev *pdev)
 					    &instance->sriov_heartbeat_timer,
 					    megasas_sriov_heartbeat_handler,
 					    MEGASAS_SRIOV_HEARTBEAT_INTERVAL_VF);
-		else
+		else {
 			instance->skip_heartbeat_timer_del = 1;
+			goto fail_init_mfi;
+		}
 	}
 
 	instance->instancet->enable_intr(instance);
@@ -5718,7 +5713,6 @@ megasas_resume(struct pci_dev *pdev)
 
 	return 0;
 
-fail_irq:
 fail_init_mfi:
 	if (instance->evt_detail)
 		pci_free_consistent(pdev, sizeof(struct megasas_evt_detail),
@@ -5797,20 +5791,10 @@ static void megasas_detach_one(struct pci_dev *pdev)
 		}
 	}
 
-	pci_set_drvdata(instance->pdev, NULL);
-
 	instance->instancet->disable_intr(instance);
 
-	if (instance->msix_vectors)
-		for (i = 0; i < instance->msix_vectors; i++) {
-			if (smp_affinity_enable)
-				irq_set_affinity_hint(
-					instance->msixentry[i].vector, NULL);
-			free_irq(instance->msixentry[i].vector,
-				 &instance->irq_context[i]);
-		}
-	else
-		free_irq(instance->pdev->irq, &instance->irq_context[0]);
+	megasas_destroy_irqs(instance);
+
 	if (instance->msix_vectors)
 		pci_disable_msix(instance->pdev);
 
@@ -5871,9 +5855,11 @@ static void megasas_detach_one(struct pci_dev *pdev)
 		pci_free_consistent(pdev, CRASH_DMA_BUF_SIZE,
 			    instance->crash_dump_buf, instance->crash_dump_h);
 
-	scsi_host_put(host);
+	if (instance->system_info_buf)
+		pci_free_consistent(pdev, sizeof(struct MR_DRV_SYSTEM_INFO),
+				    instance->system_info_buf, instance->system_info_h);
 
-	pci_set_drvdata(pdev, NULL);
+	scsi_host_put(host);
 
 	pci_disable_device(pdev);
 
@@ -5886,23 +5872,14 @@ static void megasas_detach_one(struct pci_dev *pdev)
  */
 static void megasas_shutdown(struct pci_dev *pdev)
 {
-	int i;
 	struct megasas_instance *instance = pci_get_drvdata(pdev);
 
 	instance->unload = 1;
 	megasas_flush_cache(instance);
 	megasas_shutdown_controller(instance, MR_DCMD_CTRL_SHUTDOWN);
 	instance->instancet->disable_intr(instance);
-	if (instance->msix_vectors)
-		for (i = 0; i < instance->msix_vectors; i++) {
-			if (smp_affinity_enable)
-				irq_set_affinity_hint(
-					instance->msixentry[i].vector, NULL);
-			free_irq(instance->msixentry[i].vector,
-				 &instance->irq_context[i]);
-		}
-	else
-		free_irq(instance->pdev->irq, &instance->irq_context[0]);
+	megasas_destroy_irqs(instance);
+
 	if (instance->msix_vectors)
 		pci_disable_msix(instance->pdev);
 }
@@ -6185,11 +6162,7 @@ megasas_mgmt_fw_ioctl(struct megasas_instance *instance,
 			kbuff_arr[i] = NULL;
 	}
 
-	if (instance->ctrl_context && cmd->mpt_pthr_cmd_blocked)
-		megasas_return_mfi_mpt_pthr(instance, cmd,
-			cmd->mpt_pthr_cmd_blocked);
-	else
-		megasas_return_cmd(instance, cmd);
+	megasas_return_cmd(instance, cmd);
 	return error;
 }
 
@@ -6240,9 +6213,6 @@ static int megasas_mgmt_ioctl_fw(struct file *file, unsigned long arg)
 		goto out_kfree_ioc;
 	}
 
-	/*
-	 * We will allow only MEGASAS_INT_CMDS number of parallel ioctl cmds
-	 */
 	if (down_interruptible(&instance->ioctl_sem)) {
 		error = -ERESTARTSYS;
 		goto out_kfree_ioc;
@@ -6629,8 +6599,7 @@ megasas_aen_polling(struct work_struct *work)
 		case MR_EVT_CFG_CLEARED:
 		case MR_EVT_LD_DELETED:
 			if (!instance->requestorId ||
-			    (instance->requestorId &&
-			     megasas_get_ld_vf_affiliation(instance, 0))) {
+			    megasas_get_ld_vf_affiliation(instance, 0)) {
 				if (megasas_ld_list_query(instance,
 							  MR_LD_QUERY_TYPE_EXPOSED_TO_HOST))
 					megasas_get_ld_list(instance);
@@ -6661,8 +6630,7 @@ megasas_aen_polling(struct work_struct *work)
 			break;
 		case MR_EVT_LD_CREATED:
 			if (!instance->requestorId ||
-			    (instance->requestorId &&
-			     megasas_get_ld_vf_affiliation(instance, 0))) {
+			    megasas_get_ld_vf_affiliation(instance, 0)) {
 				if (megasas_ld_list_query(instance,
 							  MR_LD_QUERY_TYPE_EXPOSED_TO_HOST))
 					megasas_get_ld_list(instance);
@@ -6728,8 +6696,7 @@ megasas_aen_polling(struct work_struct *work)
 		}
 
 		if (!instance->requestorId ||
-		    (instance->requestorId &&
-		     megasas_get_ld_vf_affiliation(instance, 0))) {
+		    megasas_get_ld_vf_affiliation(instance, 0)) {
 			if (megasas_ld_list_query(instance,
 						  MR_LD_QUERY_TYPE_EXPOSED_TO_HOST))
 				megasas_get_ld_list(instance);
@@ -6817,7 +6784,7 @@ static int __init megasas_init(void)
 	rval = pci_register_driver(&megasas_pci_driver);
 
 	if (rval) {
-		printk(KERN_DEBUG "megasas: PCI hotplug regisration failed \n");
+		printk(KERN_DEBUG "megasas: PCI hotplug registration failed \n");
 		goto err_pcidrv;
 	}
 
