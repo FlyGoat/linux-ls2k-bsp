@@ -14,6 +14,7 @@
 #include <linux/mutex.h>
 #include <linux/mm.h>
 #include <linux/uaccess.h>
+#include <linux/delay.h>
 #include <asm/synch.h>
 #include <misc/cxl.h>
 
@@ -702,3 +703,33 @@ int cxl_check_error(struct cxl_afu *afu)
 {
 	return (cxl_p1n_read(afu, CXL_PSL_SCNTL_An) == ~0ULL);
 }
+
+void native_irq_wait(struct cxl_context *ctx)
+{
+	u64 dsisr;
+	int timeout = 1000;
+	int ph;
+
+	/*
+	 * Wait until no further interrupts are presented by the PSL
+	 * for this context.
+	 */
+	while (timeout--) {
+		ph = cxl_p2n_read(ctx->afu, CXL_PSL_PEHandle_An) & 0xffff;
+		if (ph != ctx->pe)
+			return;
+		dsisr = cxl_p2n_read(ctx->afu, CXL_PSL_DSISR_An);
+		if ((dsisr & CXL_PSL_DSISR_PENDING) == 0)
+			return;
+		/*
+		 * We are waiting for the workqueue to process our
+		 * irq, so need to let that run here.
+		 */
+		msleep(1);
+	}
+
+	dev_warn(&ctx->afu->dev, "WARNING: waiting on DSI for PE %i"
+		 " DSISR %016llx!\n", ph, dsisr);
+	return;
+}
+

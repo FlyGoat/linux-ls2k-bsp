@@ -188,6 +188,13 @@ static void __detach_context(struct cxl_context *ctx)
 	WARN_ON(cxl_detach_process(ctx));
 	afu_release_irqs(ctx);
 	flush_work(&ctx->fault_work); /* Only needed for dedicated process */
+
+	/*
+	 * Wait until no further interrupts are presented by the PSL
+	 * for this context.
+	 */
+	native_irq_wait(ctx);
+
 	wake_up_all(&ctx->wq);
 }
 
