@@ -64,6 +64,7 @@ static struct insn insn_table_MM[] __uasminitdata = {
 	{ insn_cache, M(mm_pool32b_op, 0, 0, mm_cache_func, 0, 0), RT | RS | SIMM },
 	{ insn_daddu, 0, 0 },
 	{ insn_daddiu, 0, 0 },
+	{ insn_di, M(mm_pool32a_op, 0, 0, 0, mm_di_op, mm_pool32axf_op), RS },
 	{ insn_dmfc0, 0, 0 },
 	{ insn_dmtc0, 0, 0 },
 	{ insn_dsll, 0, 0 },

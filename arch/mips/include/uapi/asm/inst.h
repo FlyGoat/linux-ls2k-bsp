@@ -114,8 +114,8 @@ enum cop_op {
 	mfc_op	      = 0x00, dmfc_op	    = 0x01,
 	cfc_op	      = 0x02, mtc_op	    = 0x04,
 	dmtc_op	      = 0x05, ctc_op	    = 0x06,
-	bc_op	      = 0x08, cop_op	    = 0x10,
-	copm_op	      = 0x18
+	bc_op	      = 0x08, mfmc0_op      = 0x0b,
+	cop_op	      = 0x10, copm_op	    = 0x18
 };
 
 /*
@@ -315,6 +315,7 @@ enum mm_32axf_minor_op {
 	mm_jalrhb_op = 0x07c,
 	mm_tlbwi_op = 0x08d,
 	mm_tlbwr_op = 0x0cd,
+	mm_di_op = 0x11d,
 	mm_jalrs_op = 0x13c,
 	mm_jalrshb_op = 0x17c,
 	mm_syscall_op = 0x22d,
