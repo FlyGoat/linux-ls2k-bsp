@@ -425,6 +425,7 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 {
 	union mips_instruction insn;
 	unsigned long value;
+	unsigned long value1;
 	unsigned int res;
 	unsigned long origpc;
 	unsigned long orig31;
@@ -669,12 +670,14 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 			BUG_ON(!used_math());
 			if (!access_ok(VERIFY_READ, addr, 4))
 				goto sigbus;
+			lose_fpu(1);
 
 			LoadW(addr, value, res);
 			if (res)
 				goto fault;
-			compute_return_epc(regs);
 			current->thread.fpu.fpr[insn.loongson3_lsdc2_format.rt] = value;
+			compute_return_epc(regs);
+			own_fpu(1);
 			break;
 
 		case 0x7:
@@ -682,12 +685,14 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 			BUG_ON(!used_math());
 			if (!access_ok(VERIFY_READ, addr, 8))
 				goto sigbus;
+			lose_fpu(1);
 
 			LoadDW(addr, value, res);
 			if (res)
 				goto fault;
-			compute_return_epc(regs);
 			current->thread.fpu.fpr[insn.loongson3_lsdc2_format.rt] = value;
+			compute_return_epc(regs);
+			own_fpu(1);
 			break;
 
 		}
@@ -748,13 +753,15 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 			if (!access_ok(VERIFY_WRITE, addr, 4))
 				goto sigbus;
 
-			compute_return_epc(regs);
+			lose_fpu(1);
 			value = current->thread.fpu.fpr[insn.loongson3_lsdc2_format.rt];
 
 			StoreW(addr, value, res);
 
 			if (res)
 				goto fault;
+			compute_return_epc(regs);
+			own_fpu(1);
 			break;
 
 
@@ -764,17 +771,98 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 
 			if (!access_ok(VERIFY_WRITE, addr, 8))
 				goto sigbus;
+			lose_fpu(1);
 
-			compute_return_epc(regs);
 			value = current->thread.fpu.fpr[insn.loongson3_lsdc2_format.rt];
 
 			StoreDW(addr, value, res);
 
 			if (res)
 				goto fault;
+			compute_return_epc(regs);
+			own_fpu(1);
 			break;
 
 
+		}
+		break;
+	case swc2_op:
+		if(insn.loongson3_lswc2_format.ls == 0)
+			goto sigbus;
+
+		/* gssq */
+		if (insn.loongson3_lswc2_format.fr == 0) {
+			if (!access_ok(VERIFY_WRITE, addr, 16))
+				goto sigbus;
+			/* write upper 8 bypte first */
+			value1 = regs->regs[insn.loongson3_lswc2_format.rq];
+
+			StoreDW(addr + 8, value1, res);
+			if (res)
+				goto fault;
+			value = regs->regs[insn.loongson3_lswc2_format.rt];
+ 
+			StoreDW(addr, value, res);
+			if (res)
+				goto fault;
+			compute_return_epc(regs);
+
+		/* gssqc1 */
+		} else {
+			if (!access_ok(VERIFY_WRITE, addr, 16))
+				goto sigbus;
+
+			lose_fpu(1);
+			value1 = current->thread.fpu.fpr[insn.loongson3_lswc2_format.rq];
+
+			StoreDW(addr + 8, value1, res);
+			if (res)
+				goto fault;
+			value = current->thread.fpu.fpr[insn.loongson3_lswc2_format.rt];
+
+			StoreDW(addr, value, res);
+			if (res)
+				goto fault;
+			compute_return_epc(regs);
+			own_fpu(1);
+		}
+		break;
+	case lwc2_op:
+		if(insn.loongson3_lswc2_format.ls == 0)
+			goto sigbus;
+		/* gslq */
+		if (insn.loongson3_lswc2_format.fr == 0) {
+			if (!access_ok(VERIFY_READ, addr, 16))
+				goto sigbus;
+
+			LoadDW(addr, value, res);
+			if (res)
+				goto fault;
+
+			LoadDW(addr + 8, value1, res);
+			if (res)
+				goto fault;
+			regs->regs[insn.loongson3_lswc2_format.rt] = value;
+			regs->regs[insn.loongson3_lswc2_format.rq] = value1;
+			compute_return_epc(regs);
+
+		/* gslqc1 */
+		} else {
+			if (!access_ok(VERIFY_READ, addr, 16))
+				goto sigbus;
+
+			lose_fpu(1);
+			LoadDW(addr, value, res);
+			if (res)
+				goto fault;
+			LoadDW(addr+8, value1, res);
+			if (res)
+				goto fault;
+
+			current->thread.fpu.fpr[insn.loongson3_lswc2_format.rt] = value;
+			current->thread.fpu.fpr[insn.loongson3_lswc2_format.rq] = value1;
+			compute_return_epc(regs);
+			own_fpu(1);
 		}
 		break;
 #else
