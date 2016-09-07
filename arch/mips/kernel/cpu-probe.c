@@ -1240,6 +1240,33 @@ __cpuinit void cpu_probe(void)
 #endif
 }
 
+#define MAX_NAME_LEN 48
+static char cpu_full_name[MAX_NAME_LEN];
+
+static int __init set_cpu_fullname(char *s)
+{
+	strncpy(cpu_full_name, s, MAX_NAME_LEN-1);
+
+	return 1;
+}
+
+__setup("cpuname=", set_cpu_fullname);
+
+static int __init overwrite_cpu_fullname(void)
+{
+	int cpu;
+
+	if (cpu_full_name[0] == 0)
+		return 0;
+
+	for(cpu = 0; cpu < NR_CPUS; cpu++)
+		__cpu_full_name[cpu] = cpu_full_name;
+
+	return 0;
+}
+
+core_initcall(overwrite_cpu_fullname);
+
 __cpuinit void cpu_report(void)
 {
 	struct cpuinfo_mips *c = &current_cpu_data;
