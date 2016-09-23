@@ -4,7 +4,11 @@
 
 # Use the BUS_INTERFACE variable to compile the software for either
 # PCI(PCI_INTERFACE) or LM(LM_INTERFACE) bus.
+ifdef CONFIG_MACH_LOONGSON2K
+BUS_INTERFACE	= -DPCI_INTERFACE
+else
 BUS_INTERFACE	= -DLM_INTERFACE
+endif
 
 PORTLIB		:= drivers/usb/gadget/dwc/dwc_common_port
 
@@ -14,10 +18,8 @@ endif
 
 # Use one of the following flags to compile the software in host-only or
 # device-only mode.
-
-ifdef CONFIG_DWC_HOST_MODE
-EXTRA_CFLAGS        += -DDWC_HOST_ONLY
-else
+#EXTRA_CFLAGS        += -DDWC_HOST_ONLY
+ifndef CONFIG_DWC_HOST_MODE
 EXTRA_CFLAGS        += -DDWC_DEVICE_ONLY
 endif
 

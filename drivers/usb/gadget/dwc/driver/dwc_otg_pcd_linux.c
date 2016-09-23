@@ -637,7 +637,7 @@ static int get_frame_number(struct usb_gadget *gadget)
 	return dwc_otg_pcd_get_frame_number(d->pcd);
 }
 
-#ifdef CONFIG_USB_DWC_OTG_LPM
+#if 0//def CONFIG_USB_DWC_OTG_LPM
 static int test_lpm_enabled(struct usb_gadget *gadget)
 {
 	struct gadget_wrapper *d;
@@ -673,7 +673,7 @@ static const struct usb_gadget_ops dwc_otg_pcd_ops = {
 	.get_frame = get_frame_number,
 	.wakeup = wakeup,
 #ifdef CONFIG_USB_DWC_OTG_LPM
-	.lpm_support = test_lpm_enabled,
+	//.lpm_support = test_lpm_enabled,
 #endif
 	// current versions must always be self-powered
 };
@@ -1124,7 +1124,7 @@ static struct gadget_wrapper *alloc_wrapper(
 	d->gadget.dev.parent = &_dev->dev;
 	d->gadget.dev.release = dwc_otg_pcd_gadget_release;
 	d->gadget.ops = &dwc_otg_pcd_ops;
-	d->gadget.is_dualspeed = dwc_otg_pcd_is_dualspeed(otg_dev->pcd);
+	//d->gadget.is_dualspeed = dwc_otg_pcd_is_dualspeed(otg_dev->pcd);
 	d->gadget.is_otg = dwc_otg_pcd_is_otg(otg_dev->pcd);
 
 	d->driver = 0;
@@ -1203,6 +1203,7 @@ int pcd_init(
 
 	dwc_otg_pcd_start(gadget_wrapper->pcd, &fops);
 
+	retval = usb_add_gadget_udc(&_dev->dev, &gadget_wrapper->gadget);
 	return retval;
 }
 
@@ -1235,6 +1236,7 @@ void pcd_remove(
 	otg_dev->pcd = 0;
 }
 
+#if 0
 /**
  * This function registers a gadget driver with the PCD.
  *
@@ -1252,7 +1254,7 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	DWC_DEBUGPL(DBG_PCD, "registering gadget driver '%s'\n",
 		    driver->driver.name);
 
-	if (!driver || driver->speed == USB_SPEED_UNKNOWN ||
+	if (!driver ||
 	    !driver->bind ||
 	    !driver->unbind || !driver->disconnect || !driver->setup) {
 		DWC_DEBUGPL(DBG_PCDV, "EINVAL\n");
@@ -1315,5 +1317,6 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 }
 
 EXPORT_SYMBOL(usb_gadget_unregister_driver);
+#endif
 
 #endif /* DWC_HOST_ONLY */
