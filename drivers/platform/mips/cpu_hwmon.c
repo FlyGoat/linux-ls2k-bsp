@@ -9,6 +9,12 @@
 #include <boot_param.h>
 #include <loongson_hwmon.h>
 
+/* Allow other reference temperatures to fixup the original cpu temperature */
+int __weak fixup_cpu_temp(int cpu, int cputemp)
+{
+	return cputemp;
+}
+
 /*
  * Loongson-3 series cpu has two sensors inside,
  * each of them from 0 to 255,
@@ -17,6 +23,7 @@
  */
 int loongson3_cpu_temp(int cpu)
 {
+	int cputemp;
 	u32 reg, prid_rev;
 
 	reg = LOONGSON_CHIPTEMP(cpu);
@@ -34,7 +41,9 @@ int loongson3_cpu_temp(int cpu)
 		reg = (reg & 0xffff)*731/0x4000 - 273;
 		break;
 	}
-	return (int)reg * 1000;
+
+	cputemp = (int)reg * 1000;
+	return fixup_cpu_temp(cpu, cputemp);
 }
 
 /* ========================= Hwmon ====================== */
@@ -149,7 +158,7 @@ static void remove_sysfs_cputemp_files(struct kobject *kobj)
 		sysfs_remove_files(&cpu_hwmon_dev->kobj, hwmon_cputemp2);
 }
 
-#define CPU_THERMAL_THRESHOLD 90000
+#define CPU_THERMAL_THRESHOLD 98000
 static struct delayed_work thermal_work;
 
 static void do_thermal_timer(struct work_struct *work)
