@@ -85,6 +85,25 @@ pgprot_t vm_get_page_prot(unsigned long vm_flags)
 }
 EXPORT_SYMBOL(vm_get_page_prot);
 
+static pgprot_t vm_pgprot_modify(pgprot_t oldprot, unsigned long vm_flags)
+{
+	return pgprot_modify(oldprot, vm_get_page_prot(vm_flags));
+}
+
+/* Update vma->vm_page_prot to reflect vma->vm_flags. */
+void vma_set_page_prot(struct vm_area_struct *vma)
+{
+	unsigned long vm_flags = vma->vm_flags;
+
+	vma->vm_page_prot = vm_pgprot_modify(vma->vm_page_prot, vm_flags);
+	if (vma_wants_writenotify(vma)) {
+		vm_flags &= ~VM_SHARED;
+		vma->vm_page_prot = vm_pgprot_modify(vma->vm_page_prot,
+						     vm_flags);
+	}
+}
+
+
 int sysctl_overcommit_memory __read_mostly = OVERCOMMIT_GUESS;  /* heuristic overcommit */
 int sysctl_overcommit_ratio __read_mostly = 50;	/* default is 50% */
 unsigned long sysctl_overcommit_kbytes __read_mostly;
@@ -213,7 +232,7 @@ static void __remove_shared_vm_struct(struct vm_area_struct *vma,
 	if (vma->vm_flags & VM_DENYWRITE)
 		atomic_inc(&file_inode(file)->i_writecount);
 	if (vma->vm_flags & VM_SHARED)
-		mapping->i_mmap_writable--;
+		mapping_unmap_writable(mapping);
 
 	flush_dcache_mmap_lock(mapping);
 	if (unlikely(vma->vm_flags & VM_NONLINEAR))
@@ -614,7 +633,7 @@ static void __vma_link_file(struct vm_area_struct *vma)
 		if (vma->vm_flags & VM_DENYWRITE)
 			atomic_dec(&file_inode(file)->i_writecount);
 		if (vma->vm_flags & VM_SHARED)
-			mapping->i_mmap_writable++;
+			atomic_inc(&mapping->i_mmap_writable);
 
 		flush_dcache_mmap_lock(mapping);
 		if (unlikely(vma->vm_flags & VM_NONLINEAR))
@@ -744,9 +763,9 @@ again:			remove_next = 1 + (end > next->vm_end);
 		 * shrinking vma had, to cover any anon pages imported.
 		 */
 		if (exporter && exporter->anon_vma && !importer->anon_vma) {
+			importer->anon_vma = exporter->anon_vma;
 			if (anon_vma_clone(importer, exporter))
 				return -ENOMEM;
-			importer->anon_vma = exporter->anon_vma;
 		}
 	}
 
@@ -896,7 +915,15 @@ static inline int is_mergeable_vma(struct vm_area_struct *vma,
 				struct file *file, unsigned long vm_flags,
 				struct vm_userfaultfd_ctx vm_userfaultfd_ctx)
 {
-	if (vma->vm_flags ^ vm_flags)
+	/*
+	 * VM_SOFTDIRTY should not prevent from VMA merging, if we
+	 * match the flags but dirty bit -- the caller should mark
+	 * merged VMA as dirty. If dirty bit won't be excluded from
+	 * comparison, we increase pressue on the memory system forcing
+	 * the kernel to generate new VMAs when old one could be
+	 * extended instead.
+	 */
+	if ((vma->vm_flags ^ vm_flags) & ~VM_SOFTDIRTY)
 		return 0;
 	if (vma->vm_file != file)
 		return 0;
@@ -1096,7 +1123,7 @@ static int anon_vma_compatible(struct vm_area_struct *a, struct vm_area_struct *
 	return a->vm_end == b->vm_start &&
 		mpol_equal(vma_policy(a), vma_policy(b)) &&
 		a->vm_file == b->vm_file &&
-		!((a->vm_flags ^ b->vm_flags) & ~(VM_READ|VM_WRITE|VM_EXEC)) &&
+		!((a->vm_flags ^ b->vm_flags) & ~(VM_READ|VM_WRITE|VM_EXEC|VM_SOFTDIRTY)) &&
 		b->vm_pgoff == a->vm_pgoff + ((b->vm_start - a->vm_start) >> PAGE_SHIFT);
 }
 
@@ -1442,19 +1469,25 @@ SYSCALL_DEFINE1(old_mmap, struct mmap_arg_struct __user *, arg)
 int vma_wants_writenotify(struct vm_area_struct *vma)
 {
 	vm_flags_t vm_flags = vma->vm_flags;
+	const struct vm_operations_struct *vm_ops = vma->vm_ops;
 
 	/* If it was private or non-writable, the write bit is already clear */
 	if ((vm_flags & (VM_WRITE|VM_SHARED)) != ((VM_WRITE|VM_SHARED)))
 		return 0;
 
 	/* The backer wishes to know when pages are first written to? */
-	if (vma->vm_ops && vma->vm_ops->page_mkwrite)
+	if (vm_ops && (vm_ops->page_mkwrite || vm_ops->pfn_mkwrite))
 		return 1;
 
-	/* The open routine did something to the protections already? */
+	/* The open routine did something to the protections that pgprot_modify
+	 * won't preserve? */
 	if (pgprot_val(vma->vm_page_prot) !=
-	    pgprot_val(vm_get_page_prot(vm_flags)))
+	    pgprot_val(vm_pgprot_modify(vma->vm_page_prot, vm_flags)))
 		return 0;
+
+	/* Do we need to track softdirty? */
+	if (IS_ENABLED(CONFIG_MEM_SOFT_DIRTY) && !(vm_flags & VM_SOFTDIRTY))
+		return 1;
 
 	/* Specialty mapping? */
 	if (vm_flags & VM_PFNMAP)
@@ -1486,11 +1519,9 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma, *prev;
-	int correct_wcount = 0;
 	int error;
 	struct rb_node **rb_link, *rb_parent;
 	unsigned long charged = 0;
-	struct inode *inode =  file ? file_inode(file) : NULL;
 
 	/* Check against address space limit. */
 	if (!may_expand_vm(mm, len >> PAGE_SHIFT)) {
@@ -1564,8 +1595,18 @@ munmap_back:
 			error = deny_write_access(file);
 			if (error)
 				goto free_vma;
-			correct_wcount = 1;
 		}
+		if (vm_flags & VM_SHARED) {
+			error = mapping_map_writable(file->f_mapping);
+			if (error)
+				goto allow_write_and_free_vma;
+		}
+
+		/* ->mmap() can change vma->vm_file, but must guarantee that
+		 * vma_link() below can deny write-access if VM_DENYWRITE is set
+		 * and map writably if VM_SHARED is set. This usually means the
+		 * new file must not have been exposed to user-space, yet.
+		 */
 		vma->vm_file = get_file(file);
 		error = file->f_op->mmap(file, vma);
 		if (error)
@@ -1591,27 +1632,15 @@ munmap_back:
 			goto free_vma;
 	}
 
-	if (vma_wants_writenotify(vma)) {
-		pgprot_t pprot = vma->vm_page_prot;
-
-		/* Can vma->vm_page_prot have changed??
-		 *
-		 * Answer: Yes, drivers may have changed it in their
-		 *         f_op->mmap method.
-		 *
-		 * Ensures that vmas marked as uncached stay that way.
-		 */
-		vma->vm_page_prot = vm_get_page_prot(vm_flags & ~VM_SHARED);
-		if (pgprot_val(pprot) == pgprot_val(pgprot_noncached(pprot)))
-			vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-	}
-
 	vma_link(mm, vma, prev, rb_link, rb_parent);
-	file = vma->vm_file;
-
 	/* Once vma denies write, undo our temporary denial count */
-	if (correct_wcount)
-		atomic_inc(&inode->i_writecount);
+	if (file) {
+		if (vm_flags & VM_SHARED)
+			mapping_unmap_writable(file->f_mapping);
+		if (vm_flags & VM_DENYWRITE)
+			allow_write_access(file);
+	}
+	file = vma->vm_file;
 out:
 	perf_event_mmap(vma);
 
@@ -1627,17 +1656,31 @@ out:
 	if (file)
 		uprobe_mmap(vma);
 
+	/*
+	 * New (or expanded) vma always get soft dirty status.
+	 * Otherwise user-space soft-dirty page tracker won't
+	 * be able to distinguish situation when vma area unmapped,
+	 * then new mapped in-place (which must be aimed as
+	 * a completely new data area).
+	 */
+	vma->vm_flags |= VM_SOFTDIRTY;
+
+	vma_set_page_prot(vma);
+
 	return addr;
 
 unmap_and_free_vma:
-	if (correct_wcount)
-		atomic_inc(&inode->i_writecount);
 	vma->vm_file = NULL;
 	fput(file);
 
 	/* Undo any partial mapping done by a device driver. */
 	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
 	charged = 0;
+	if (vm_flags & VM_SHARED)
+		mapping_unmap_writable(file->f_mapping);
+allow_write_and_free_vma:
+	if (vm_flags & VM_DENYWRITE)
+		allow_write_access(file);
 free_vma:
 	kmem_cache_free(vm_area_cachep, vma);
 unacct_error:
@@ -2579,6 +2622,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
 	unmap_region(mm, vma, prev, start, end);
 
+	arch_unmap(mm, vma, start, end);
+
 	/* Fix up all other VM information */
 	remove_vma_list(mm, vma);
 
@@ -2704,6 +2749,7 @@ out:
 	mm->total_vm += len >> PAGE_SHIFT;
 	if (flags & VM_LOCKED)
 		mm->locked_vm += (len >> PAGE_SHIFT);
+	vma->vm_flags |= VM_SOFTDIRTY;
 	return addr;
 }
 
@@ -2973,7 +3019,7 @@ int install_special_mapping(struct mm_struct *mm,
 	vma->vm_start = addr;
 	vma->vm_end = addr + len;
 
-	vma->vm_flags = vm_flags | mm->def_flags | VM_DONTEXPAND;
+	vma->vm_flags = vm_flags | mm->def_flags | VM_DONTEXPAND | VM_SOFTDIRTY;
 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
 
 	vma->vm_ops = &special_mapping_vmops;

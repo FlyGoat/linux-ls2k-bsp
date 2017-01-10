@@ -466,7 +466,7 @@ static const struct dev_pm_ops virtio_pci_pm_ops = {
 
 /* Qumranet donated their vendor ID for devices 0x1000 thru 0x10FF. */
 static const struct pci_device_id virtio_pci_id_table[] = {
-	{ PCI_DEVICE(0x1af4, PCI_ANY_ID) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_REDHAT_QUMRANET, PCI_ANY_ID) },
 	{ 0 }
 };
 
@@ -500,9 +500,6 @@ static int virtio_pci_probe(struct pci_dev *pci_dev,
 	vp_dev->pci_dev = pci_dev;
 	INIT_LIST_HEAD(&vp_dev->virtqueues);
 	spin_lock_init(&vp_dev->lock);
-
-	/* Disable MSI/MSIX to bring device to a known good state. */
-	pci_msi_off(pci_dev);
 
 	/* enable the device */
 	rc = pci_enable_device(pci_dev);
@@ -553,6 +550,7 @@ err_enable_device:
 static void virtio_pci_remove(struct pci_dev *pci_dev)
 {
 	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
+	struct device *dev = get_device(&vp_dev->vdev.dev);
 
 	unregister_virtio_device(&vp_dev->vdev);
 
@@ -563,6 +561,7 @@ static void virtio_pci_remove(struct pci_dev *pci_dev)
 
 	pci_release_regions(pci_dev);
 	pci_disable_device(pci_dev);
+	put_device(dev);
 }
 
 static struct pci_driver virtio_pci_driver = {

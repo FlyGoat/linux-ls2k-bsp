@@ -209,8 +209,7 @@ cifs_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 static long cifs_fallocate(struct file *file, int mode, loff_t off, loff_t len)
 {
-	struct super_block *sb = file->f_path.dentry->d_sb;
-	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
+	struct cifs_sb_info *cifs_sb = CIFS_FILE_SB(file);
 	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
 	struct TCP_Server_Info *server = tcon->ses->server;
 
@@ -326,8 +325,11 @@ cifs_show_address(struct seq_file *s, struct TCP_Server_Info *server)
 static void
 cifs_show_security(struct seq_file *s, struct cifs_ses *ses)
 {
-	if (ses->sectype == Unspecified)
+	if (ses->sectype == Unspecified) {
+		if (ses->user_name == NULL)
+			seq_puts(s, ",sec=none");
 		return;
+	}
 
 	seq_puts(s, ",sec=");
 
@@ -395,17 +397,17 @@ cifs_show_options(struct seq_file *s, struct dentry *root)
 	struct sockaddr *srcaddr;
 	srcaddr = (struct sockaddr *)&tcon->ses->server->srcaddr;
 
-	seq_printf(s, ",vers=%s", tcon->ses->server->vals->version_string);
+	seq_show_option(s, "vers", tcon->ses->server->vals->version_string);
 	cifs_show_security(s, tcon->ses);
 	cifs_show_cache_flavor(s, cifs_sb);
 
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MULTIUSER)
 		seq_puts(s, ",multiuser");
 	else if (tcon->ses->user_name)
-		seq_printf(s, ",username=%s", tcon->ses->user_name);
+		seq_show_option(s, "username", tcon->ses->user_name);
 
 	if (tcon->ses->domainName)
-		seq_printf(s, ",domain=%s", tcon->ses->domainName);
+		seq_show_option(s, "domain", tcon->ses->domainName);
 
 	if (srcaddr->sa_family != AF_UNSPEC) {
 		struct sockaddr_in *saddr4;
@@ -452,6 +454,10 @@ cifs_show_options(struct seq_file *s, struct dentry *root)
 		seq_puts(s, ",nocase");
 	if (tcon->retry)
 		seq_puts(s, ",hard");
+	if (tcon->use_persistent)
+		seq_puts(s, ",persistenthandles");
+	else if (tcon->use_resilient)
+		seq_puts(s, ",resilienthandles");
 	if (tcon->unix_ext)
 		seq_puts(s, ",unix");
 	else
@@ -470,6 +476,8 @@ cifs_show_options(struct seq_file *s, struct dentry *root)
 		seq_puts(s, ",nouser_xattr");
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR)
 		seq_puts(s, ",mapchars");
+	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SFM_CHR)
+		seq_puts(s, ",mapposix");
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)
 		seq_puts(s, ",sfu");
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_NO_BRL)
@@ -499,6 +507,8 @@ cifs_show_options(struct seq_file *s, struct dentry *root)
 
 	seq_printf(s, ",rsize=%u", cifs_sb->rsize);
 	seq_printf(s, ",wsize=%u", cifs_sb->wsize);
+	seq_printf(s, ",echo_interval=%lu",
+			tcon->ses->server->echo_interval / HZ);
 	/* convert actimeo and display it in seconds */
 	seq_printf(s, ",actimeo=%lu", cifs_sb->actimeo / HZ);
 
@@ -607,7 +617,7 @@ cifs_get_root(struct smb_vol *vol, struct super_block *sb)
 	p = s = full_path;
 
 	do {
-		struct inode *dir = dentry->d_inode;
+		struct inode *dir = d_inode(dentry);
 		struct dentry *child;
 
 		if (!dir) {
@@ -929,9 +939,7 @@ const struct file_operations cifs_file_ops = {
 	.mmap  = cifs_file_mmap,
 	.splice_read = generic_file_splice_read,
 	.llseek = cifs_llseek,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl	= cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
 };
@@ -949,9 +957,7 @@ const struct file_operations cifs_file_strict_ops = {
 	.mmap = cifs_file_strict_mmap,
 	.splice_read = generic_file_splice_read,
 	.llseek = cifs_llseek,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl	= cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
 };
@@ -969,9 +975,7 @@ const struct file_operations cifs_file_direct_ops = {
 	.flush = cifs_flush,
 	.mmap = cifs_file_mmap,
 	.splice_read = generic_file_splice_read,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl  = cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.llseek = cifs_llseek,
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
@@ -989,9 +993,7 @@ const struct file_operations cifs_file_nobrl_ops = {
 	.mmap  = cifs_file_mmap,
 	.splice_read = generic_file_splice_read,
 	.llseek = cifs_llseek,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl	= cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
 };
@@ -1008,9 +1010,7 @@ const struct file_operations cifs_file_strict_nobrl_ops = {
 	.mmap = cifs_file_strict_mmap,
 	.splice_read = generic_file_splice_read,
 	.llseek = cifs_llseek,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl	= cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
 };
@@ -1027,9 +1027,7 @@ const struct file_operations cifs_file_direct_nobrl_ops = {
 	.flush = cifs_flush,
 	.mmap = cifs_file_mmap,
 	.splice_read = generic_file_splice_read,
-#ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl  = cifs_ioctl,
-#endif /* CONFIG_CIFS_POSIX */
 	.llseek = cifs_llseek,
 	.setlease = cifs_setlease,
 	.fallocate = cifs_fallocate,
@@ -1259,7 +1257,7 @@ init_cifs(void)
 		goto out_destroy_mids;
 
 #ifdef CONFIG_CIFS_UPCALL
-	rc = register_key_type(&cifs_spnego_key_type);
+	rc = init_cifs_spnego();
 	if (rc)
 		goto out_destroy_request_bufs;
 #endif /* CONFIG_CIFS_UPCALL */
@@ -1282,7 +1280,7 @@ out_init_cifs_idmap:
 out_register_key_type:
 #endif
 #ifdef CONFIG_CIFS_UPCALL
-	unregister_key_type(&cifs_spnego_key_type);
+	exit_cifs_spnego();
 out_destroy_request_bufs:
 #endif
 	cifs_destroy_request_bufs();

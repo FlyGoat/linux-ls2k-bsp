@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Virtual Function Driver
- * Copyright(c) 2013 - 2014 Intel Corporation.
+ * Copyright(c) 2013 - 2016 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -551,10 +551,6 @@ i40e_status i40evf_init_adminq(struct i40e_hw *hw)
 		goto init_adminq_exit;
 	}
 
-	/* initialize locks */
-	mutex_init(&hw->aq.asq_mutex);
-	mutex_init(&hw->aq.arq_mutex);
-
 	/* Set up register offsets */
 	i40e_adminq_init_regs(hw);
 
@@ -596,8 +592,6 @@ i40e_status i40evf_shutdown_adminq(struct i40e_hw *hw)
 	i40e_shutdown_asq(hw);
 	i40e_shutdown_arq(hw);
 
-	/* destroy the locks */
-
 	if (hw->nvm_buff.va)
 		i40e_free_virt_mem(hw, &hw->nvm_buff);
 
@@ -622,8 +616,7 @@ static u16 i40e_clean_asq(struct i40e_hw *hw)
 	details = I40E_ADMINQ_DETAILS(*asq, ntc);
 	while (rd32(hw, hw->aq.asq.head) != ntc) {
 		i40e_debug(hw, I40E_DEBUG_AQ_MESSAGE,
-			   "%s: ntc %d head %d.\n", __func__, ntc,
-			   rd32(hw, hw->aq.asq.head));
+			   "ntc %d head %d.\n", ntc, rd32(hw, hw->aq.asq.head));
 
 		if (details->callback) {
 			I40E_ADMINQ_CALLBACK cb_func =
@@ -695,6 +688,8 @@ i40e_status i40evf_asq_send_command(struct i40e_hw *hw,
 		status = I40E_ERR_QUEUE_EMPTY;
 		goto asq_send_command_error;
 	}
+
+	hw->aq.asq_last_status = I40E_AQ_RC_OK;
 
 	val = rd32(hw, hw->aq.asq.head);
 	if (val >= hw->aq.num_asq_entries) {
@@ -891,6 +886,9 @@ i40e_status i40evf_clean_arq_element(struct i40e_hw *hw,
 	u16 datalen;
 	u16 flags;
 	u16 ntu;
+
+	/* pre-clean the event info */
+	memset(&e->desc, 0, sizeof(e->desc));
 
 	/* take the lock before we start messing with the ring */
 	mutex_lock(&hw->aq.arq_mutex);

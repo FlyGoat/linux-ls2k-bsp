@@ -30,7 +30,7 @@ void nfs4_ff_layout_free_deviceid(struct nfs4_ff_layout_ds *mirror_ds)
 {
 	nfs4_print_deviceid(&mirror_ds->id_node.deviceid);
 	nfs4_pnfs_ds_put(mirror_ds->ds);
-	kfree(mirror_ds);
+	kfree_rcu(mirror_ds, id_node.rcu);
 }
 
 /* Decode opaque device data and construct new_ds using it */
@@ -172,6 +172,32 @@ out_err:
 	return NULL;
 }
 
+static void ff_layout_mark_devid_invalid(struct pnfs_layout_segment *lseg,
+		struct nfs4_deviceid_node *devid)
+{
+	nfs4_mark_deviceid_unavailable(devid);
+	if (!ff_layout_has_available_ds(lseg))
+		pnfs_error_mark_layout_for_return(lseg->pls_layout->plh_inode,
+				lseg);
+}
+
+static bool ff_layout_mirror_valid(struct pnfs_layout_segment *lseg,
+		struct nfs4_ff_layout_mirror *mirror)
+{
+	if (mirror == NULL || mirror->mirror_ds == NULL) {
+		pnfs_error_mark_layout_for_return(lseg->pls_layout->plh_inode,
+					lseg);
+		return false;
+	}
+	if (mirror->mirror_ds->ds == NULL) {
+		struct nfs4_deviceid_node *devid;
+		devid = &mirror->mirror_ds->id_node;
+		ff_layout_mark_devid_invalid(lseg, devid);
+		return false;
+	}
+	return true;
+}
+
 static u64
 end_offset(u64 start, u64 len)
 {
@@ -295,39 +321,26 @@ int ff_layout_track_ds_error(struct nfs4_flexfile_layout *flo,
 	return 0;
 }
 
-/* currently we only support AUTH_NONE and AUTH_SYS */
-static rpc_authflavor_t
-nfs4_ff_layout_choose_authflavor(struct nfs4_ff_layout_mirror *mirror)
+static struct rpc_cred *
+ff_layout_get_mirror_cred(struct nfs4_ff_layout_mirror *mirror, u32 iomode)
 {
-	if (mirror->uid == (u32)-1)
-		return RPC_AUTH_NULL;
-	return RPC_AUTH_UNIX;
-}
+	struct rpc_cred *cred, __rcu **pcred;
 
-/* fetch cred for NFSv3 DS */
-static int ff_layout_update_mirror_cred(struct nfs4_ff_layout_mirror *mirror,
-				      struct nfs4_pnfs_ds *ds)
-{
-	if (ds->ds_clp && !mirror->cred &&
-	    mirror->mirror_ds->ds_versions[0].version == 3) {
-		struct rpc_auth *auth = ds->ds_clp->cl_rpcclient->cl_auth;
-		struct rpc_cred *cred;
-		struct auth_cred acred = {
-			.uid = make_kuid(&init_user_ns, mirror->uid),
-			.gid = make_kgid(&init_user_ns, mirror->gid),
-		};
+	if (iomode == IOMODE_READ)
+		pcred = &mirror->ro_cred;
+	else
+		pcred = &mirror->rw_cred;
 
-		/* AUTH_NULL ignores acred */
-		cred = auth->au_ops->lookup_cred(auth, &acred, 0);
-		if (IS_ERR(cred)) {
-			dprintk("%s: lookup_cred failed with %ld\n",
-				__func__, PTR_ERR(cred));
-			return PTR_ERR(cred);
-		} else {
-			mirror->cred = cred;
-		}
-	}
-	return 0;
+	rcu_read_lock();
+	do {
+		cred = rcu_dereference(*pcred);
+		if (!cred)
+			break;
+
+		cred = get_rpccred_rcu(cred);
+	} while(!cred);
+	rcu_read_unlock();
+	return cred;
 }
 
 struct nfs_fh *
@@ -335,16 +348,10 @@ nfs4_ff_layout_select_ds_fh(struct pnfs_layout_segment *lseg, u32 mirror_idx)
 {
 	struct nfs4_ff_layout_mirror *mirror = FF_LAYOUT_COMP(lseg, mirror_idx);
 	struct nfs_fh *fh = NULL;
-	struct nfs4_deviceid_node *devid;
 
-	if (mirror == NULL || mirror->mirror_ds == NULL ||
-	    mirror->mirror_ds->ds == NULL) {
-		printk(KERN_ERR "NFS: %s: No data server for mirror offset index %d\n",
+	if (!ff_layout_mirror_valid(lseg, mirror)) {
+		pr_err_ratelimited("NFS: %s: No data server for mirror offset index %d\n",
 			__func__, mirror_idx);
-		if (mirror && mirror->mirror_ds) {
-			devid = &mirror->mirror_ds->id_node;
-			pnfs_generic_mark_devid_invalid(devid);
-		}
 		goto out;
 	}
 
@@ -365,16 +372,10 @@ nfs4_ff_layout_prepare_ds(struct pnfs_layout_segment *lseg, u32 ds_idx,
 	struct inode *ino = lseg->pls_layout->plh_inode;
 	struct nfs_server *s = NFS_SERVER(ino);
 	unsigned int max_payload;
-	rpc_authflavor_t flavor;
 
-	if (mirror == NULL || mirror->mirror_ds == NULL ||
-	    mirror->mirror_ds->ds == NULL) {
-		printk(KERN_ERR "NFS: %s: No data server for offset index %d\n",
+	if (!ff_layout_mirror_valid(lseg, mirror)) {
+		pr_err_ratelimited("NFS: %s: No data server for offset index %d\n",
 			__func__, ds_idx);
-		if (mirror && mirror->mirror_ds) {
-			devid = &mirror->mirror_ds->id_node;
-			pnfs_generic_mark_devid_invalid(devid);
-		}
 		goto out;
 	}
 
@@ -388,8 +389,6 @@ nfs4_ff_layout_prepare_ds(struct pnfs_layout_segment *lseg, u32 ds_idx,
 	if (ds->ds_clp)
 		goto out;
 
-	flavor = nfs4_ff_layout_choose_authflavor(mirror);
-
 	/* FIXME: For now we assume the server sent only one version of NFS
 	 * to use for the DS.
 	 */
@@ -397,7 +396,7 @@ nfs4_ff_layout_prepare_ds(struct pnfs_layout_segment *lseg, u32 ds_idx,
 			     dataserver_retrans,
 			     mirror->mirror_ds->ds_versions[0].version,
 			     mirror->mirror_ds->ds_versions[0].minor_version,
-			     flavor);
+			     RPC_AUTH_UNIX);
 
 	/* connect success, check rsize/wsize limit */
 	if (ds->ds_clp) {
@@ -413,26 +412,16 @@ nfs4_ff_layout_prepare_ds(struct pnfs_layout_segment *lseg, u32 ds_idx,
 					 mirror, lseg->pls_range.offset,
 					 lseg->pls_range.length, NFS4ERR_NXIO,
 					 OP_ILLEGAL, GFP_NOIO);
-		if (fail_return) {
-			pnfs_error_mark_layout_for_return(ino, lseg);
-			if (ff_layout_has_available_ds(lseg))
-				pnfs_set_retry_layoutget(lseg->pls_layout);
-			else
-				pnfs_clear_retry_layoutget(lseg->pls_layout);
-
-		} else {
+		if (!fail_return) {
 			if (ff_layout_has_available_ds(lseg))
 				set_bit(NFS_LAYOUT_RETURN_BEFORE_CLOSE,
 					&lseg->pls_layout->plh_flags);
-			else {
+			else
 				pnfs_error_mark_layout_for_return(ino, lseg);
-				pnfs_clear_retry_layoutget(lseg->pls_layout);
-			}
-		}
-	}
-
-	if (ff_layout_update_mirror_cred(mirror, ds))
+		} else
+			pnfs_error_mark_layout_for_return(ino, lseg);
 		ds = NULL;
+	}
 out:
 	return ds;
 }
@@ -442,16 +431,15 @@ ff_layout_get_ds_cred(struct pnfs_layout_segment *lseg, u32 ds_idx,
 		      struct rpc_cred *mdscred)
 {
 	struct nfs4_ff_layout_mirror *mirror = FF_LAYOUT_COMP(lseg, ds_idx);
-	struct rpc_cred *cred = ERR_PTR(-EINVAL);
+	struct rpc_cred *cred;
 
-	if (!nfs4_ff_layout_prepare_ds(lseg, ds_idx, true))
-		goto out;
-
-	if (mirror && mirror->cred)
-		cred = mirror->cred;
-	else
-		cred = mdscred;
-out:
+	if (mirror) {
+		cred = ff_layout_get_mirror_cred(mirror, lseg->pls_range.iomode);
+		if (!cred)
+			cred = get_rpccred(mdscred);
+	} else {
+		cred = get_rpccred(mdscred);
+	}
 	return cred;
 }
 
@@ -499,16 +487,19 @@ int ff_layout_encode_ds_ioerr(struct nfs4_flexfile_layout *flo,
 					   range->offset, range->length))
 			continue;
 		/* offset(8) + length(8) + stateid(NFS4_STATEID_SIZE)
-		 * + deviceid(NFS4_DEVICEID4_SIZE) + status(4) + opnum(4)
+		 * + array length + deviceid(NFS4_DEVICEID4_SIZE)
+		 * + status(4) + opnum(4)
 		 */
 		p = xdr_reserve_space(xdr,
-				24 + NFS4_STATEID_SIZE + NFS4_DEVICEID4_SIZE);
+				28 + NFS4_STATEID_SIZE + NFS4_DEVICEID4_SIZE);
 		if (unlikely(!p))
 			return -ENOBUFS;
 		p = xdr_encode_hyper(p, err->offset);
 		p = xdr_encode_hyper(p, err->length);
 		p = xdr_encode_opaque_fixed(p, &err->stateid,
 					    NFS4_STATEID_SIZE);
+		/* Encode 1 error */
+		*p++ = cpu_to_be32(1);
 		p = xdr_encode_opaque_fixed(p, &err->deviceid,
 					    NFS4_DEVICEID4_SIZE);
 		*p++ = cpu_to_be32(err->status);
@@ -524,11 +515,11 @@ int ff_layout_encode_ds_ioerr(struct nfs4_flexfile_layout *flo,
 	return 0;
 }
 
-bool ff_layout_has_available_ds(struct pnfs_layout_segment *lseg)
+static bool ff_read_layout_has_available_ds(struct pnfs_layout_segment *lseg)
 {
 	struct nfs4_ff_layout_mirror *mirror;
 	struct nfs4_deviceid_node *devid;
-	int idx;
+	u32 idx;
 
 	for (idx = 0; idx < FF_LAYOUT_MIRROR_COUNT(lseg); idx++) {
 		mirror = FF_LAYOUT_COMP(lseg, idx);
@@ -540,6 +531,32 @@ bool ff_layout_has_available_ds(struct pnfs_layout_segment *lseg)
 	}
 
 	return false;
+}
+
+static bool ff_rw_layout_has_available_ds(struct pnfs_layout_segment *lseg)
+{
+	struct nfs4_ff_layout_mirror *mirror;
+	struct nfs4_deviceid_node *devid;
+	u32 idx;
+
+	for (idx = 0; idx < FF_LAYOUT_MIRROR_COUNT(lseg); idx++) {
+		mirror = FF_LAYOUT_COMP(lseg, idx);
+		if (!mirror || !mirror->mirror_ds)
+			return false;
+		devid = &mirror->mirror_ds->id_node;
+		if (ff_layout_test_devid_unavailable(devid))
+			return false;
+	}
+
+	return FF_LAYOUT_MIRROR_COUNT(lseg) != 0;
+}
+
+bool ff_layout_has_available_ds(struct pnfs_layout_segment *lseg)
+{
+	if (lseg->pls_range.iomode == IOMODE_READ)
+		return  ff_read_layout_has_available_ds(lseg);
+	/* Note: RW layout needs all mirrors available */
+	return ff_rw_layout_has_available_ds(lseg);
 }
 
 module_param(dataserver_retrans, uint, 0644);

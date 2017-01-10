@@ -177,10 +177,12 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 
 static int vlan_dev_change_mtu(struct net_device *dev, int new_mtu)
 {
-	/* TODO: gotta make sure the underlying layer can handle it,
-	 * maybe an IFF_VLAN_CAPABLE flag for devices?
-	 */
-	if (vlan_dev_priv(dev)->real_dev->mtu < new_mtu)
+	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
+	unsigned int max_mtu = real_dev->mtu;
+
+	if (netif_reduces_vlan_mtu(real_dev))
+		max_mtu -= VLAN_HLEN;
+	if (max_mtu < new_mtu)
 		return -ERANGE;
 
 	dev->mtu = new_mtu;
@@ -567,9 +569,9 @@ static int vlan_dev_init(struct net_device *dev)
 					  (1<<__LINK_STATE_DORMANT))) |
 		      (1<<__LINK_STATE_PRESENT);
 
-	dev->hw_features = NETIF_F_ALL_CSUM | NETIF_F_SG |
+	dev->hw_features = NETIF_F_HW_CSUM | NETIF_F_SG |
 			   NETIF_F_FRAGLIST | NETIF_F_ALL_TSO |
-			   NETIF_F_HIGHDMA | NETIF_F_SCTP_CSUM |
+			   NETIF_F_HIGHDMA | NETIF_F_SCTP_CRC |
 			   NETIF_F_ALL_FCOE;
 
 	dev->features |= real_dev->vlan_features | NETIF_F_LLTX;
@@ -792,10 +794,9 @@ void vlan_setup(struct net_device *dev)
 {
 	ether_setup(dev);
 
-	dev->priv_flags		|= IFF_802_1Q_VLAN;
+	dev->priv_flags		|= IFF_802_1Q_VLAN | IFF_NO_QUEUE;
 	dev->priv_flags		&= ~IFF_TX_SKB_SHARING;
 	netif_keep_dst(dev);
-	dev->tx_queue_len	= 0;
 
 	dev->netdev_ops		= &vlan_netdev_ops;
 	dev->destructor		= free_netdev;

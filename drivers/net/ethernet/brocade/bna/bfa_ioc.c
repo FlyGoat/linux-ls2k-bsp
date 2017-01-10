@@ -1304,7 +1304,7 @@ bfa_nw_ioc_fwver_get(struct bfa_ioc *ioc, struct bfi_ioc_image_hdr *fwhdr)
 	for (i = 0; i < (sizeof(struct bfi_ioc_image_hdr) / sizeof(u32));
 	     i++) {
 		fwsig[i] =
-			swab32(readl((loff) + (ioc->ioc_regs.smem_page_start)));
+			swab32(readl(loff + ioc->ioc_regs.smem_page_start));
 		loff += sizeof(u32);
 	}
 }
@@ -1543,7 +1543,7 @@ bfa_flash_cmd_act_check(void __iomem *pci_bar)
 }
 
 /* Flush FLI data fifo. */
-static u32
+static int
 bfa_flash_fifo_flush(void __iomem *pci_bar)
 {
 	u32 i;
@@ -1573,11 +1573,11 @@ bfa_flash_fifo_flush(void __iomem *pci_bar)
 }
 
 /* Read flash status. */
-static u32
+static int
 bfa_flash_status_read(void __iomem *pci_bar)
 {
 	union bfa_flash_dev_status_reg	dev_status;
-	u32				status;
+	int				status;
 	u32			ret_status;
 	int				i;
 
@@ -1611,11 +1611,11 @@ bfa_flash_status_read(void __iomem *pci_bar)
 }
 
 /* Start flash read operation. */
-static u32
+static int
 bfa_flash_read_start(void __iomem *pci_bar, u32 offset, u32 len,
 		     char *buf)
 {
-	u32 status;
+	int status;
 
 	/* len must be mutiple of 4 and not exceeding fifo size */
 	if (len == 0 || len > BFA_FLASH_FIFO_SIZE || (len & 0x03) != 0)
@@ -1675,7 +1675,7 @@ bfa_raw_sem_get(void __iomem *bar)
 {
 	int	locked;
 
-	locked = readl((bar + FLASH_SEM_LOCK_REG));
+	locked = readl(bar + FLASH_SEM_LOCK_REG);
 
 	return !locked;
 }
@@ -1703,7 +1703,8 @@ static enum bfa_status
 bfa_flash_raw_read(void __iomem *pci_bar, u32 offset, char *buf,
 		   u32 len)
 {
-	u32 n, status;
+	u32 n;
+	int status;
 	u32 off, l, s, residue, fifo_sz;
 
 	residue = len;
@@ -2049,8 +2050,8 @@ bfa_ioc_download_fw(struct bfa_ioc *ioc, u32 boot_type,
 		/**
 		 * write smem
 		 */
-		writel((swab32(fwimg[BFA_IOC_FLASH_OFFSET_IN_CHUNK(i)])),
-			      ((ioc->ioc_regs.smem_page_start) + (loff)));
+		writel(swab32(fwimg[BFA_IOC_FLASH_OFFSET_IN_CHUNK(i)]),
+		       ioc->ioc_regs.smem_page_start + loff);
 
 		loff += sizeof(u32);
 
@@ -2213,7 +2214,7 @@ bfa_nw_ioc_smem_read(struct bfa_ioc *ioc, void *tbuf, u32 soff, u32 sz)
 
 	len = sz/sizeof(u32);
 	for (i = 0; i < len; i++) {
-		r32 = swab32(readl((loff) + (ioc->ioc_regs.smem_page_start)));
+		r32 = swab32(readl(loff + ioc->ioc_regs.smem_page_start));
 		buf[i] = be32_to_cpu(r32);
 		loff += sizeof(u32);
 

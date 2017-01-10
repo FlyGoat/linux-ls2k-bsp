@@ -235,6 +235,7 @@ struct pool {
 	struct pool_features pf;
 	bool low_water_triggered:1;	/* A dm event has been sent */
 	bool suspended:1;
+	bool out_of_data_space:1;
 
 	struct dm_bio_prison *prison;
 	struct dm_kcopyd_client *copier;
@@ -519,9 +520,16 @@ static void cell_error_with_code(struct pool *pool,
 	dm_bio_prison_free_cell(pool->prison, cell);
 }
 
+static int get_pool_io_error_code(struct pool *pool)
+{
+	return pool->out_of_data_space ? -ENOSPC : -EIO;
+}
+
 static void cell_error(struct pool *pool, struct dm_bio_prison_cell *cell)
 {
-	cell_error_with_code(pool, cell, -EIO);
+	int error = get_pool_io_error_code(pool);
+
+	cell_error_with_code(pool, cell, error);
 }
 
 static void cell_success(struct pool *pool, struct dm_bio_prison_cell *cell)
@@ -678,7 +686,9 @@ static void error_retry_list_with_code(struct pool *pool, int error)
 
 static void error_retry_list(struct pool *pool)
 {
-	return error_retry_list_with_code(pool, -EIO);
+	int error = get_pool_io_error_code(pool);
+
+	error_retry_list_with_code(pool, error);
 }
 
 /*
@@ -1536,18 +1546,6 @@ static void process_discard_cell_no_passdown(struct thin_c *tc,
 		pool->process_prepared_discard(m);
 }
 
-/*
- * FIXME: DM local hack to defer parent bios's end_io until we
- * _know_ all chained sub range discard bios have completed.
- * Will go away once late bio splitting lands upstream!
- */
-static inline void __bio_inc_remaining(struct bio *bio)
-{
-	bio->bio_aux->bi_flags |= (1 << BIO_AUX_CHAIN);
-	smp_mb__before_atomic();
-	atomic_inc(&bio->bio_aux->__bi_remaining);
-}
-
 static void break_up_discard_bio(struct thin_c *tc, dm_block_t begin, dm_block_t end,
 				 struct bio *bio)
 {
@@ -1603,7 +1601,7 @@ static void break_up_discard_bio(struct thin_c *tc, dm_block_t begin, dm_block_t
 		 * the implicit decrement that occurs via bio_endio() in
 		 * process_prepared_discard_{passdown,no_passdown}.
 		 */
-		__bio_inc_remaining(bio);
+		bio_inc_remaining(bio);
 		if (!dm_deferred_set_add_work(pool->all_io_ds, &m->list))
 			pool->process_prepared_discard(m);
 
@@ -2472,6 +2470,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 		 */
 		if (old_mode != new_mode)
 			notify_of_pool_mode_change_to_oods(pool);
+		pool->out_of_data_space = true;
 		pool->process_bio = process_bio_read_only;
 		pool->process_discard = process_discard_bio;
 		pool->process_cell = process_cell_read_only;
@@ -2485,6 +2484,8 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 	case PM_WRITE:
 		if (old_mode != new_mode)
 			notify_of_pool_mode_change(pool, "write");
+		pool->out_of_data_space = false;
+		pool->pf.error_if_no_space = pt->requested_pf.error_if_no_space;
 		dm_pool_metadata_read_write(pool->pmd);
 		pool->process_bio = process_bio;
 		pool->process_discard = process_discard_bio;
@@ -2883,6 +2884,7 @@ static struct pool *pool_create(struct mapped_device *pool_md,
 	INIT_LIST_HEAD(&pool->active_thins);
 	pool->low_water_triggered = false;
 	pool->suspended = true;
+	pool->out_of_data_space = false;
 
 	pool->shared_read_ds = dm_deferred_set_create();
 	if (!pool->shared_read_ds) {
@@ -3253,7 +3255,7 @@ static int pool_ctr(struct dm_target *ti, unsigned argc, char **argv)
 						metadata_low_callback,
 						pool);
 	if (r)
-		goto out_free_pt;
+		goto out_flags_changed;
 
 	pt->callbacks.congested_fn = pool_is_congested;
 	dm_table_add_target_callbacks(ti->table, &pt->callbacks);
@@ -3504,8 +3506,8 @@ static void pool_postsuspend(struct dm_target *ti)
 	struct pool_c *pt = ti->private;
 	struct pool *pool = pt->pool;
 
-	cancel_delayed_work(&pool->waker);
-	cancel_delayed_work(&pool->no_space_timeout);
+	cancel_delayed_work_sync(&pool->waker);
+	cancel_delayed_work_sync(&pool->no_space_timeout);
 	flush_workqueue(pool->wq);
 	(void) commit(pool);
 }
@@ -3951,7 +3953,7 @@ static struct target_type pool_target = {
 	.name = "thin-pool",
 	.features = DM_TARGET_SINGLETON | DM_TARGET_ALWAYS_WRITEABLE |
 		    DM_TARGET_IMMUTABLE,
-	.version = {1, 16, 0},
+	.version = {1, 18, 0},
 	.module = THIS_MODULE,
 	.ctr = pool_ctr,
 	.dtr = pool_dtr,
@@ -4103,7 +4105,7 @@ static int thin_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	ti->num_flush_bios = 1;
 	ti->flush_supported = true;
-	ti->per_bio_data_size = sizeof(struct dm_thin_endio_hook);
+	ti->per_io_data_size = sizeof(struct dm_thin_endio_hook);
 
 	/* In case the pool supports discards, pass them on. */
 	ti->discard_zeroes_data_unsupported = true;
@@ -4341,7 +4343,7 @@ static void thin_io_hints(struct dm_target *ti, struct queue_limits *limits)
 
 static struct target_type thin_target = {
 	.name = "thin",
-	.version = {1, 16, 0},
+	.version = {1, 18, 0},
 	.module	= THIS_MODULE,
 	.ctr = thin_ctr,
 	.dtr = thin_dtr,

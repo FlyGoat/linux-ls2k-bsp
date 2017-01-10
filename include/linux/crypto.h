@@ -53,6 +53,7 @@
 #define CRYPTO_ALG_TYPE_SHASH		0x00000009
 #define CRYPTO_ALG_TYPE_AHASH		0x0000000a
 #define CRYPTO_ALG_TYPE_RNG		0x0000000c
+#define CRYPTO_ALG_TYPE_AKCIPHER	0x0000000d
 #define CRYPTO_ALG_TYPE_PCOMPRESS	0x0000000f
 
 #define CRYPTO_ALG_TYPE_HASH_MASK	0x0000000e
@@ -93,6 +94,12 @@
  * not available to userspace via instruction set or so.
  */
 #define CRYPTO_ALG_KERN_DRIVER_ONLY	0x00001000
+
+/*
+ * Mark a cipher as a service implementation only usable by another
+ * cipher and never by a normal user of the kernel crypto API
+ */
+#define CRYPTO_ALG_INTERNAL		0x00002000
 
 /*
  * Transform masks and values (for crt_flags).
@@ -723,9 +730,9 @@ static inline void ablkcipher_request_free(struct ablkcipher_request *req)
 
 static inline void ablkcipher_request_set_callback(
 	struct ablkcipher_request *req,
-	u32 flags, crypto_completion_t complete, void *data)
+	u32 flags, crypto_completion_t compl, void *data)
 {
-	req->base.complete = complete;
+	req->base.complete = compl;
 	req->base.data = data;
 	req->base.flags = flags;
 }
@@ -854,10 +861,10 @@ static inline void aead_request_free(struct aead_request *req)
 
 static inline void aead_request_set_callback(struct aead_request *req,
 					     u32 flags,
-					     crypto_completion_t complete,
+					     crypto_completion_t compl,
 					     void *data)
 {
-	req->base.complete = complete;
+	req->base.complete = compl;
 	req->base.data = data;
 	req->base.flags = flags;
 }

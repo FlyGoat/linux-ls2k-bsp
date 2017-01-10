@@ -48,6 +48,12 @@ static sector_t map_swap_entry(swp_entry_t, struct block_device**);
 DEFINE_SPINLOCK(swap_lock);
 static unsigned int nr_swapfiles;
 atomic_long_t nr_swap_pages;
+/*
+ * Some modules use swappable objects and may try to swap them out under
+ * memory pressure (via the shrinker). Before doing so, they may wish to
+ * check to see if any swap space is available.
+ */
+EXPORT_SYMBOL_GPL(nr_swap_pages);
 /* protected with swap_lock. reading in vm_swap_full() doesn't need lock */
 long total_swap_pages;
 static int least_priority;
@@ -191,12 +197,6 @@ static void discard_swap_cluster(struct swap_info_struct *si,
 		lh = se->list.next;
 		se = list_entry(lh, struct swap_extent, list);
 	}
-}
-
-static int wait_for_discard(void *word)
-{
-	schedule();
-	return 0;
 }
 
 #define SWAPFILE_CLUSTER	256
@@ -380,7 +380,7 @@ checks:
 			 */
 			spin_unlock(&si->lock);
 			wait_on_bit(&si->flags, ilog2(SWP_DISCARDING),
-				wait_for_discard, TASK_UNINTERRUPTIBLE);
+				TASK_UNINTERRUPTIBLE);
 			spin_lock(&si->lock);
 		} else {
 			/*
@@ -870,6 +870,21 @@ unsigned int count_swap_pages(int type, int free)
 }
 #endif /* CONFIG_HIBERNATION */
 
+static inline int maybe_same_pte(pte_t pte, pte_t swp_pte)
+{
+#ifdef CONFIG_MEM_SOFT_DIRTY
+	/*
+	 * When pte keeps soft dirty bit the pte generated
+	 * from swap entry does not has it, still it's same
+	 * pte from logical point of view.
+	 */
+	pte_t swp_pte_dirty = pte_swp_mksoft_dirty(swp_pte);
+	return pte_same(pte, swp_pte) || pte_same(pte, swp_pte_dirty);
+#else
+	return pte_same(pte, swp_pte);
+#endif
+}
+
 /*
  * No need to decide whether this PTE shares the swap entry with others,
  * just let do_wp_page work it out if a write is requested later - to
@@ -896,7 +911,7 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	}
 
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (unlikely(!pte_same(*pte, swp_entry_to_pte(entry)))) {
+	if (unlikely(!maybe_same_pte(*pte, swp_entry_to_pte(entry)))) {
 		mem_cgroup_cancel_charge_swapin(memcg);
 		ret = 0;
 		goto out;
@@ -951,7 +966,7 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		 * swapoff spends a _lot_ of time in this loop!
 		 * Test inline before going to call unuse_pte.
 		 */
-		if (unlikely(pte_same(*pte, swp_pte))) {
+		if (unlikely(maybe_same_pte(*pte, swp_pte))) {
 			pte_unmap(pte);
 			ret = unuse_pte(vma, pmd, addr, entry, page);
 			if (ret)

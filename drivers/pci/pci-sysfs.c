@@ -177,7 +177,7 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 {
 	struct pci_dev *pci_dev = to_pci_dev(dev);
 
-	return sprintf(buf, "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02x\n",
+	return sprintf(buf, "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X\n",
 		       pci_dev->vendor, pci_dev->device,
 		       pci_dev->subsystem_vendor, pci_dev->subsystem_device,
 		       (u8)(pci_dev->class >> 16), (u8)(pci_dev->class >> 8),
@@ -221,12 +221,40 @@ static ssize_t enable_show(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RW(enable);
 
 #ifdef CONFIG_NUMA
+static ssize_t numa_node_store(struct device *dev,
+			       struct device_attribute *attr, const char *buf,
+			       size_t count)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	int node, ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	ret = kstrtoint(buf, 0, &node);
+	if (ret)
+		return ret;
+
+	if ((node < 0 && node != NUMA_NO_NODE) || node >= MAX_NUMNODES)
+		return -EINVAL;
+
+	if (node != NUMA_NO_NODE && !node_online(node))
+		return -EINVAL;
+
+	add_taint(TAINT_FIRMWARE_WORKAROUND, LOCKDEP_STILL_OK);
+	dev_alert(&pdev->dev, FW_BUG "Overriding NUMA node to %d.  Contact your vendor for updates.",
+		  node);
+
+	dev->numa_node = node;
+	return count;
+}
+
 static ssize_t numa_node_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
 {
 	return sprintf(buf, "%d\n", dev->numa_node);
 }
-static DEVICE_ATTR_RO(numa_node);
+static DEVICE_ATTR_RW(numa_node);
 #endif
 
 static ssize_t dma_mask_bits_show(struct device *dev,
@@ -527,7 +555,8 @@ static ssize_t driver_override_store(struct device *dev,
 	struct pci_dev *pdev = to_pci_dev(dev);
 	char *driver_override, *old = pdev->pci_dev_rh->driver_override, *cp;
 
-	if (count > PATH_MAX)
+	/* We need to keep extra room for a newline */
+	if (count >= (PAGE_SIZE - 1))
 		return -EINVAL;
 
 	driver_override = kstrndup(buf, count, GFP_KERNEL);
@@ -555,7 +584,7 @@ static ssize_t driver_override_show(struct device *dev,
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 
-	return sprintf(buf, "%s\n", pdev->pci_dev_rh->driver_override);
+	return snprintf(buf, PAGE_SIZE, "%s\n", pdev->pci_dev_rh->driver_override);
 }
 static DEVICE_ATTR_RW(driver_override);
 
@@ -632,8 +661,7 @@ static ssize_t pci_read_config(struct file *filp, struct kobject *kobj,
 			       struct bin_attribute *bin_attr, char *buf,
 			       loff_t off, size_t count)
 {
-	struct pci_dev *dev = to_pci_dev(container_of(kobj, struct device,
-						      kobj));
+	struct pci_dev *dev = to_pci_dev(kobj_to_dev(kobj));
 	unsigned int size = 64;
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
@@ -709,8 +737,7 @@ static ssize_t pci_write_config(struct file *filp, struct kobject *kobj,
 				struct bin_attribute *bin_attr, char *buf,
 				loff_t off, size_t count)
 {
-	struct pci_dev *dev = to_pci_dev(container_of(kobj, struct device,
-						      kobj));
+	struct pci_dev *dev = to_pci_dev(kobj_to_dev(kobj));
 	unsigned int size = count;
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
@@ -774,13 +801,14 @@ static ssize_t read_vpd_attr(struct file *filp, struct kobject *kobj,
 			     struct bin_attribute *bin_attr, char *buf,
 			     loff_t off, size_t count)
 {
-	struct pci_dev *dev =
-		to_pci_dev(container_of(kobj, struct device, kobj));
+	struct pci_dev *dev = to_pci_dev(kobj_to_dev(kobj));
 
-	if (off > bin_attr->size)
-		count = 0;
-	else if (count > bin_attr->size - off)
-		count = bin_attr->size - off;
+	if (bin_attr->size > 0) {
+		if (off > bin_attr->size)
+			count = 0;
+		else if (count > bin_attr->size - off)
+			count = bin_attr->size - off;
+	}
 
 	return pci_read_vpd(dev, off, count, buf);
 }
@@ -789,13 +817,14 @@ static ssize_t write_vpd_attr(struct file *filp, struct kobject *kobj,
 			      struct bin_attribute *bin_attr, char *buf,
 			      loff_t off, size_t count)
 {
-	struct pci_dev *dev =
-		to_pci_dev(container_of(kobj, struct device, kobj));
+	struct pci_dev *dev = to_pci_dev(kobj_to_dev(kobj));
 
-	if (off > bin_attr->size)
-		count = 0;
-	else if (count > bin_attr->size - off)
-		count = bin_attr->size - off;
+	if (bin_attr->size > 0) {
+		if (off > bin_attr->size)
+			count = 0;
+		else if (count > bin_attr->size - off)
+			count = bin_attr->size - off;
+	}
 
 	return pci_write_vpd(dev, off, count, buf);
 }
@@ -817,8 +846,7 @@ static ssize_t pci_read_legacy_io(struct file *filp, struct kobject *kobj,
 				  struct bin_attribute *bin_attr, char *buf,
 				  loff_t off, size_t count)
 {
-	struct pci_bus *bus = to_pci_bus(container_of(kobj, struct device,
-						      kobj));
+	struct pci_bus *bus = to_pci_bus(kobj_to_dev(kobj));
 
 	/* Only support 1, 2 or 4 byte accesses */
 	if (count != 1 && count != 2 && count != 4)
@@ -843,8 +871,7 @@ static ssize_t pci_write_legacy_io(struct file *filp, struct kobject *kobj,
 				   struct bin_attribute *bin_attr, char *buf,
 				   loff_t off, size_t count)
 {
-	struct pci_bus *bus = to_pci_bus(container_of(kobj, struct device,
-						      kobj));
+	struct pci_bus *bus = to_pci_bus(kobj_to_dev(kobj));
 
 	/* Only support 1, 2 or 4 byte accesses */
 	if (count != 1 && count != 2 && count != 4)
@@ -868,8 +895,7 @@ static int pci_mmap_legacy_mem(struct file *filp, struct kobject *kobj,
 			       struct bin_attribute *attr,
 			       struct vm_area_struct *vma)
 {
-	struct pci_bus *bus = to_pci_bus(container_of(kobj, struct device,
-						      kobj));
+	struct pci_bus *bus = to_pci_bus(kobj_to_dev(kobj));
 
 	return pci_mmap_legacy_page_range(bus, vma, pci_mmap_mem);
 }
@@ -889,8 +915,7 @@ static int pci_mmap_legacy_io(struct file *filp, struct kobject *kobj,
 			      struct bin_attribute *attr,
 			      struct vm_area_struct *vma)
 {
-	struct pci_bus *bus = to_pci_bus(container_of(kobj, struct device,
-						      kobj));
+	struct pci_bus *bus = to_pci_bus(kobj_to_dev(kobj));
 
 	return pci_mmap_legacy_page_range(bus, vma, pci_mmap_io);
 }
@@ -1005,8 +1030,7 @@ int pci_mmap_fits(struct pci_dev *pdev, int resno, struct vm_area_struct *vma,
 static int pci_mmap_resource(struct kobject *kobj, struct bin_attribute *attr,
 			     struct vm_area_struct *vma, int write_combine)
 {
-	struct pci_dev *pdev = to_pci_dev(container_of(kobj,
-						       struct device, kobj));
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 	struct resource *res = attr->private;
 	enum pci_mmap_state mmap_type;
 	resource_size_t start, end;
@@ -1062,8 +1086,7 @@ static ssize_t pci_resource_io(struct file *filp, struct kobject *kobj,
 			       struct bin_attribute *attr, char *buf,
 			       loff_t off, size_t count, bool write)
 {
-	struct pci_dev *pdev = to_pci_dev(container_of(kobj,
-						       struct device, kobj));
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 	struct resource *res = attr->private;
 	unsigned long port = off;
 	int i;
@@ -1236,7 +1259,7 @@ static ssize_t pci_write_rom(struct file *filp, struct kobject *kobj,
 			     struct bin_attribute *bin_attr, char *buf,
 			     loff_t off, size_t count)
 {
-	struct pci_dev *pdev = to_pci_dev(container_of(kobj, struct device, kobj));
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 
 	if ((off ==  0) && (*buf == '0') && (count == 2))
 		pdev->rom_attr_enabled = 0;
@@ -1262,7 +1285,7 @@ static ssize_t pci_read_rom(struct file *filp, struct kobject *kobj,
 			    struct bin_attribute *bin_attr, char *buf,
 			    loff_t off, size_t count)
 {
-	struct pci_dev *pdev = to_pci_dev(container_of(kobj, struct device, kobj));
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 	void __iomem *rom;
 	size_t size;
 
@@ -1340,7 +1363,7 @@ static int pci_create_capabilities_sysfs(struct pci_dev *dev)
 			return -ENOMEM;
 
 		sysfs_bin_attr_init(attr);
-		attr->size = dev->vpd->len;
+		attr->size = 0;
 		attr->attr.name = "vpd";
 		attr->attr.mode = S_IRUSR | S_IWUSR;
 		attr->read = read_vpd_attr;
@@ -1522,7 +1545,7 @@ static struct attribute *pci_dev_dev_attrs[] = {
 static umode_t pci_dev_attrs_are_visible(struct kobject *kobj,
 					 struct attribute *a, int n)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct pci_dev *pdev = to_pci_dev(dev);
 
 	if (a == &vga_attr.attr)
@@ -1541,7 +1564,7 @@ static struct attribute *pci_dev_hp_attrs[] = {
 static umode_t pci_dev_hp_attrs_are_visible(struct kobject *kobj,
 					    struct attribute *a, int n)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct pci_dev *pdev = to_pci_dev(dev);
 
 	if (pdev->is_virtfn)
@@ -1565,7 +1588,7 @@ static struct attribute *sriov_dev_attrs[] = {
 static umode_t sriov_attrs_are_visible(struct kobject *kobj,
 				       struct attribute *a, int n)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 
 	if (!dev_is_pf(dev))
 		return 0;

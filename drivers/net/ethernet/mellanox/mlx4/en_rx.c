@@ -61,7 +61,7 @@ static int mlx4_alloc_pages(struct mlx4_en_priv *priv,
 		gfp_t gfp = _gfp;
 
 		if (order)
-			gfp |= __GFP_COMP | __GFP_NOWARN;
+			gfp |= __GFP_COMP | __GFP_NOWARN | __GFP_NOMEMALLOC;
 		page = alloc_pages(gfp, order);
 		if (likely(page))
 			break;
@@ -82,8 +82,7 @@ static int mlx4_alloc_pages(struct mlx4_en_priv *priv,
 	/* Not doing get_page() for each frag is a big win
 	 * on asymetric workloads. Note we can not use atomic_set().
 	 */
-	atomic_add(page_alloc->page_size / frag_info->frag_stride - 1,
-		   &page->_count);
+	page_ref_add(page, page_alloc->page_size / frag_info->frag_stride - 1);
 	return 0;
 }
 
@@ -127,7 +126,9 @@ out:
 			dma_unmap_page(priv->ddev, page_alloc[i].dma,
 				page_alloc[i].page_size, PCI_DMA_FROMDEVICE);
 			page = page_alloc[i].page;
-			atomic_set(&page->_count, 1);
+			/* Revert changes done by mlx4_alloc_pages */
+			page_ref_sub(page, page_alloc[i].page_size /
+					   priv->frag_info[i].frag_stride - 1);
 			put_page(page);
 		}
 	}
@@ -164,7 +165,7 @@ static int mlx4_en_init_allocator(struct mlx4_en_priv *priv,
 
 		en_dbg(DRV, priv, "  frag %d allocator: - size:%d frags:%d\n",
 		       i, ring->page_alloc[i].page_size,
-		       atomic_read(&ring->page_alloc[i].page->_count));
+		       page_ref_count(ring->page_alloc[i].page));
 	}
 	return 0;
 
@@ -176,7 +177,9 @@ out:
 		dma_unmap_page(priv->ddev, page_alloc->dma,
 			       page_alloc->page_size, PCI_DMA_FROMDEVICE);
 		page = page_alloc->page;
-		atomic_set(&page->_count, 1);
+		/* Revert changes done by mlx4_alloc_pages */
+		page_ref_sub(page, page_alloc->page_size /
+				   priv->frag_info[i].frag_stride - 1);
 		put_page(page);
 		page_alloc->page = NULL;
 	}
@@ -390,17 +393,11 @@ int mlx4_en_create_rx_ring(struct mlx4_en_priv *priv,
 
 	/* Allocate HW buffers on provided NUMA node */
 	set_dev_node(&mdev->dev->persist->pdev->dev, node);
-	err = mlx4_alloc_hwq_res(mdev->dev, &ring->wqres,
-				 ring->buf_size, 2 * PAGE_SIZE);
+	err = mlx4_alloc_hwq_res(mdev->dev, &ring->wqres, ring->buf_size);
 	set_dev_node(&mdev->dev->persist->pdev->dev, mdev->dev->numa_node);
 	if (err)
 		goto err_info;
 
-	err = mlx4_en_map_buffer(&ring->wqres.buf);
-	if (err) {
-		en_err(priv, "Failed to map RX buffer\n");
-		goto err_hwq;
-	}
 	ring->buf = ring->wqres.buf.direct.buf;
 
 	ring->hwtstamp_rx_filter = priv->hwtstamp_config.rx_filter;
@@ -408,8 +405,6 @@ int mlx4_en_create_rx_ring(struct mlx4_en_priv *priv,
 	*pring = ring;
 	return 0;
 
-err_hwq:
-	mlx4_free_hwq_res(mdev->dev, &ring->wqres, ring->buf_size);
 err_info:
 	vfree(ring->rx_info);
 	ring->rx_info = NULL;
@@ -513,15 +508,11 @@ void mlx4_en_destroy_rx_ring(struct mlx4_en_priv *priv,
 	struct mlx4_en_dev *mdev = priv->mdev;
 	struct mlx4_en_rx_ring *ring = *pring;
 
-	mlx4_en_unmap_buffer(&ring->wqres.buf);
 	mlx4_free_hwq_res(mdev->dev, &ring->wqres, size * stride + TXBB_SIZE);
 	vfree(ring->rx_info);
 	ring->rx_info = NULL;
 	kfree(ring);
 	*pring = NULL;
-#ifdef CONFIG_RFS_ACCEL
-	mlx4_en_cleanup_filters(priv);
-#endif
 }
 
 void mlx4_en_deactivate_rx_ring(struct mlx4_en_priv *priv,
@@ -724,7 +715,7 @@ static int check_csum(struct mlx4_cqe *cqe, struct sk_buff *skb, void *va,
 
 	hw_checksum = csum_unfold((__force __sum16)cqe->checksum);
 
-	if (cqe->vlan_my_qpn & cpu_to_be32(MLX4_CQE_VLAN_PRESENT_MASK) &&
+	if (cqe->vlan_my_qpn & cpu_to_be32(MLX4_CQE_CVLAN_PRESENT_MASK) &&
 	    !(dev_features & NETIF_F_HW_VLAN_CTAG_RX)) {
 		hw_checksum = get_fixed_vlan_csum(hw_checksum, hdr);
 		hdr += sizeof(struct vlan_hdr);
@@ -872,10 +863,8 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 		 * - TCP/IP (v4)
 		 * - without IP options
 		 * - not an IP fragment
-		 * - no LLS polling in progress
 		 */
-		if (!mlx4_en_cq_busy_polling(cq) &&
-		    (dev->features & NETIF_F_GRO)) {
+		if (dev->features & NETIF_F_GRO) {
 			struct sk_buff *gro_skb = napi_get_frags(&cq->napi);
 			if (!gro_skb)
 				goto next;
@@ -905,20 +894,27 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 				gro_skb->csum_level = 1;
 
 			if ((cqe->vlan_my_qpn &
-			    cpu_to_be32(MLX4_CQE_VLAN_PRESENT_MASK)) &&
+			    cpu_to_be32(MLX4_CQE_CVLAN_PRESENT_MASK)) &&
 			    (dev->features & NETIF_F_HW_VLAN_CTAG_RX)) {
 				u16 vid = be16_to_cpu(cqe->sl_vid);
 
 				__vlan_hwaccel_put_tag(gro_skb, htons(ETH_P_8021Q), vid);
+			} else if ((be32_to_cpu(cqe->vlan_my_qpn) &
+				  MLX4_CQE_SVLAN_PRESENT_MASK) &&
+				 (dev->features & NETIF_F_HW_VLAN_STAG_RX)) {
+				__vlan_hwaccel_put_tag(gro_skb,
+						       htons(ETH_P_8021AD),
+						       be16_to_cpu(cqe->sl_vid));
 			}
 
 			if (dev->features & NETIF_F_RXHASH)
 				skb_set_hash(gro_skb,
 					     be32_to_cpu(cqe->immed_rss_invalid),
-					     PKT_HASH_TYPE_L3);
+					     (ip_summed == CHECKSUM_UNNECESSARY) ?
+						PKT_HASH_TYPE_L4 :
+						PKT_HASH_TYPE_L3);
 
 			skb_record_rx_queue(gro_skb, cq->ring);
-			skb_mark_napi_id(gro_skb, &cq->napi);
 
 			if (ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL) {
 				timestamp = mlx4_en_get_cqe_ts(cqe);
@@ -934,7 +930,7 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 		/* GRO not possible, complete processing here */
 		skb = mlx4_en_rx_skb(priv, rx_desc, frags, length);
 		if (!skb) {
-			priv->stats.rx_dropped++;
+			ring->dropped++;
 			goto next;
 		}
 
@@ -961,12 +957,19 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 		if (dev->features & NETIF_F_RXHASH)
 			skb_set_hash(skb,
 				     be32_to_cpu(cqe->immed_rss_invalid),
-				     PKT_HASH_TYPE_L3);
+				     (ip_summed == CHECKSUM_UNNECESSARY) ?
+					PKT_HASH_TYPE_L4 :
+					PKT_HASH_TYPE_L3);
 
 		if ((be32_to_cpu(cqe->vlan_my_qpn) &
-		    MLX4_CQE_VLAN_PRESENT_MASK) &&
+		    MLX4_CQE_CVLAN_PRESENT_MASK) &&
 		    (dev->features & NETIF_F_HW_VLAN_CTAG_RX))
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), be16_to_cpu(cqe->sl_vid));
+		else if ((be32_to_cpu(cqe->vlan_my_qpn) &
+			  MLX4_CQE_SVLAN_PRESENT_MASK) &&
+			 (dev->features & NETIF_F_HW_VLAN_STAG_RX))
+			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021AD),
+					       be16_to_cpu(cqe->sl_vid));
 
 		if (ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL) {
 			timestamp = mlx4_en_get_cqe_ts(cqe);
@@ -974,13 +977,7 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 					       timestamp);
 		}
 
-		skb_mark_napi_id(skb, &cq->napi);
-
-		if (!mlx4_en_cq_busy_polling(cq))
-			napi_gro_receive(&cq->napi, skb);
-		else
-			netif_receive_skb(skb);
-
+		napi_gro_receive(&cq->napi, skb);
 next:
 		for (nr = 0; nr < priv->num_frags; nr++)
 			mlx4_en_free_frag(priv, frags, nr);
@@ -1022,12 +1019,7 @@ int mlx4_en_poll_rx_cq(struct napi_struct *napi, int budget)
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	int done;
 
-	if (!mlx4_en_cq_lock_napi(cq))
-		return budget;
-
 	done = mlx4_en_process_rx_cq(dev, cq, budget);
-
-	mlx4_en_cq_unlock_napi(cq);
 
 	/* If we used up all the quota - we're probably not done yet... */
 #ifndef CONFIG_GENERIC_HARDIRQS
@@ -1080,7 +1072,10 @@ static const int frag_sizes[] = {
 void mlx4_en_calc_rx_buf(struct net_device *dev)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
-	int eff_mtu = dev->mtu + ETH_HLEN + VLAN_HLEN;
+	/* VLAN_HLEN is added twice,to support skb vlan tagged with multiple
+	 * headers. (For example: ETH_P_8021Q and ETH_P_8021AD).
+	 */
+	int eff_mtu = dev->mtu + ETH_HLEN + (2 * VLAN_HLEN);
 	int buf_size = 0;
 	int i = 0;
 
@@ -1265,8 +1260,6 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
 		rss_context->hash_fn = MLX4_RSS_HASH_TOP;
 		memcpy(rss_context->rss_key, priv->rss_key,
 		       MLX4_EN_RSS_KEY_SIZE);
-		netdev_rss_key_fill(rss_context->rss_key,
-				    MLX4_EN_RSS_KEY_SIZE);
 	} else {
 		en_err(priv, "Unknown RSS hash function requested\n");
 		err = -EINVAL;

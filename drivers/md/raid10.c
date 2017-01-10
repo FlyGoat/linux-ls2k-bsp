@@ -39,6 +39,7 @@
  *    far_copies (stored in second byte of layout)
  *    far_offset (stored in bit 16 of layout )
  *    use_far_sets (stored in bit 17 of layout )
+ *    use_far_sets_bugfixed (stored in bit 18 of layout )
  *
  * The data to be stored is divided into chunks using chunksize.  Each device
  * is divided into far_copies sections.   In each section, chunks are laid out
@@ -1141,7 +1142,7 @@ static void raid10_unplug(struct blk_plug_cb *cb, bool from_schedule)
 	kfree(plug);
 }
 
-static void make_request(struct mddev *mddev, struct bio * bio)
+static void raid10_make_request(struct mddev *mddev, struct bio * bio)
 {
 	struct r10conf *conf = mddev->private;
 	struct r10bio *r10_bio;
@@ -1197,8 +1198,8 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		conf->nr_waiting++;
 		spin_unlock_irq(&conf->resync_lock);
 
-		make_request(mddev, &bp->bio1);
-		make_request(mddev, &bp->bio2);
+		raid10_make_request(mddev, &bp->bio1);
+		raid10_make_request(mddev, &bp->bio2);
 
 		spin_lock_irq(&conf->resync_lock);
 		conf->nr_waiting--;
@@ -1590,7 +1591,7 @@ retry_write:
 	wake_up(&conf->wait_barrier);
 }
 
-static void status(struct seq_file *seq, struct mddev *mddev)
+static void raid10_status(struct seq_file *seq, struct mddev *mddev)
 {
 	struct r10conf *conf = mddev->private;
 	int i;
@@ -1604,6 +1605,8 @@ static void status(struct seq_file *seq, struct mddev *mddev)
 			seq_printf(seq, " %d offset-copies", conf->geo.far_copies);
 		else
 			seq_printf(seq, " %d far-copies", conf->geo.far_copies);
+		if (conf->geo.far_set_size != conf->geo.raid_disks)
+			seq_printf(seq, " %d devices per set", conf->geo.far_set_size);
 	}
 	seq_printf(seq, " [%d/%d] [", conf->geo.raid_disks,
 					conf->geo.raid_disks - mddev->degraded);
@@ -1666,7 +1669,7 @@ static int enough(struct r10conf *conf, int ignore)
 		_enough(conf, 1, ignore);
 }
 
-static void error(struct mddev *mddev, struct md_rdev *rdev)
+static void raid10_error(struct mddev *mddev, struct md_rdev *rdev)
 {
 	char b[BDEVNAME_SIZE];
 	struct r10conf *conf = mddev->private;
@@ -1803,6 +1806,9 @@ static int raid10_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 	if (rdev->saved_raid_disk < 0 && !_enough(conf, 1, -1))
 		return -EINVAL;
 
+	if (md_integrity_add_rdev(rdev, mddev))
+		return -ENXIO;
+
 	if (rdev->raid_disk >= 0)
 		first = last = rdev->raid_disk;
 
@@ -1862,7 +1868,6 @@ static int raid10_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 		unfreeze_array(conf);
 		clear_bit(Unmerged, &rdev->flags);
 	}
-	md_integrity_add_rdev(rdev, mddev);
 	if (mddev->queue && blk_queue_discard(bdev_get_queue(rdev->bdev)))
 		queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, mddev->queue);
 
@@ -2068,6 +2073,8 @@ static void sync_request_write(struct mddev *mddev, struct r10bio *r10_bio)
 
 	first = i;
 	fbio = r10_bio->devs[i].bio;
+	fbio->bi_size = r10_bio->sectors << 9;
+	fbio->bi_idx = 0;
 
 	vcnt = (r10_bio->sectors + (PAGE_SIZE >> 9) - 1) >> (PAGE_SHIFT - 9);
 	/* now find blocks with errors */
@@ -2111,7 +2118,7 @@ static void sync_request_write(struct mddev *mddev, struct r10bio *r10_bio)
 		bio_reset(tbio);
 
 		tbio->bi_vcnt = vcnt;
-		tbio->bi_size = r10_bio->sectors << 9;
+		tbio->bi_size = fbio->bi_size;
 		tbio->bi_rw = WRITE;
 		tbio->bi_private = r10_bio;
 		tbio->bi_sector = r10_bio->devs[i].addr;
@@ -2798,6 +2805,7 @@ static void handle_write_completed(struct r10conf *conf, struct r10bio *r10_bio)
 		if (fail) {
 			spin_lock_irq(&conf->device_lock);
 			list_add(&r10_bio->retry_list, &conf->bio_end_io_list);
+			conf->nr_queued++;
 			spin_unlock_irq(&conf->device_lock);
 			md_wakeup_thread(conf->mddev->thread);
 		} else {
@@ -2825,8 +2833,10 @@ static void raid10d(struct md_thread *thread)
 		LIST_HEAD(tmp);
 		spin_lock_irqsave(&conf->device_lock, flags);
 		if (!test_bit(MD_CHANGE_PENDING, &mddev->flags)) {
-			list_add(&tmp, &conf->bio_end_io_list);
-			list_del_init(&conf->bio_end_io_list);
+			while (!list_empty(&conf->bio_end_io_list)) {
+				list_move(conf->bio_end_io_list.prev, &tmp);
+				conf->nr_queued--;
+			}
 		}
 		spin_unlock_irqrestore(&conf->device_lock, flags);
 		while (!list_empty(&tmp)) {
@@ -2936,7 +2946,7 @@ static int init_resync(struct r10conf *conf)
  *
  */
 
-static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
+static sector_t raid10_sync_request(struct mddev *mddev, sector_t sector_nr,
 			     int *skipped)
 {
 	struct r10conf *conf = mddev->private;
@@ -3042,6 +3052,13 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
 	if (conf->geo.near_copies < conf->geo.raid_disks &&
 	    max_sector > (sector_nr | chunk_mask))
 		max_sector = (sector_nr | chunk_mask) + 1;
+
+	/*
+	 * If there is non-resync activity waiting for a turn, then let it
+	 * though before starting on this new sync request.
+	 */
+	if (conf->nr_waiting)
+		schedule_timeout_uninterruptible(1);
 
 	/* Again, very different code for resync and recovery.
 	 * Both must result in an r10bio with a list of bios that
@@ -3533,7 +3550,7 @@ static int setup_geo(struct geom *geo, struct mddev *mddev, enum geo_type new)
 		disks = mddev->raid_disks + mddev->delta_disks;
 		break;
 	}
-	if (layout >> 18)
+	if (layout >> 19)
 		return -1;
 	if (chunk < (PAGE_SIZE >> 9) ||
 	    !is_power_of_2(chunk))
@@ -3545,7 +3562,22 @@ static int setup_geo(struct geom *geo, struct mddev *mddev, enum geo_type new)
 	geo->near_copies = nc;
 	geo->far_copies = fc;
 	geo->far_offset = fo;
-	geo->far_set_size = (layout & (1<<17)) ? disks / fc : disks;
+	switch (layout >> 17) {
+	case 0:	/* original layout.  simple but not always optimal */
+		geo->far_set_size = disks;
+		break;
+	case 1: /* "improved" layout which was buggy.  Hopefully no-one is
+		 * actually using this, but leave code here just in case.*/
+		geo->far_set_size = disks/fc;
+		WARN(geo->far_set_size < fc,
+		     "This RAID10 layout does not provide data safety - please backup and create new array\n");
+		break;
+	case 2: /* "improved" layout fixed to match documentation */
+		geo->far_set_size = fc * nc;
+		break;
+	default: /* Not a valid layout */
+		return -1;
+	}
 	geo->chunk_mask = chunk - 1;
 	geo->chunk_shift = ffz(~chunk);
 	return nc*fc;
@@ -3612,6 +3644,7 @@ static struct r10conf *setup_conf(struct mddev *mddev)
 			/* far_copies must be 1 */
 			conf->prev.stride = conf->dev_sectors;
 	}
+	conf->reshape_safe = conf->reshape_progress;
 	spin_lock_init(&conf->device_lock);
 	INIT_LIST_HEAD(&conf->retry_list);
 	INIT_LIST_HEAD(&conf->bio_end_io_list);
@@ -3631,8 +3664,7 @@ static struct r10conf *setup_conf(struct mddev *mddev)
 		printk(KERN_ERR "md/raid10:%s: couldn't allocate memory.\n",
 		       mdname(mddev));
 	if (conf) {
-		if (conf->r10bio_pool)
-			mempool_destroy(conf->r10bio_pool);
+		mempool_destroy(conf->r10bio_pool);
 		kfree(conf->mirrors);
 		safe_put_page(conf->tmppage);
 		kfree(conf);
@@ -3640,7 +3672,7 @@ static struct r10conf *setup_conf(struct mddev *mddev)
 	return ERR_PTR(err);
 }
 
-static int run(struct mddev *mddev)
+static int raid10_run(struct mddev *mddev)
 {
 	struct r10conf *conf;
 	int i, disk_idx, chunk_size;
@@ -3817,7 +3849,6 @@ static int run(struct mddev *mddev)
 		}
 		conf->offset_diff = min_offset_diff;
 
-		conf->reshape_safe = conf->reshape_progress;
 		clear_bit(MD_RECOVERY_SYNC, &mddev->recovery);
 		clear_bit(MD_RECOVERY_CHECK, &mddev->recovery);
 		set_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
@@ -3830,8 +3861,7 @@ static int run(struct mddev *mddev)
 
 out_free_conf:
 	md_unregister_thread(&mddev->thread);
-	if (conf->r10bio_pool)
-		mempool_destroy(conf->r10bio_pool);
+	mempool_destroy(conf->r10bio_pool);
 	safe_put_page(conf->tmppage);
 	kfree(conf->mirrors);
 	kfree(conf);
@@ -3844,8 +3874,7 @@ static void raid10_free(struct mddev *mddev, void *priv)
 {
 	struct r10conf *conf = priv;
 
-	if (conf->r10bio_pool)
-		mempool_destroy(conf->r10bio_pool);
+	mempool_destroy(conf->r10bio_pool);
 	safe_put_page(conf->tmppage);
 	kfree(conf->mirrors);
 	kfree(conf->mirrors_old);
@@ -3901,8 +3930,10 @@ static int raid10_resize(struct mddev *mddev, sector_t sectors)
 			return ret;
 	}
 	md_set_array_sectors(mddev, size);
-	set_capacity(mddev->gendisk, mddev->array_sectors);
-	revalidate_disk(mddev->gendisk);
+	if (mddev->queue) {
+		set_capacity(mddev->gendisk, mddev->array_sectors);
+		revalidate_disk(mddev->gendisk);
+	}
 	if (sectors > mddev->dev_sectors &&
 	    mddev->recovery_cp > oldsize) {
 		mddev->recovery_cp = oldsize;
@@ -4160,6 +4191,7 @@ static int raid10_start_reshape(struct mddev *mddev)
 		conf->reshape_progress = size;
 	} else
 		conf->reshape_progress = 0;
+	conf->reshape_safe = conf->reshape_progress;
 	spin_unlock_irq(&conf->device_lock);
 
 	if (mddev->delta_disks && mddev->bitmap) {
@@ -4227,6 +4259,7 @@ abort:
 		rdev->new_data_offset = rdev->data_offset;
 	smp_wmb();
 	conf->reshape_progress = MaxSector;
+	conf->reshape_safe = MaxSector;
 	mddev->reshape_position = MaxSector;
 	spin_unlock_irq(&conf->device_lock);
 	return ret;
@@ -4270,7 +4303,7 @@ static sector_t reshape_request(struct mddev *mddev, sector_t sector_nr,
 	 * at a time, possibly less if that exceeds RESYNC_PAGES,
 	 * or we hit a bad block or something.
 	 * This might mean we pause for normal IO in the middle of
-	 * a chunk, but that is not a problem was mddev->reshape_position
+	 * a chunk, but that is not a problem as mddev->reshape_position
 	 * can record any location.
 	 *
 	 * If we will want to write to a location that isn't
@@ -4294,7 +4327,7 @@ static sector_t reshape_request(struct mddev *mddev, sector_t sector_nr,
 	 *
 	 * In all this the minimum difference in data offsets
 	 * (conf->offset_diff - always positive) allows a bit of slack,
-	 * so next can be after 'safe', but not by more than offset_disk
+	 * so next can be after 'safe', but not by more than offset_diff
 	 *
 	 * We need to prepare all the bios here before we start any IO
 	 * to ensure the size we choose is acceptable to all devices.
@@ -4580,6 +4613,7 @@ static void end_reshape(struct r10conf *conf)
 	md_finish_reshape(conf->mddev);
 	smp_wmb();
 	conf->reshape_progress = MaxSector;
+	conf->reshape_safe = MaxSector;
 	spin_unlock_irq(&conf->device_lock);
 
 	/* read-ahead size must cover two whole stripes, which is
@@ -4709,8 +4743,10 @@ static void raid10_finish_reshape(struct mddev *mddev)
 			set_bit(MD_RECOVERY_NEEDED, &mddev->recovery);
 		}
 		mddev->resync_max_sectors = size;
-		set_capacity(mddev->gendisk, mddev->array_sectors);
-		revalidate_disk(mddev->gendisk);
+		if (mddev->queue) {
+			set_capacity(mddev->gendisk, mddev->array_sectors);
+			revalidate_disk(mddev->gendisk);
+		}
 	} else {
 		int d;
 		for (d = conf->geo.raid_disks ;
@@ -4736,15 +4772,15 @@ static struct md_personality raid10_personality =
 	.name		= "raid10",
 	.level		= 10,
 	.owner		= THIS_MODULE,
-	.make_request	= make_request,
-	.run		= run,
+	.make_request	= raid10_make_request,
+	.run		= raid10_run,
 	.free		= raid10_free,
-	.status		= status,
-	.error_handler	= error,
+	.status		= raid10_status,
+	.error_handler	= raid10_error,
 	.hot_add_disk	= raid10_add_disk,
 	.hot_remove_disk= raid10_remove_disk,
 	.spare_active	= raid10_spare_active,
-	.sync_request	= sync_request,
+	.sync_request	= raid10_sync_request,
 	.quiesce	= raid10_quiesce,
 	.size		= raid10_size,
 	.resize		= raid10_resize,

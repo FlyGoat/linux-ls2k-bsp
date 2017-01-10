@@ -355,7 +355,7 @@ static void tcp_grow_window(struct sock *sk, const struct sk_buff *skb)
 	/* Check #1 */
 	if (tp->rcv_ssthresh < tp->window_clamp &&
 	    (int)tp->rcv_ssthresh < tcp_space(sk) &&
-	    !sk_under_memory_pressure(sk)) {
+	    !tcp_under_memory_pressure(sk)) {
 		int incr;
 
 		/* Check #2. Increase window, if skb with such overhead
@@ -442,7 +442,7 @@ static void tcp_clamp_window(struct sock *sk)
 
 	if (sk->sk_rcvbuf < sysctl_tcp_rmem[2] &&
 	    !(sk->sk_userlocks & SOCK_RCVBUF_LOCK) &&
-	    !sk_under_memory_pressure(sk) &&
+	    !tcp_under_memory_pressure(sk) &&
 	    sk_memory_allocated(sk) < sk_prot_mem_limits(sk, 0)) {
 		sk->sk_rcvbuf = min(atomic_read(&sk->sk_rmem_alloc),
 				    sysctl_tcp_rmem[2]);
@@ -2213,8 +2213,7 @@ static void tcp_mark_head_lost(struct sock *sk, int packets, int mark_head)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *skb;
-	int cnt, oldcnt;
-	int err;
+	int cnt, oldcnt, lost;
 	unsigned int mss;
 	/* Use SACK to deduce losses of new sequences sent during recovery */
 	const u32 loss_high = tcp_is_sack(tp) ?  tp->snd_nxt : tp->high_seq;
@@ -2254,8 +2253,10 @@ static void tcp_mark_head_lost(struct sock *sk, int packets, int mark_head)
 				break;
 
 			mss = skb_shinfo(skb)->gso_size;
-			err = tcp_fragment(sk, skb, (packets - oldcnt) * mss, mss);
-			if (err < 0)
+			/* If needed, chop off the prefix to mark as lost. */
+			lost = (packets - oldcnt) * mss;
+			if (lost < skb->len &&
+			    tcp_fragment(sk, skb, lost, mss) < 0)
 				break;
 			cnt = packets;
 		}
@@ -3255,6 +3256,28 @@ static inline bool tcp_may_update_window(const struct tcp_sock *tp,
 		(ack_seq == tp->snd_wl1 && nwin > tp->snd_wnd);
 }
 
+/* If we update tp->snd_una, also update tp->bytes_acked */
+static void tcp_snd_una_update(struct tcp_sock *tp, u32 ack)
+{
+	u32 delta = ack - tp->snd_una;
+
+	u64_stats_update_begin(&tp->syncp);
+	tp->bytes_acked += delta;
+	u64_stats_update_end(&tp->syncp);
+	tp->snd_una = ack;
+}
+
+/* If we update tp->rcv_nxt, also update tp->bytes_received */
+static void tcp_rcv_nxt_update(struct tcp_sock *tp, u32 seq)
+{
+	u32 delta = seq - tp->rcv_nxt;
+
+	u64_stats_update_begin(&tp->syncp);
+	tp->bytes_received += delta;
+	u64_stats_update_end(&tp->syncp);
+	tp->rcv_nxt = seq;
+}
+
 /* Update our send window.
  *
  * Window update algorithm, described in RFC793/RFC1122 (used in linux-2.2
@@ -3290,7 +3313,7 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 		}
 	}
 
-	tp->snd_una = ack;
+	tcp_snd_una_update(tp, ack);
 
 	return flag;
 }
@@ -3479,7 +3502,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		 * Note, we use the fact that SND.UNA>=SND.WL2.
 		 */
 		tcp_update_wl(tp, ack_seq);
-		tp->snd_una = ack;
+		tcp_snd_una_update(tp, ack);
 		flag |= FLAG_WIN_UPDATE;
 
 		tcp_in_ack_event(sk, CA_ACK_WIN_UPDATE);
@@ -4215,7 +4238,7 @@ static void tcp_ofo_queue(struct sock *sk)
 
 		tail = skb_peek_tail(&sk->sk_receive_queue);
 		eaten = tail && tcp_try_coalesce(sk, tail, skb, &fragstolen);
-		tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+		tcp_rcv_nxt_update(tp, TCP_SKB_CB(skb)->end_seq);
 		if (!eaten)
 			__skb_queue_tail(&sk->sk_receive_queue, skb);
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
@@ -4383,7 +4406,7 @@ static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb, int 
 	__skb_pull(skb, hdrlen);
 	eaten = (tail &&
 		 tcp_try_coalesce(sk, tail, skb, fragstolen)) ? 1 : 0;
-	tcp_sk(sk)->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+	tcp_rcv_nxt_update(tcp_sk(sk), TCP_SKB_CB(skb)->end_seq);
 	if (!eaten) {
 		__skb_queue_tail(&sk->sk_receive_queue, skb);
 		skb_set_owner_r(skb, sk);
@@ -4470,13 +4493,15 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 
 		if (eaten <= 0) {
 queue_and_out:
-			if (eaten < 0 &&
-			    tcp_try_rmem_schedule(sk, skb, skb->truesize))
-				goto drop;
-
+			if (eaten < 0) {
+				if (skb_queue_len(&sk->sk_receive_queue) == 0)
+					sk_forced_mem_schedule(sk, skb->truesize);
+				else if (tcp_try_rmem_schedule(sk, skb, skb->truesize))
+					goto drop;
+			}
 			eaten = tcp_queue_rcv(sk, skb, 0, &fragstolen);
 		}
-		tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+		tcp_rcv_nxt_update(tp, TCP_SKB_CB(skb)->end_seq);
 		if (skb->len)
 			tcp_event_data_recv(sk, skb);
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
@@ -4744,7 +4769,7 @@ static int tcp_prune_queue(struct sock *sk)
 
 	if (atomic_read(&sk->sk_rmem_alloc) >= sk->sk_rcvbuf)
 		tcp_clamp_window(sk);
-	else if (sk_under_memory_pressure(sk))
+	else if (tcp_under_memory_pressure(sk))
 		tp->rcv_ssthresh = min(tp->rcv_ssthresh, 4U * tp->advmss);
 
 	tcp_collapse_ofo_queue(sk);
@@ -4788,7 +4813,7 @@ static bool tcp_should_expand_sndbuf(const struct sock *sk)
 		return false;
 
 	/* If we are under global TCP memory pressure, do not expand.  */
-	if (sk_under_memory_pressure(sk))
+	if (tcp_under_memory_pressure(sk))
 		return false;
 
 	/* If we are under soft global TCP memory pressure, do not expand.  */
@@ -5223,7 +5248,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 					tcp_rcv_rtt_measure_ts(sk, skb);
 
 					__skb_pull(skb, tcp_header_len);
-					tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+					tcp_rcv_nxt_update(tp, TCP_SKB_CB(skb)->end_seq);
 					NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPHPHITSTOUSER);
 					eaten = 1;
 				}
@@ -5577,6 +5602,7 @@ discard:
 		}
 
 		tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
+		tp->copied_seq = tp->rcv_nxt;
 		tp->rcv_wup = TCP_SKB_CB(skb)->seq + 1;
 
 		/* RFC1323: The window in SYN & SYN/ACK segments is
@@ -5991,6 +6017,8 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	req = inet_reqsk_alloc(rsk_ops);
 	if (!req)
 		goto drop;
+
+	inet_rsk(req)->ireq_family = sk->sk_family;
 
 	tcp_rsk(req)->af_specific = af_ops;
 

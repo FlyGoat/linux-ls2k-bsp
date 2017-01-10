@@ -46,19 +46,7 @@
 //#define cfg_dbg(fmt...)	printk(fmt)
 
 #ifdef CONFIG_PCI_MSI
-static int pnv_msi_check_device(struct pci_dev* pdev, int nvec, int type)
-{
-	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
-	struct pnv_phb *phb = hose->private_data;
-	struct pci_dn *pdn = pci_get_pdn(pdev);
-
-	if (pdn && pdn->force_32bit_msi && !phb->msi32_support)
-		return -ENODEV;
-
-	return (phb && phb->msi_bmp.bitmap) ? 0 : -ENODEV;
-}
-
-static int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type)
+int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type)
 {
 	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
 	struct pnv_phb *phb = hose->private_data;
@@ -68,7 +56,10 @@ static int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type)
 	unsigned int virq;
 	int rc;
 
-	if (WARN_ON(!phb))
+	if (WARN_ON(!phb) || !phb->msi_bmp.bitmap)
+		return -ENODEV;
+
+	if (pdev->no_64bit_msi && !phb->msi32_support)
 		return -ENODEV;
 
 	list_for_each_entry(entry, &pdev->msi_list, list) {
@@ -104,7 +95,7 @@ static int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type)
 	return 0;
 }
 
-static void pnv_teardown_msi_irqs(struct pci_dev *pdev)
+void pnv_teardown_msi_irqs(struct pci_dev *pdev)
 {
 	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
 	struct pnv_phb *phb = hose->private_data;
@@ -610,6 +601,9 @@ int pnv_tce_build(struct iommu_table *tbl, long index, long npages,
 	u64 rpn = __pa(uaddr) >> tbl->it_page_shift;
 	long i;
 
+	if (proto_tce & TCE_PCI_WRITE)
+		proto_tce |= TCE_PCI_READ;
+
 	for (i = 0; i < npages; i++) {
 		unsigned long newtce = proto_tce |
 			((rpn + i) << tbl->it_page_shift);
@@ -630,6 +624,9 @@ int pnv_tce_xchg(struct iommu_table *tbl, long index,
 	unsigned long idx = index - tbl->it_offset;
 
 	BUG_ON(*hpa & ~IOMMU_PAGE_MASK(tbl));
+
+	if (newtce & TCE_PCI_WRITE)
+		newtce |= TCE_PCI_READ;
 
 	oldtce = xchg(pnv_tce(tbl, idx), cpu_to_be64(newtce));
 	*hpa = be64_to_cpu(oldtce) & ~(TCE_PCI_READ | TCE_PCI_WRITE);
@@ -744,7 +741,7 @@ void pnv_pci_setup_iommu_table(struct iommu_table *tbl,
 	tbl->it_type = TCE_PCI;
 }
 
-static void pnv_pci_dma_dev_setup(struct pci_dev *pdev)
+void pnv_pci_dma_dev_setup(struct pci_dev *pdev)
 {
 	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
 	struct pnv_phb *phb = hose->private_data;
@@ -771,26 +768,24 @@ static void pnv_pci_dma_dev_setup(struct pci_dev *pdev)
 		phb->dma_dev_setup(phb, pdev);
 }
 
-int pnv_pci_dma_set_mask(struct pci_dev *pdev, u64 dma_mask)
+u64 pnv_pci_dma_get_required_mask(struct pci_dev *pdev)
 {
 	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
 	struct pnv_phb *phb = hose->private_data;
 
-	if (phb && phb->dma_set_mask)
-		return phb->dma_set_mask(phb, pdev, dma_mask);
-	return __dma_set_mask(&pdev->dev, dma_mask);
+	if (phb && phb->dma_get_required_mask)
+		return phb->dma_get_required_mask(phb, pdev);
+
+	return __dma_get_required_mask(&pdev->dev);
 }
 
 void pnv_pci_shutdown(void)
 {
 	struct pci_controller *hose;
 
-	list_for_each_entry(hose, &hose_list, list_node) {
-		struct pnv_phb *phb = hose->private_data;
-
-		if (phb && phb->shutdown)
-			phb->shutdown(phb);
-	}
+	list_for_each_entry(hose, &hose_list, list_node)
+		if (hose->controller_ops.shutdown)
+			hose->controller_ops.shutdown(hose);
 }
 
 /* Fixup wrong class code in p7ioc and p8 root complex */
@@ -799,35 +794,6 @@ static void pnv_p7ioc_rc_quirk(struct pci_dev *dev)
 	dev->class = PCI_CLASS_BRIDGE_PCI << 8;
 }
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_IBM, 0x3b9, pnv_p7ioc_rc_quirk);
-
-static int pnv_pci_probe_mode(struct pci_bus *bus)
-{
-	struct pci_controller *hose = pci_bus_to_host(bus);
-	const __be64 *tstamp;
-	u64 now, target;
-
-
-	/* We hijack this as a way to ensure we have waited long
-	 * enough since the reset was lifted on the PCI bus
-	 */
-	if (bus != hose->bus)
-		return PCI_PROBE_NORMAL;
-	tstamp = of_get_property(hose->dn, "reset-clear-timestamp", NULL);
-	if (!tstamp || !*tstamp)
-		return PCI_PROBE_NORMAL;
-
-	now = mftb() / tb_ticks_per_usec;
-	target = (be64_to_cpup(tstamp) / tb_ticks_per_usec)
-		+ PCI_RESET_DELAY_US;
-
-	pr_devel("pci %04d: Reset target: 0x%llx now: 0x%llx\n",
-		 hose->global_number, target, now);
-
-	if (now < target)
-		msleep((target - now + 999) / 1000);
-
-	return PCI_PROBE_NORMAL;
-}
 
 void __init pnv_pci_init(void)
 {
@@ -858,20 +824,15 @@ void __init pnv_pci_init(void)
 	for_each_compatible_node(np, NULL, "ibm,ioda2-phb")
 		pnv_pci_init_ioda2_phb(np);
 
+	/* Look for NPU PHBs */
+	for_each_compatible_node(np, NULL, "ibm,ioda2-npu-phb")
+		pnv_pci_init_npu_phb(np);
+
 	/* Setup the linkage between OF nodes and PHBs */
 	pci_devs_phb_init();
 
 	/* Configure IOMMU DMA hooks */
-	ppc_md.pci_dma_dev_setup = pnv_pci_dma_dev_setup;
-	ppc_md.pci_probe_mode = pnv_pci_probe_mode;
 	set_pci_dma_ops(&dma_iommu_ops);
-
-	/* Configure MSIs */
-#ifdef CONFIG_PCI_MSI
-	ppc_md.msi_check_device = pnv_msi_check_device;
-	ppc_md.setup_msi_irqs = pnv_setup_msi_irqs;
-	ppc_md.teardown_msi_irqs = pnv_teardown_msi_irqs;
-#endif
 }
 
 machine_subsys_initcall_sync(powernv, tce_iommu_bus_notifier_init);

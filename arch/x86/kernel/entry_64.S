@@ -984,11 +984,18 @@ apicinterrupt X86_PLATFORM_IPI_VECTOR \
 #ifdef CONFIG_HAVE_KVM
 apicinterrupt3 POSTED_INTR_VECTOR \
 	kvm_posted_intr_ipi smp_kvm_posted_intr_ipi
+apicinterrupt3 POSTED_INTR_WAKEUP_VECTOR \
+	kvm_posted_intr_wakeup_ipi smp_kvm_posted_intr_wakeup_ipi
 #endif
 
 #ifdef CONFIG_X86_MCE_THRESHOLD
 apicinterrupt THRESHOLD_APIC_VECTOR \
 	threshold_interrupt smp_threshold_interrupt
+#endif
+
+#ifdef CONFIG_X86_MCE_AMD
+apicinterrupt DEFERRED_ERROR_VECTOR \
+	deferred_error_interrupt smp_deferred_error_interrupt
 #endif
 
 #ifdef CONFIG_X86_THERMAL_VECTOR

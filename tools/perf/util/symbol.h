@@ -34,8 +34,8 @@
 #endif
 
 #ifdef HAVE_LIBELF_SUPPORT
-extern Elf_Scn *elf_section_by_name(Elf *elf, GElf_Ehdr *ep,
-				GElf_Shdr *shp, const char *name, size_t *idx);
+Elf_Scn *elf_section_by_name(Elf *elf, GElf_Ehdr *ep,
+			     GElf_Shdr *shp, const char *name, size_t *idx);
 #endif
 
 #ifndef DMGL_PARAMS
@@ -84,6 +84,7 @@ struct symbol_conf {
 	unsigned short	priv_size;
 	unsigned short	nr_events;
 	bool		try_vmlinux_path,
+			force,
 			ignore_vmlinux,
 			ignore_vmlinux_buildid,
 			show_kernel_path,
@@ -105,7 +106,12 @@ struct symbol_conf {
 			demangle_kernel,
 			filter_relative,
 			show_hist_headers,
-			branch_callstack;
+			branch_callstack,
+			has_filter,
+			show_ref_callgraph,
+			hide_unresolved,
+			raw_trace,
+			report_hierarchy;
 	const char	*vmlinux_name,
 			*kallsyms_name,
 			*source_prefix,
@@ -158,8 +164,6 @@ struct ref_reloc_sym {
 struct map_symbol {
 	struct map    *map;
 	struct symbol *sym;
-	bool	      unfolded;
-	bool	      has_children;
 };
 
 struct addr_map_symbol {
@@ -191,6 +195,7 @@ struct addr_location {
 	u8	      filtered;
 	u8	      cpumode;
 	s32	      cpu;
+	s32	      socket;
 };
 
 struct symsrc {
@@ -252,8 +257,8 @@ int modules__parse(const char *filename, void *arg,
 int filename__read_debuglink(const char *filename, char *debuglink,
 			     size_t size);
 
-struct perf_session_env;
-int symbol__init(struct perf_session_env *env);
+struct perf_env;
+int symbol__init(struct perf_env *env);
 void symbol__exit(void);
 void symbol__elf_init(void);
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, const char *name);

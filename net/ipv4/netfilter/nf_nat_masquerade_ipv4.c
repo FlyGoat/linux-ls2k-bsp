@@ -87,7 +87,7 @@ static int masq_device_event(struct notifier_block *this,
 			     unsigned long event,
 			     void *ptr)
 {
-	const struct net_device *dev = ptr;
+	const struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct net *net = dev_net(dev);
 
 	if (event == NETDEV_DOWN) {
@@ -109,6 +109,7 @@ static int masq_inet_event(struct notifier_block *this,
 			   void *ptr)
 {
 	struct in_device *idev = ((struct in_ifaddr *)ptr)->ifa_dev;
+	struct netdev_notifier_info info;
 
 	/* The masq_dev_notifier will catch the case of the device going
 	 * down.  So if the inetdev is dead and being destroyed we have
@@ -118,7 +119,8 @@ static int masq_inet_event(struct notifier_block *this,
 	if (idev->dead)
 		return NOTIFY_DONE;
 
-	return masq_device_event(this, event, idev->dev);
+	netdev_notifier_info_init(&info, idev->dev);
+	return masq_device_event(this, event, &info);
 }
 
 static struct notifier_block masq_dev_notifier = {
@@ -138,7 +140,7 @@ void nf_nat_masquerade_ipv4_register_notifier(void)
 		return;
 
 	/* Register for device down reports */
-	register_netdevice_notifier(&masq_dev_notifier);
+	register_netdevice_notifier_rh(&masq_dev_notifier);
 	/* Register IP address change reports */
 	register_inetaddr_notifier(&masq_inet_notifier);
 }
@@ -150,7 +152,7 @@ void nf_nat_masquerade_ipv4_unregister_notifier(void)
 	if (atomic_dec_return(&masquerade_notifier_refcount) > 0)
 		return;
 
-	unregister_netdevice_notifier(&masq_dev_notifier);
+	unregister_netdevice_notifier_rh(&masq_dev_notifier);
 	unregister_inetaddr_notifier(&masq_inet_notifier);
 }
 EXPORT_SYMBOL_GPL(nf_nat_masquerade_ipv4_unregister_notifier);

@@ -47,6 +47,16 @@ static DEFINE_MUTEX(xfs_uuid_table_mutex);
 static int xfs_uuid_table_size;
 static uuid_t *xfs_uuid_table;
 
+void
+xfs_uuid_table_free(void)
+{
+	if (xfs_uuid_table_size == 0)
+		return;
+	kmem_free(xfs_uuid_table);
+	xfs_uuid_table = NULL;
+	xfs_uuid_table_size = 0;
+}
+
 /*
  * See if the UUID is unique among mounted XFS filesystems.
  * Mount fails if UUID is nil or a FS with the same UUID is already mounted.
@@ -281,13 +291,15 @@ xfs_readsb(
 	buf_ops = NULL;
 
 	/*
-	 * Allocate a (locked) buffer to hold the superblock.
-	 * This will be kept around at all times to optimize
-	 * access to the superblock.
+	 * Allocate a (locked) buffer to hold the superblock. This will be kept
+	 * around at all times to optimize access to the superblock. Therefore,
+	 * set XBF_NO_IOACCT to make sure it doesn't hold the buftarg count
+	 * elevated.
 	 */
 reread:
 	error = xfs_buf_read_uncached(mp->m_ddev_targp, XFS_SB_DADDR,
-				   BTOBB(sector_size), 0, &bp, buf_ops);
+				      BTOBB(sector_size), XBF_NO_IOACCT, &bp,
+				      buf_ops);
 	if (error) {
 		if (loud)
 			xfs_warn(mp, "SB validate failed with error %d.", error);
@@ -615,14 +627,14 @@ xfs_default_resblks(xfs_mount_t *mp)
  */
 int
 xfs_mountfs(
-	xfs_mount_t	*mp)
+	struct xfs_mount	*mp)
 {
-	xfs_sb_t	*sbp = &(mp->m_sb);
-	xfs_inode_t	*rip;
-	__uint64_t	resblks;
-	uint		quotamount = 0;
-	uint		quotaflags = 0;
-	int		error = 0;
+	struct xfs_sb		*sbp = &(mp->m_sb);
+	struct xfs_inode	*rip;
+	__uint64_t		resblks;
+	uint			quotamount = 0;
+	uint			quotaflags = 0;
+	int			error = 0;
 
 	xfs_sb_mount_common(mp, sbp);
 
@@ -689,13 +701,26 @@ xfs_mountfs(
 
 	xfs_set_maxicount(mp);
 
+	/* enable fail_at_unmount as default */
+	mp->m_fail_unmount = 1;
+
 	error = xfs_sysfs_init(&mp->m_kobj, &xfs_mp_ktype, NULL, mp->m_fsname);
 	if (error)
 		goto out;
 
-	error = xfs_uuid_mount(mp);
+	error = xfs_sysfs_init(&mp->m_stats.xs_kobj, &xfs_stats_ktype,
+			       &mp->m_kobj, "stats");
 	if (error)
 		goto out_remove_sysfs;
+
+	error = xfs_error_sysfs_init(mp);
+	if (error)
+		goto out_del_stats;
+
+
+	error = xfs_uuid_mount(mp);
+	if (error)
+		goto out_remove_error_sysfs;
 
 	/*
 	 * Set the minimum read and write sizes
@@ -722,6 +747,22 @@ xfs_mountfs(
 		new_size *= mp->m_sb.sb_inodesize / XFS_DINODE_MIN_SIZE;
 		if (mp->m_sb.sb_inoalignmt >= XFS_B_TO_FSBT(mp, new_size))
 			mp->m_inode_cluster_size = new_size;
+	}
+
+	/*
+	 * If enabled, sparse inode chunk alignment is expected to match the
+	 * cluster size. Full inode chunk alignment must match the chunk size,
+	 * but that is checked on sb read verification...
+	 */
+	if (xfs_sb_version_hassparseinodes(&mp->m_sb) &&
+	    mp->m_sb.sb_spino_align !=
+			XFS_B_TO_FSBT(mp, mp->m_inode_cluster_size)) {
+		xfs_warn(mp,
+	"Sparse inode block alignment (%u) must match cluster size (%llu).",
+			 mp->m_sb.sb_spino_align,
+			 XFS_B_TO_FSBT(mp, mp->m_inode_cluster_size));
+		error = -EINVAL;
+		goto out_remove_uuid;
 	}
 
 	/*
@@ -783,7 +824,9 @@ xfs_mountfs(
 	}
 
 	/*
-	 * log's mount-time initialization. Perform 1st part recovery if needed
+	 * Log's mount-time initialization. The first part of recovery can place
+	 * some items on the AIL, to be handled when recovery is finished or
+	 * cancelled.
 	 */
 	error = xfs_log_mount(mp, mp->m_logdev_targp,
 			      XFS_FSB_TO_DADDR(mp, sbp->sb_logstart),
@@ -894,14 +937,28 @@ xfs_mountfs(
 	}
 
 	/*
-	 * Finish recovering the file system.  This part needed to be
-	 * delayed until after the root and real-time bitmap inodes
-	 * were consistently read in.
+	 * Finish recovering the file system.  This part needed to be delayed
+	 * until after the root and real-time bitmap inodes were consistently
+	 * read in.
 	 */
 	error = xfs_log_mount_finish(mp);
 	if (error) {
 		xfs_warn(mp, "log mount finish failed");
 		goto out_rtunmount;
+	}
+
+	/*
+	 * Now the log is fully replayed, we can transition to full read-only
+	 * mode for read-only mounts. This will sync all the metadata and clean
+	 * the log so that the recovery we just performed does not have to be
+	 * replayed again on the next mount.
+	 *
+	 * We use the same quiesce mechanism as the rw->ro remount, as they are
+	 * semantically identical operations.
+	 */
+	if ((mp->m_flags & (XFS_MOUNT_RDONLY|XFS_MOUNT_NORECOVERY)) ==
+							XFS_MOUNT_RDONLY) {
+		xfs_quiesce_attr(mp);
 	}
 
 	/*
@@ -939,8 +996,11 @@ xfs_mountfs(
 	xfs_rtunmount_inodes(mp);
  out_rele_rip:
 	IRELE(rip);
+	cancel_delayed_work_sync(&mp->m_reclaim_work);
+	xfs_reclaim_inodes(mp, SYNC_WAIT);
  out_log_dealloc:
-	xfs_log_unmount(mp);
+	mp->m_flags |= XFS_MOUNT_UNMOUNTING;
+	xfs_log_mount_cancel(mp);
  out_fail_wait:
 	if (mp->m_logdev_targp && mp->m_logdev_targp != mp->m_ddev_targp)
 		xfs_wait_buftarg(mp->m_logdev_targp);
@@ -951,6 +1011,10 @@ xfs_mountfs(
 	xfs_da_unmount(mp);
  out_remove_uuid:
 	xfs_uuid_unmount(mp);
+ out_remove_error_sysfs:
+	xfs_error_sysfs_del(mp);
+ out_del_stats:
+	xfs_sysfs_del(&mp->m_stats.xs_kobj);
  out_remove_sysfs:
 	xfs_sysfs_del(&mp->m_kobj);
  out:
@@ -985,6 +1049,14 @@ xfs_unmountfs(
 	 * need to force the log first.
 	 */
 	xfs_log_force(mp, XFS_LOG_SYNC);
+
+	/*
+	 * We now need to tell the world we are unmounting. This will allow
+	 * us to detect that the filesystem is going away and we should error
+	 * out anything that we have been retrying in the background. This will
+	 * prevent neverending retries in AIL pushing from hanging the unmount.
+	 */
+	mp->m_flags |= XFS_MOUNT_UNMOUNTING;
 
 	/*
 	 * Flush all pending changes from the AIL.
@@ -1027,6 +1099,7 @@ xfs_unmountfs(
 		xfs_warn(mp, "Unable to update superblock counters. "
 				"Freespace may not be correct on next mount.");
 
+
 	xfs_log_unmount(mp);
 	xfs_da_unmount(mp);
 	xfs_uuid_unmount(mp);
@@ -1036,6 +1109,8 @@ xfs_unmountfs(
 #endif
 	xfs_free_perag(mp);
 
+	xfs_error_sysfs_del(mp);
+	xfs_sysfs_del(&mp->m_stats.xs_kobj);
 	xfs_sysfs_del(&mp->m_kobj);
 }
 

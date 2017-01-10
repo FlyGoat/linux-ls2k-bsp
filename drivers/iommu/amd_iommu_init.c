@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007-2010 Advanced Micro Devices, Inc.
- * Author: Joerg Roedel <joerg.roedel@amd.com>
+ * Author: Joerg Roedel <jroedel@suse.de>
  *         Leo Duran <leo.duran@amd.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -225,6 +225,7 @@ static enum iommu_init_state init_state = IOMMU_START_STATE;
 
 static int amd_iommu_enable_interrupts(void);
 static int __init iommu_go_to_state(enum iommu_init_state state);
+static void init_device_table_dma(void);
 
 static inline void update_last_devid(u16 devid)
 {
@@ -711,7 +712,7 @@ static void __init set_dev_entry_from_acpi(struct amd_iommu *iommu,
 	set_iommu_for_device(iommu, devid);
 }
 
-static int __init add_special_device(u8 type, u8 id, u16 devid, bool cmd_line)
+static int __init add_special_device(u8 type, u8 id, u16 *devid, bool cmd_line)
 {
 	struct devid_map *entry;
 	struct list_head *list;
@@ -730,6 +731,8 @@ static int __init add_special_device(u8 type, u8 id, u16 devid, bool cmd_line)
 		pr_info("AMD-Vi: Command-line override present for %s id %d - ignoring\n",
 			type == IVHD_SPECIAL_IOAPIC ? "IOAPIC" : "HPET", id);
 
+		*devid = entry->devid;
+
 		return 0;
 	}
 
@@ -738,7 +741,7 @@ static int __init add_special_device(u8 type, u8 id, u16 devid, bool cmd_line)
 		return -ENOMEM;
 
 	entry->id	= id;
-	entry->devid	= devid;
+	entry->devid	= *devid;
 	entry->cmd_line	= cmd_line;
 
 	list_add_tail(&entry->list, list);
@@ -753,7 +756,7 @@ static int __init add_early_maps(void)
 	for (i = 0; i < early_ioapic_map_size; ++i) {
 		ret = add_special_device(IVHD_SPECIAL_IOAPIC,
 					 early_ioapic_map[i].id,
-					 early_ioapic_map[i].devid,
+					 &early_ioapic_map[i].devid,
 					 early_ioapic_map[i].cmd_line);
 		if (ret)
 			return ret;
@@ -762,7 +765,7 @@ static int __init add_early_maps(void)
 	for (i = 0; i < early_hpet_map_size; ++i) {
 		ret = add_special_device(IVHD_SPECIAL_HPET,
 					 early_hpet_map[i].id,
-					 early_hpet_map[i].devid,
+					 &early_hpet_map[i].devid,
 					 early_hpet_map[i].cmd_line);
 		if (ret)
 			return ret;
@@ -977,10 +980,17 @@ static int __init init_iommu_from_acpi(struct amd_iommu *iommu,
 				    PCI_SLOT(devid),
 				    PCI_FUNC(devid));
 
-			set_dev_entry_from_acpi(iommu, devid, e->flags, 0);
-			ret = add_special_device(type, handle, devid, false);
+			ret = add_special_device(type, handle, &devid, false);
 			if (ret)
 				return ret;
+
+			/*
+			 * add_special_device might update the devid in case a
+			 * command-line override is present. So call
+			 * set_dev_entry_from_acpi after add_special_device.
+			 */
+			set_dev_entry_from_acpi(iommu, devid, e->flags, 0);
+
 			break;
 		}
 		default:
@@ -1336,9 +1346,25 @@ static int __init amd_iommu_init_pci(void)
 			break;
 	}
 
-	ret = amd_iommu_init_devices();
+	/*
+	 * Order is important here to make sure any unity map requirements are
+	 * fulfilled. The unity mappings are created and written to the device
+	 * table during the amd_iommu_init_api() call.
+	 *
+	 * After that we call init_device_table_dma() to make sure any
+	 * uninitialized DTE will block DMA, and in the end we flush the caches
+	 * of all IOMMUs to make sure the changes to the device table are
+	 * active.
+	 */
+	ret = amd_iommu_init_api();
 
-	print_iommu_info();
+	init_device_table_dma();
+
+	for_each_iommu(iommu)
+		iommu_flush_all_caches(iommu);
+
+	if (!ret)
+		print_iommu_info();
 
 	return ret;
 }
@@ -1776,8 +1802,6 @@ static bool __init check_ioapic_information(void)
 
 static void __init free_dma_resources(void)
 {
-	amd_iommu_uninit_devices();
-
 	free_pages((unsigned long)amd_iommu_pd_alloc_bitmap,
 		   get_order(MAX_DOMAIN_ID/8));
 
@@ -1965,35 +1989,7 @@ static bool detect_ivrs(void)
 	/* Make sure ACS will be enabled during PCI probe */
 	pci_request_acs();
 
-	if (!disable_irq_remap)
-		amd_iommu_irq_remap = true;
-
 	return true;
-}
-
-static int amd_iommu_init_dma(void)
-{
-	struct amd_iommu *iommu;
-	int ret;
-
-	if (iommu_pass_through)
-		ret = amd_iommu_init_passthrough();
-	else
-		ret = amd_iommu_init_dma_ops();
-
-	if (ret)
-		return ret;
-
-	init_device_table_dma();
-
-	for_each_iommu(iommu)
-		iommu_flush_all_caches(iommu);
-
-	amd_iommu_init_api();
-
-	amd_iommu_init_notifier();
-
-	return 0;
 }
 
 /****************************************************************************
@@ -2035,7 +2031,7 @@ static int __init state_next(void)
 		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_INTERRUPTS_EN;
 		break;
 	case IOMMU_INTERRUPTS_EN:
-		ret = amd_iommu_init_dma();
+		ret = amd_iommu_init_dma_ops();
 		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_DMA_OPS;
 		break;
 	case IOMMU_DMA_OPS:
@@ -2074,12 +2070,14 @@ static int __init iommu_go_to_state(enum iommu_init_state state)
 #ifdef CONFIG_IRQ_REMAP
 int __init amd_iommu_prepare(void)
 {
-	return iommu_go_to_state(IOMMU_ACPI_FINISHED);
-}
+	int ret;
 
-int __init amd_iommu_supported(void)
-{
-	return amd_iommu_irq_remap ? 1 : 0;
+	amd_iommu_irq_remap = true;
+
+	ret = iommu_go_to_state(IOMMU_ACPI_FINISHED);
+	if (ret)
+		return ret;
+	return amd_iommu_irq_remap ? 0 : -ENODEV;
 }
 
 int __init amd_iommu_enable(void)

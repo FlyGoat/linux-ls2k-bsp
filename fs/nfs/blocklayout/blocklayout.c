@@ -230,7 +230,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 	struct parallel_io *par;
 	loff_t f_offset = header->args.offset;
 	size_t bytes_left = header->args.count;
-	unsigned int pg_offset, pg_len;
+	unsigned int pg_offset = header->args.pgbase, pg_len;
 	struct page **pages = header->args.pages;
 	int pg_index = header->args.pgbase >> PAGE_CACHE_SHIFT;
 	const bool is_dio = (header->dreq != NULL);
@@ -263,7 +263,6 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 			extent_length = be.be_length - (isect - be.be_f_offset);
 		}
 
-		pg_offset = f_offset & ~PAGE_CACHE_MASK;
 		if (is_dio) {
 			if (pg_offset + bytes_left > PAGE_CACHE_SIZE)
 				pg_len = PAGE_CACHE_SIZE - pg_offset;
@@ -273,9 +272,6 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 			BUG_ON(pg_offset != 0);
 			pg_len = PAGE_CACHE_SIZE;
 		}
-
-		isect += (pg_offset >> SECTOR_SHIFT);
-		extent_length -= (pg_offset >> SECTOR_SHIFT);
 
 		if (is_hole(&be)) {
 			bio = bl_submit_bio(READ, bio);
@@ -302,6 +298,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 		extent_length -= (pg_len >> SECTOR_SHIFT);
 		f_offset += pg_len;
 		bytes_left -= pg_len;
+		pg_offset = 0;
 	}
 	if ((isect << SECTOR_SHIFT) >= header->inode->i_size) {
 		header->res.eof = 1;
@@ -451,8 +448,8 @@ static void bl_free_layout_hdr(struct pnfs_layout_hdr *lo)
 	kfree(bl);
 }
 
-static struct pnfs_layout_hdr *bl_alloc_layout_hdr(struct inode *inode,
-						   gfp_t gfp_flags)
+static struct pnfs_layout_hdr *__bl_alloc_layout_hdr(struct inode *inode,
+		gfp_t gfp_flags, bool is_scsi_layout)
 {
 	struct pnfs_block_layout *bl;
 
@@ -465,7 +462,20 @@ static struct pnfs_layout_hdr *bl_alloc_layout_hdr(struct inode *inode,
 	bl->bl_ext_ro = RB_ROOT;
 	spin_lock_init(&bl->bl_ext_lock);
 
+	bl->bl_scsi_layout = is_scsi_layout;
 	return &bl->bl_layout;
+}
+
+static struct pnfs_layout_hdr *bl_alloc_layout_hdr(struct inode *inode,
+						   gfp_t gfp_flags)
+{
+	return __bl_alloc_layout_hdr(inode, gfp_flags, false);
+}
+
+static struct pnfs_layout_hdr *sl_alloc_layout_hdr(struct inode *inode,
+						   gfp_t gfp_flags)
+{
+	return __bl_alloc_layout_hdr(inode, gfp_flags, true);
 }
 
 static void bl_free_lseg(struct pnfs_layout_segment *lseg)
@@ -748,7 +758,7 @@ bl_set_layoutdriver(struct nfs_server *server, const struct nfs_fh *fh)
 
 static bool
 is_aligned_req(struct nfs_pageio_descriptor *pgio,
-		struct nfs_page *req, unsigned int alignment)
+		struct nfs_page *req, unsigned int alignment, bool is_write)
 {
 	/*
 	 * Always accept buffered writes, higher layers take care of the
@@ -763,7 +773,8 @@ is_aligned_req(struct nfs_pageio_descriptor *pgio,
 	if (IS_ALIGNED(req->wb_bytes, alignment))
 		return true;
 
-	if (req_offset(req) + req->wb_bytes == i_size_read(pgio->pg_inode)) {
+	if (is_write &&
+	    (req_offset(req) + req->wb_bytes == i_size_read(pgio->pg_inode))) {
 		/*
 		 * If the write goes up to the inode size, just write
 		 * the full page.  Data past the inode size is
@@ -780,7 +791,7 @@ is_aligned_req(struct nfs_pageio_descriptor *pgio,
 static void
 bl_pg_init_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, SECTOR_SIZE)) {
+	if (!is_aligned_req(pgio, req, SECTOR_SIZE, false)) {
 		nfs_pageio_reset_read_mds(pgio);
 		return;
 	}
@@ -796,7 +807,7 @@ static size_t
 bl_pg_test_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
 		struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, SECTOR_SIZE))
+	if (!is_aligned_req(pgio, req, SECTOR_SIZE, false))
 		return 0;
 	return pnfs_generic_pg_test(pgio, prev, req);
 }
@@ -812,7 +823,7 @@ static u64 pnfs_num_cont_bytes(struct inode *inode, pgoff_t idx)
 
 	/* Optimize common case that writes from 0 to end of file */
 	end = DIV_ROUND_UP(i_size_read(inode), PAGE_CACHE_SIZE);
-	if (end != NFS_I(inode)->nrequests) {
+	if (end != inode->i_mapping->nrpages) {
 		rcu_read_lock();
 		end = page_cache_next_hole(mapping, idx + 1, ULONG_MAX);
 		rcu_read_unlock();
@@ -829,7 +840,7 @@ bl_pg_init_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 {
 	u64 wb_size;
 
-	if (!is_aligned_req(pgio, req, PAGE_SIZE)) {
+	if (!is_aligned_req(pgio, req, PAGE_SIZE, true)) {
 		nfs_pageio_reset_write_mds(pgio);
 		return;
 	}
@@ -851,7 +862,7 @@ static size_t
 bl_pg_test_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
 		 struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, PAGE_SIZE))
+	if (!is_aligned_req(pgio, req, PAGE_SIZE, true))
 		return 0;
 	return pnfs_generic_pg_test(pgio, prev, req);
 }
@@ -890,7 +901,32 @@ static struct pnfs_layoutdriver_type blocklayout_type = {
 	.free_deviceid_node		= bl_free_deviceid_node,
 	.pg_read_ops			= &bl_pg_read_ops,
 	.pg_write_ops			= &bl_pg_write_ops,
+	.sync				= pnfs_generic_sync,
 };
+
+static struct pnfs_layoutdriver_type scsilayout_type = {
+	.id				= LAYOUT_SCSI,
+	.name				= "LAYOUT_SCSI",
+	.owner				= THIS_MODULE,
+	.flags				= PNFS_LAYOUTRET_ON_SETATTR |
+					  PNFS_READ_WHOLE_PAGE,
+	.read_pagelist			= bl_read_pagelist,
+	.write_pagelist			= bl_write_pagelist,
+	.alloc_layout_hdr		= sl_alloc_layout_hdr,
+	.free_layout_hdr		= bl_free_layout_hdr,
+	.alloc_lseg			= bl_alloc_lseg,
+	.free_lseg			= bl_free_lseg,
+	.return_range			= bl_return_range,
+	.prepare_layoutcommit		= bl_prepare_layoutcommit,
+	.cleanup_layoutcommit		= bl_cleanup_layoutcommit,
+	.set_layoutdriver		= bl_set_layoutdriver,
+	.alloc_deviceid_node		= bl_alloc_deviceid_node,
+	.free_deviceid_node		= bl_free_deviceid_node,
+	.pg_read_ops			= &bl_pg_read_ops,
+	.pg_write_ops			= &bl_pg_write_ops,
+	.sync				= pnfs_generic_sync,
+};
+
 
 static int __init nfs4blocklayout_init(void)
 {
@@ -898,17 +934,26 @@ static int __init nfs4blocklayout_init(void)
 
 	dprintk("%s: NFSv4 Block Layout Driver Registering...\n", __func__);
 
-	ret = pnfs_register_layoutdriver(&blocklayout_type);
-	if (ret)
-		goto out;
 	ret = bl_init_pipefs();
 	if (ret)
-		goto out_unregister;
+		goto out;
+
+	ret = pnfs_register_layoutdriver(&blocklayout_type);
+	if (ret)
+		goto out_cleanup_pipe;
 	mark_tech_preview("NFSv4 Block Layout Driver", NULL);
+
+	ret = pnfs_register_layoutdriver(&scsilayout_type);
+	if (ret)
+		goto out_unregister_block;
+	mark_tech_preview("NFSv4 SCSI Layout Driver", NULL);
+
 	return 0;
 
-out_unregister:
+out_unregister_block:
 	pnfs_unregister_layoutdriver(&blocklayout_type);
+out_cleanup_pipe:
+	bl_cleanup_pipefs();
 out:
 	return ret;
 }
@@ -918,8 +963,9 @@ static void __exit nfs4blocklayout_exit(void)
 	dprintk("%s: NFSv4 Block Layout Driver Unregistering...\n",
 	       __func__);
 
-	bl_cleanup_pipefs();
+	pnfs_unregister_layoutdriver(&scsilayout_type);
 	pnfs_unregister_layoutdriver(&blocklayout_type);
+	bl_cleanup_pipefs();
 }
 
 MODULE_ALIAS("nfs-layouttype4-3");

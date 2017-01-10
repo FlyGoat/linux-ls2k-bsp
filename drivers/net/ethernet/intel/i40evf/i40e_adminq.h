@@ -97,7 +97,6 @@ struct i40e_adminq_info {
 	u32 fw_build;                   /* firmware build number */
 	u16 api_maj_ver;                /* api major version */
 	u16 api_min_ver;                /* api minor version */
-	bool nvm_release_on_done;
 
 	struct mutex asq_mutex; /* Send queue lock */
 	struct mutex arq_mutex; /* Receive queue lock */
@@ -144,8 +143,7 @@ static inline int i40e_aq_rc_to_posix(int aq_ret, int aq_rc)
 	if (aq_ret == I40E_ERR_ADMIN_QUEUE_TIMEOUT)
 		return -EAGAIN;
 
-	if (aq_rc >= (sizeof(aq_to_posix) / sizeof((aq_to_posix)[0])) ||
-	    aq_rc < 0)
+	if (!((u32)aq_rc < (sizeof(aq_to_posix) / sizeof((aq_to_posix)[0]))))
 		return -ERANGE;
 
 	return aq_to_posix[aq_rc];

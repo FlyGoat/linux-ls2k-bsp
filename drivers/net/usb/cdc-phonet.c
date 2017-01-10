@@ -328,7 +328,7 @@ MODULE_DEVICE_TABLE(usb, usbpn_ids);
 
 static struct usb_driver usbpn_driver;
 
-int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
+static int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	static const char ifname[] = "usbpn%d";
 	const struct usb_cdc_union_desc *union_header = NULL;
@@ -340,32 +340,13 @@ int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	u8 *data;
 	int phonet = 0;
 	int len, err;
+	struct usb_cdc_parsed_header hdr;
 
 	data = intf->altsetting->extra;
 	len = intf->altsetting->extralen;
-	while (len >= 3) {
-		u8 dlen = data[0];
-		if (dlen < 3)
-			return -EINVAL;
-
-		/* bDescriptorType */
-		if (data[1] == USB_DT_CS_INTERFACE) {
-			/* bDescriptorSubType */
-			switch (data[2]) {
-			case USB_CDC_UNION_TYPE:
-				if (union_header || dlen < 5)
-					break;
-				union_header =
-					(struct usb_cdc_union_desc *)data;
-				break;
-			case 0xAB:
-				phonet = 1;
-				break;
-			}
-		}
-		data += dlen;
-		len -= dlen;
-	}
+	cdc_parse_cdc_header(&hdr, intf, data, len);
+	union_header = hdr.usb_cdc_union_desc;
+	phonet = hdr.phonet_magic_present;
 
 	if (!union_header || !phonet)
 		return -EINVAL;

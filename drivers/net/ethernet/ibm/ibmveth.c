@@ -301,6 +301,18 @@ failure:
 	atomic_add(buffers_added, &(pool->available));
 }
 
+/*
+ * The final 8 bytes of the buffer list is a counter of frames dropped
+ * because there was not a buffer in the buffer list capable of holding
+ * the frame.
+ */
+static void ibmveth_update_rx_no_buffer(struct ibmveth_adapter *adapter)
+{
+	__be64 *p = adapter->buffer_list_addr + 4096 - 8;
+
+	adapter->rx_no_buffer = be64_to_cpup(p);
+}
+
 /* replenish routine */
 static void ibmveth_replenish_task(struct ibmveth_adapter *adapter)
 {
@@ -316,8 +328,7 @@ static void ibmveth_replenish_task(struct ibmveth_adapter *adapter)
 			ibmveth_replenish_buffer_pool(adapter, pool);
 	}
 
-	adapter->rx_no_buffer = *(u64 *)(((char*)adapter->buffer_list_addr) +
-						4096 - 8);
+	ibmveth_update_rx_no_buffer(adapter);
 }
 
 /* empty and free ana buffer pool - also used to do cleanup in error paths */
@@ -707,8 +718,7 @@ static int ibmveth_close(struct net_device *netdev)
 
 	free_irq(netdev->irq, netdev);
 
-	adapter->rx_no_buffer = *(u64 *)(((char *)adapter->buffer_list_addr) +
-						4096 - 8);
+	ibmveth_update_rx_no_buffer(adapter);
 
 	ibmveth_cleanup(adapter);
 
@@ -754,7 +764,7 @@ static netdev_features_t ibmveth_fix_features(struct net_device *dev,
 	 */
 
 	if (!(features & NETIF_F_RXCSUM))
-		features &= ~NETIF_F_ALL_CSUM;
+		features &= ~NETIF_F_CSUM_MASK;
 
 	return features;
 }
@@ -919,7 +929,8 @@ static int ibmveth_set_features(struct net_device *dev,
 		rc1 = ibmveth_set_csum_offload(dev, rx_csum);
 		if (rc1 && !adapter->rx_csum)
 			dev->features =
-				features & ~(NETIF_F_ALL_CSUM | NETIF_F_RXCSUM);
+				features & ~(NETIF_F_CSUM_MASK |
+					     NETIF_F_RXCSUM);
 	}
 
 	if (large_send != adapter->large_send) {
@@ -1158,7 +1169,10 @@ map_failed:
 	if (!firmware_has_feature(FW_FEATURE_CMO))
 		netdev_err(netdev, "tx: unable to map xmit buffer\n");
 	adapter->tx_map_failed++;
-	skb_linearize(skb);
+	if (skb_linearize(skb)) {
+		netdev->stats.tx_dropped++;
+		goto out;
+	}
 	force_bounce = 1;
 	goto retry_bounce;
 }
@@ -1240,6 +1254,8 @@ restart_poll:
 	ibmveth_replenish_task(adapter);
 
 	if (frames_processed < budget) {
+		napi_complete(napi);
+
 		/* We think we are done - reenable interrupts,
 		 * then check once more to make sure we are done.
 		 */
@@ -1247,8 +1263,6 @@ restart_poll:
 				       VIO_IRQ_ENABLE);
 
 		BUG_ON(lpar_rc != H_SUCCESS);
-
-		napi_complete(napi);
 
 		if (ibmveth_rxq_pending_buffer(adapter) &&
 		    napi_reschedule(napi)) {

@@ -31,6 +31,15 @@ static const char * const dcb_ver_array[] = {
 	"Auto Negotiated"
 };
 
+static inline bool cxgb4_dcb_state_synced(enum cxgb4_dcb_state state)
+{
+	if (state == CXGB4_DCB_STATE_FW_ALLSYNCED ||
+	    state == CXGB4_DCB_STATE_HOST)
+		return true;
+	else
+		return false;
+}
+
 /* Initialize a port's Data Center Bridging state.  Typically used after a
  * Link Down event.
  */
@@ -603,7 +612,7 @@ static void cxgb4_getpfccfg(struct net_device *dev, int priority, u8 *pfccfg)
 	struct port_info *pi = netdev2pinfo(dev);
 	struct port_dcb_info *dcb = &pi->dcb;
 
-	if (dcb->state != CXGB4_DCB_STATE_FW_ALLSYNCED ||
+	if (!cxgb4_dcb_state_synced(dcb->state) ||
 	    priority >= CXGB4_MAX_PRIORITY)
 		*pfccfg = 0;
 	else
@@ -620,7 +629,7 @@ static void cxgb4_setpfccfg(struct net_device *dev, int priority, u8 pfccfg)
 	struct adapter *adap = pi->adapter;
 	int err;
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED ||
+	if (!cxgb4_dcb_state_synced(pi->dcb.state) ||
 	    priority >= CXGB4_MAX_PRIORITY)
 		return;
 
@@ -732,7 +741,7 @@ static u8 cxgb4_getpfcstate(struct net_device *dev)
 {
 	struct port_info *pi = netdev2pinfo(dev);
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return false;
 
 	return pi->dcb.pfcen != 0;
@@ -756,7 +765,7 @@ static int __cxgb4_getapp(struct net_device *dev, u8 app_idtype, u16 app_id,
 	struct adapter *adap = pi->adapter;
 	int i;
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return 0;
 
 	for (i = 0; i < CXGB4_MAX_DCBX_APP_SUPPORTED; i++) {
@@ -795,12 +804,9 @@ static int __cxgb4_getapp(struct net_device *dev, u8 app_idtype, u16 app_id,
  */
 static u8 cxgb4_getapp(struct net_device *dev, u8 app_idtype, u16 app_id)
 {
-	int result = __cxgb4_getapp(dev, app_idtype, app_id, 0);
-
-	if (result < 0)
-		result = 0;
-
-	return result;
+	/* Convert app_idtype to firmware format before querying */
+	return __cxgb4_getapp(dev, app_idtype == DCB_APP_IDTYPE_ETHTYPE ?
+			      app_idtype : 3, app_id, 0);
 }
 
 /* Write a new Application User Priority Map for the specified Application ID.
@@ -817,7 +823,7 @@ static u8 __cxgb4_setapp(struct net_device *dev, u8 app_idtype, u16 app_id,
 	int i, err;
 
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return -EINVAL;
 
 	/* DCB info gets thrown away on link up */
@@ -905,10 +911,11 @@ cxgb4_ieee_negotiation_complete(struct net_device *dev,
 	struct port_info *pi = netdev2pinfo(dev);
 	struct port_dcb_info *dcb = &pi->dcb;
 
-	if (dcb_subtype && !(dcb->msgs & dcb_subtype))
-		return 0;
+	if (dcb->state == CXGB4_DCB_STATE_FW_ALLSYNCED)
+		if (dcb_subtype && !(dcb->msgs & dcb_subtype))
+			return 0;
 
-	return (dcb->state == CXGB4_DCB_STATE_FW_ALLSYNCED &&
+	return (cxgb4_dcb_state_synced(dcb->state) &&
 		(dcb->supported & DCB_CAP_DCBX_VER_IEEE));
 }
 
@@ -1066,7 +1073,7 @@ static u8 cxgb4_setdcbx(struct net_device *dev, u8 dcb_request)
 
 	/* Can't enable DCB if we haven't successfully negotiated it.
 	 */
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return 1;
 
 	/* There's currently no mechanism to allow for the firmware DCBX
@@ -1089,7 +1096,7 @@ static int cxgb4_getpeer_app(struct net_device *dev,
 	struct adapter *adap = pi->adapter;
 	int i, err = 0;
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return 1;
 
 	info->willing = 0;
@@ -1123,7 +1130,7 @@ static int cxgb4_getpeerapp_tbl(struct net_device *dev, struct dcb_app *table)
 	struct adapter *adap = pi->adapter;
 	int i, err = 0;
 
-	if (pi->dcb.state != CXGB4_DCB_STATE_FW_ALLSYNCED)
+	if (!cxgb4_dcb_state_synced(pi->dcb.state))
 		return 1;
 
 	for (i = 0; i < CXGB4_MAX_DCBX_APP_SUPPORTED; i++) {
@@ -1142,7 +1149,7 @@ static int cxgb4_getpeerapp_tbl(struct net_device *dev, struct dcb_app *table)
 		if (!pcmd.u.dcb.app_priority.protocolid)
 			break;
 
-		table[i].selector = pcmd.u.dcb.app_priority.sel_field;
+		table[i].selector = (pcmd.u.dcb.app_priority.sel_field + 1);
 		table[i].protocol =
 			be16_to_cpu(pcmd.u.dcb.app_priority.protocolid);
 		table[i].priority =
@@ -1190,6 +1197,8 @@ static int cxgb4_cee_peer_getpg(struct net_device *dev, struct cee_pg *pg)
 	for (i = 0; i < CXGB4_MAX_PRIORITY; i++)
 		pg->pg_bw[i] = pcmd.u.dcb.pgrate.pgrate[i];
 
+	pg->tcs_supported = pcmd.u.dcb.pgrate.num_tcs_supported;
+
 	return 0;
 }
 
@@ -1206,6 +1215,8 @@ static int cxgb4_cee_peer_getpfc(struct net_device *dev, struct cee_pfc *pfc)
 	 * by bit shifting in other uses of pfcen
 	 */
 	pfc->pfc_en = bitswap_1(pi->dcb.pfcen);
+
+	pfc->tcs_supported = pi->dcb.pfc_num_tcs_supported;
 
 	return 0;
 }

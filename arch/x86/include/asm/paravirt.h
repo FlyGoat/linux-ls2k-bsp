@@ -13,6 +13,7 @@
 #include <linux/bug.h>
 #include <linux/types.h>
 #include <linux/cpumask.h>
+#include <asm/frame.h>
 
 static inline int paravirt_enabled(void)
 {
@@ -174,19 +175,6 @@ static inline int rdmsrl_safe(unsigned msr, unsigned long long *p)
 	return err;
 }
 
-static inline u64 paravirt_read_tsc(void)
-{
-	return PVOP_CALL0(u64, pv_cpu_ops.read_tsc);
-}
-
-#define rdtscl(low)				\
-do {						\
-	u64 _l = paravirt_read_tsc();		\
-	low = (int)_l;				\
-} while (0)
-
-#define rdtscll(val) (val = paravirt_read_tsc())
-
 static inline unsigned long long paravirt_sched_clock(void)
 {
 	return PVOP_CALL0(unsigned long long, pv_time_ops.sched_clock);
@@ -214,27 +202,6 @@ do {						\
 } while (0)
 
 #define rdpmcl(counter, val) ((val) = paravirt_read_pmc(counter))
-
-static inline unsigned long long paravirt_rdtscp(unsigned int *aux)
-{
-	return PVOP_CALL1(u64, pv_cpu_ops.read_tscp, aux);
-}
-
-#define rdtscp(low, high, aux)				\
-do {							\
-	int __aux;					\
-	unsigned long __val = paravirt_rdtscp(&__aux);	\
-	(low) = (u32)__val;				\
-	(high) = (u32)(__val >> 32);			\
-	(aux) = __aux;					\
-} while (0)
-
-#define rdtscpll(val, aux)				\
-do {							\
-	unsigned long __aux; 				\
-	val = paravirt_rdtscp(&__aux);			\
-	(aux) = __aux;					\
-} while (0)
 
 static inline void paravirt_alloc_ldt(struct desc_struct *ldt, unsigned entries)
 {
@@ -779,15 +746,19 @@ static __always_inline void __ticket_unlock_kick(struct arch_spinlock *lock,
  * call. The return value in rax/eax will not be saved, even for void
  * functions.
  */
+#define PV_THUNK_NAME(func) "__raw_callee_save_" #func
 #define PV_CALLEE_SAVE_REGS_THUNK(func)					\
 	extern typeof(func) __raw_callee_save_##func;			\
-	static void *__##func##__ __used = func;			\
 									\
 	asm(".pushsection .text;"					\
-	    "__raw_callee_save_" #func ": "				\
+	    ".globl " PV_THUNK_NAME(func) ";"				\
+	    ".type " PV_THUNK_NAME(func) ", @function;"			\
+	    PV_THUNK_NAME(func) ":"					\
+	    FRAME_BEGIN							\
 	    PV_SAVE_ALL_CALLER_REGS					\
 	    "call " #func ";"						\
 	    PV_RESTORE_ALL_CALLER_REGS					\
+	    FRAME_END							\
 	    "ret;"							\
 	    ".popsection")
 

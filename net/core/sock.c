@@ -372,13 +372,23 @@ static void sock_warn_obsolete_bsdism(const char *name)
 	}
 }
 
-#define SK_FLAGS_TIMESTAMP ((1UL << SOCK_TIMESTAMP) | (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE))
+static bool sock_needs_netstamp(const struct sock *sk)
+{
+	switch (sk->sk_family) {
+	case AF_UNSPEC:
+	case AF_UNIX:
+		return false;
+	default:
+		return true;
+	}
+}
 
 static void sock_disable_timestamp(struct sock *sk, unsigned long flags)
 {
 	if (sk->sk_flags & flags) {
 		sk->sk_flags &= ~flags;
-		if (!(sk->sk_flags & SK_FLAGS_TIMESTAMP))
+		if (sock_needs_netstamp(sk) &&
+		    !(sk->sk_flags & SK_FLAGS_TIMESTAMP))
 			net_disable_timestamp();
 	}
 }
@@ -1489,7 +1499,6 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		skb_queue_head_init(&newsk->sk_receive_queue);
 		skb_queue_head_init(&newsk->sk_write_queue);
 
-		spin_lock_init(&newsk->sk_dst_lock);
 		rwlock_init(&newsk->sk_callback_lock);
 		lockdep_set_class_and_name(&newsk->sk_callback_lock,
 				af_callback_keys + newsk->sk_family,
@@ -1547,7 +1556,8 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		if (newsk->sk_prot->sockets_allocated)
 			sk_sockets_allocated_inc(newsk);
 
-		if (newsk->sk_flags & SK_FLAGS_TIMESTAMP)
+		if (sock_needs_netstamp(sk) &&
+		    newsk->sk_flags & SK_FLAGS_TIMESTAMP)
 			net_enable_timestamp();
 	}
 out:
@@ -1557,7 +1567,7 @@ EXPORT_SYMBOL_GPL(sk_clone_lock);
 
 void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 {
-	__sk_dst_set(sk, dst);
+	sk_dst_set(sk, dst);
 	sk->sk_route_caps = dst->dev->features;
 	if (sk->sk_route_caps & NETIF_F_GSO)
 		sk->sk_route_caps |= NETIF_F_GSO_SOFTWARE;
@@ -1624,18 +1634,18 @@ void sock_efree(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(sock_efree);
 
+#ifdef CONFIG_INET
 void sock_edemux(struct sk_buff *skb)
 {
 	struct sock *sk = skb->sk;
 
-#ifdef CONFIG_INET
 	if (sk->sk_state == TCP_TIME_WAIT)
 		inet_twsk_put(inet_twsk(sk));
 	else
-#endif
 		sock_put(sk);
 }
 EXPORT_SYMBOL(sock_edemux);
+#endif
 
 kuid_t sock_i_uid(struct sock *sk)
 {
@@ -1811,10 +1821,15 @@ struct sk_buff *sock_alloc_send_pskb(struct sock *sk, unsigned long header_len,
 			while (order) {
 				if (npages >= 1 << order) {
 					page = alloc_pages(sk->sk_allocation |
-							   __GFP_COMP | __GFP_NOWARN,
+							   __GFP_COMP |
+							   __GFP_NOWARN |
+							   __GFP_NORETRY,
 							   order);
 					if (page)
 						goto fill_page;
+					/* Do not retry other high order allocations */
+					order = 1;
+					max_page_order = 0;
 				}
 				order--;
 			}
@@ -1852,35 +1867,51 @@ EXPORT_SYMBOL(sock_alloc_send_skb);
 /* On 32bit arches, an skb frag is limited to 2^15 */
 #define SKB_FRAG_PAGE_ORDER	get_order(32768)
 
-bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag)
+/**
+ * skb_page_frag_refill - check that a page_frag contains enough room
+ * @sz: minimum size of the fragment we want to get
+ * @pfrag: pointer to page_frag
+ * @gfp: priority for memory allocation
+ *
+ * Note: While this allocator tries to use high order pages, there is
+ * no guarantee that allocations succeed. Therefore, @sz MUST be
+ * less or equal than PAGE_SIZE.
+ */
+bool skb_page_frag_refill(unsigned int sz, struct page_frag *pfrag, gfp_t gfp)
 {
-	int order;
-
 	if (pfrag->page) {
-		if (atomic_read(&pfrag->page->_count) == 1) {
+		if (page_ref_count(pfrag->page) == 1) {
 			pfrag->offset = 0;
 			return true;
 		}
-		if (pfrag->offset < pfrag->size)
+		if (pfrag->offset + sz <= pfrag->size)
 			return true;
 		put_page(pfrag->page);
 	}
 
-	/* We restrict high order allocations to users that can afford to wait */
-	order = (sk->sk_allocation & __GFP_WAIT) ? SKB_FRAG_PAGE_ORDER : 0;
-
-	do {
-		gfp_t gfp = sk->sk_allocation;
-
-		if (order)
-			gfp |= __GFP_COMP | __GFP_NOWARN;
-		pfrag->page = alloc_pages(gfp, order);
+	pfrag->offset = 0;
+	if (SKB_FRAG_PAGE_ORDER) {
+		pfrag->page = alloc_pages((gfp & ~__GFP_WAIT) | __GFP_COMP |
+					  __GFP_NOWARN | __GFP_NORETRY,
+					  SKB_FRAG_PAGE_ORDER);
 		if (likely(pfrag->page)) {
-			pfrag->offset = 0;
-			pfrag->size = PAGE_SIZE << order;
+			pfrag->size = PAGE_SIZE << SKB_FRAG_PAGE_ORDER;
 			return true;
 		}
-	} while (--order >= 0);
+	}
+	pfrag->page = alloc_page(gfp);
+	if (likely(pfrag->page)) {
+		pfrag->size = PAGE_SIZE;
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL(skb_page_frag_refill);
+
+bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag)
+{
+	if (likely(skb_page_frag_refill(32U, pfrag, sk->sk_allocation)))
+		return true;
 
 	sk_enter_memory_pressure(sk);
 	sk_stream_moderate_sndbuf(sk);
@@ -2061,12 +2092,13 @@ EXPORT_SYMBOL(__sk_mem_schedule);
 /**
  *	__sk_reclaim - reclaim memory_allocated
  *	@sk: socket
+ *	@amount: number of bytes (rounded down to a SK_MEM_QUANTUM multiple)
  */
-void __sk_mem_reclaim(struct sock *sk)
+void __sk_mem_reclaim(struct sock *sk, int amount)
 {
-	sk_memory_allocated_sub(sk,
-				sk->sk_forward_alloc >> SK_MEM_QUANTUM_SHIFT);
-	sk->sk_forward_alloc &= SK_MEM_QUANTUM - 1;
+	amount >>= SK_MEM_QUANTUM_SHIFT;
+	sk_memory_allocated_sub(sk, amount);
+	sk->sk_forward_alloc -= amount << SK_MEM_QUANTUM_SHIFT;
 
 	if (sk_under_memory_pressure(sk) &&
 	    (sk_memory_allocated(sk) < sk_prot_mem_limits(sk, 0)))
@@ -2303,7 +2335,6 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 	} else
 		sk->sk_wq	=	NULL;
 
-	spin_lock_init(&sk->sk_dst_lock);
 	rwlock_init(&sk->sk_callback_lock);
 	lockdep_set_class_and_name(&sk->sk_callback_lock,
 			af_callback_keys + sk->sk_family,
@@ -2461,7 +2492,8 @@ void sock_enable_timestamp(struct sock *sk, int flag)
 		 * time stamping, but time stamping might have been on
 		 * already because of the other one
 		 */
-		if (!(previous_flags & SK_FLAGS_TIMESTAMP))
+		if (sock_needs_netstamp(sk) &&
+		    !(previous_flags & SK_FLAGS_TIMESTAMP))
 			net_enable_timestamp();
 	}
 }

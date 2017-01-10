@@ -34,6 +34,7 @@
 #include <linux/slab.h>
 #include <linux/export.h>
 #include <linux/errno.h>
+#include <net/devlink.h>
 
 #include "mlx4.h"
 
@@ -63,8 +64,11 @@ static void mlx4_add_device(struct mlx4_interface *intf, struct mlx4_priv *priv)
 		spin_lock_irq(&priv->ctx_lock);
 		list_add_tail(&dev_ctx->list, &priv->ctx_list);
 		spin_unlock_irq(&priv->ctx_lock);
+		if (intf->activate)
+			intf->activate(&priv->dev, dev_ctx->context);
 	} else
 		kfree(dev_ctx);
+
 }
 
 static void mlx4_remove_device(struct mlx4_interface *intf, struct mlx4_priv *priv)
@@ -246,3 +250,11 @@ void *mlx4_get_protocol_dev(struct mlx4_dev *dev, enum mlx4_protocol proto, int 
 	return result;
 }
 EXPORT_SYMBOL_GPL(mlx4_get_protocol_dev);
+
+struct devlink_port *mlx4_get_devlink_port(struct mlx4_dev *dev, int port)
+{
+	struct mlx4_port_info *info = &mlx4_priv(dev)->port[port];
+
+	return &info->devlink_port;
+}
+EXPORT_SYMBOL_GPL(mlx4_get_devlink_port);

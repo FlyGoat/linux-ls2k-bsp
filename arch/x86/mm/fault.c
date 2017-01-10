@@ -54,7 +54,7 @@ kmmio_fault(struct pt_regs *regs, unsigned long addr)
 	return 0;
 }
 
-static inline int __kprobes notify_page_fault(struct pt_regs *regs)
+static inline int __kprobes kprobes_fault(struct pt_regs *regs)
 {
 	int ret = 0;
 
@@ -285,6 +285,9 @@ static noinline __kprobes int vmalloc_fault(unsigned long address)
 	if (!pmd_k)
 		return -1;
 
+	if (pmd_huge(*pmd_k))
+		return 0;
+
 	pte_k = pte_offset_kernel(pmd_k, address);
 	if (!pte_present(*pte_k))
 		return -1;
@@ -355,8 +358,6 @@ void vmalloc_sync_all(void)
  * 64-bit:
  *
  *   Handle a fault on the vmalloc area
- *
- * This assumes no large pages in there.
  */
 static noinline __kprobes int vmalloc_fault(unsigned long address)
 {
@@ -398,16 +399,22 @@ static noinline __kprobes int vmalloc_fault(unsigned long address)
 	if (pud_none(*pud_ref))
 		return -1;
 
-	if (pud_none(*pud) || pud_page_vaddr(*pud) != pud_page_vaddr(*pud_ref))
+	if (pud_none(*pud) || pud_pfn(*pud) != pud_pfn(*pud_ref))
 		BUG();
+
+	if (pud_huge(*pud))
+		return 0;
 
 	pmd = pmd_offset(pud, address);
 	pmd_ref = pmd_offset(pud_ref, address);
 	if (pmd_none(*pmd_ref))
 		return -1;
 
-	if (pmd_none(*pmd) || pmd_page(*pmd) != pmd_page(*pmd_ref))
+	if (pmd_none(*pmd) || pmd_pfn(*pmd) != pmd_pfn(*pmd_ref))
 		BUG();
+
+	if (pmd_huge(*pmd))
+		return 0;
 
 	pte_ref = pte_offset_kernel(pmd_ref, address);
 	if (!pte_present(*pte_ref))
@@ -991,20 +998,17 @@ static inline bool smap_violation(int error_code, struct pt_regs *regs)
  * routines.
  */
 static void __kprobes
-__do_page_fault(struct pt_regs *regs, unsigned long error_code)
+__do_page_fault(struct pt_regs *regs, unsigned long error_code,
+		unsigned long address)
 {
 	struct vm_area_struct *vma;
 	struct task_struct *tsk;
-	unsigned long address;
 	struct mm_struct *mm;
 	int fault, major = 0;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	tsk = current;
 	mm = tsk->mm;
-
-	/* Get the faulting address: */
-	address = read_cr2();
 
 	/*
 	 * Detect and handle instructions that would cause a page fault for
@@ -1044,7 +1048,7 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
 			return;
 
 		/* kprobes don't want to hook the spurious faults: */
-		if (notify_page_fault(regs))
+		if (kprobes_fault(regs))
 			return;
 		/*
 		 * Don't take the mm semaphore here. If we fixup a prefetch
@@ -1056,8 +1060,28 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	}
 
 	/* kprobes don't want to hook the spurious faults: */
-	if (unlikely(notify_page_fault(regs)))
+	if (unlikely(kprobes_fault(regs)))
 		return;
+
+	if (unlikely(error_code & PF_RSVD))
+		pgtable_bad(regs, error_code, address);
+
+	if (static_cpu_has(X86_FEATURE_SMAP)) {
+		if (unlikely(smap_violation(error_code, regs))) {
+			bad_area_nosemaphore(regs, error_code, address);
+			return;
+		}
+	}
+
+	/*
+	 * If we're in an interrupt, have no user context or are running
+	 * in an atomic region then we must not take the fault:
+	 */
+	if (unlikely(in_atomic() || !mm)) {
+		bad_area_nosemaphore(regs, error_code, address);
+		return;
+	}
+
 	/*
 	 * It's safe to allow irq's after cr2 has been saved and the
 	 * vmalloc fault has been handled.
@@ -1074,26 +1098,7 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
 			local_irq_enable();
 	}
 
-	if (unlikely(error_code & PF_RSVD))
-		pgtable_bad(regs, error_code, address);
-
-	if (static_cpu_has(X86_FEATURE_SMAP)) {
-		if (unlikely(smap_violation(error_code, regs))) {
-			bad_area_nosemaphore(regs, error_code, address);
-			return;
-		}
-	}
-
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
-
-	/*
-	 * If we're in an interrupt, have no user context or are running
-	 * in an atomic region then we must not take the fault:
-	 */
-	if (unlikely(in_atomic() || !mm)) {
-		bad_area_nosemaphore(regs, error_code, address);
-		return;
-	}
 
 	if (error_code & PF_WRITE)
 		flags |= FAULT_FLAG_WRITE;
@@ -1225,9 +1230,11 @@ dotraplinkage void __kprobes
 do_page_fault(struct pt_regs *regs, unsigned long error_code)
 {
 	enum ctx_state prev_state;
+	/* Get the faulting address: */
+	unsigned long address = read_cr2();
 
 	prev_state = exception_enter();
-	__do_page_fault(regs, error_code);
+	__do_page_fault(regs, error_code, address);
 	exception_exit(prev_state);
 }
 
@@ -1244,9 +1251,16 @@ dotraplinkage void __kprobes
 trace_do_page_fault(struct pt_regs *regs, unsigned long error_code)
 {
 	enum ctx_state prev_state;
+	/*
+	 * The exception_enter and tracepoint processing could
+	 * trigger another page faults (user space callchain
+	 * reading) and destroy the original cr2 value, so read
+	 * the faulting address now.
+	 */
+	unsigned long address = read_cr2();
 
 	prev_state = exception_enter();
 	trace_page_fault_entries(regs, error_code);
-	__do_page_fault(regs, error_code);
+	__do_page_fault(regs, error_code, address);
 	exception_exit(prev_state);
 }

@@ -293,14 +293,10 @@ static void acpi_bus_osc_support(void)
 
 	capbuf[OSC_QUERY_DWORD] = OSC_QUERY_ENABLE;
 	capbuf[OSC_SUPPORT_DWORD] = OSC_SB_PR3_SUPPORT; /* _PR3 is in use */
-#if defined(CONFIG_ACPI_PROCESSOR_AGGREGATOR) ||\
-			defined(CONFIG_ACPI_PROCESSOR_AGGREGATOR_MODULE)
-	capbuf[OSC_SUPPORT_DWORD] |= OSC_SB_PAD_SUPPORT;
-#endif
-
-#if defined(CONFIG_ACPI_PROCESSOR) || defined(CONFIG_ACPI_PROCESSOR_MODULE)
-	capbuf[OSC_SUPPORT_DWORD] |= OSC_SB_PPC_OST_SUPPORT;
-#endif
+	if (IS_ENABLED(CONFIG_ACPI_PROCESSOR_AGGREGATOR))
+		capbuf[OSC_SUPPORT_DWORD] |= OSC_SB_PAD_SUPPORT;
+	if (IS_ENABLED(CONFIG_ACPI_PROCESSOR))
+		capbuf[OSC_SUPPORT_DWORD] |= OSC_SB_PPC_OST_SUPPORT;
 
 	capbuf[OSC_SUPPORT_DWORD] |= OSC_SB_HOTPLUG_OST_SUPPORT;
 
@@ -651,6 +647,9 @@ static int __init acpi_bus_init(void)
 		printk(KERN_ERR PREFIX "Unable to initialize ACPI objects\n");
 		goto error1;
 	}
+
+	/* Set capability bits for _OSC under processor scope */
+	acpi_early_processor_osc();
 
 	/*
 	 * _OSC method may exist in module level code,

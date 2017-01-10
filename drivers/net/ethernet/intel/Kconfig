@@ -86,6 +86,15 @@ config E1000E
 	  To compile this driver as a module, choose M here. The module
 	  will be called e1000e.
 
+config E1000E_HWTS
+	bool "Support HW cross-timestamp on PCH devices"
+	default y
+	depends on E1000E && X86
+	---help---
+	 Say Y to enable hardware supported cross-timestamping on PCH
+	 devices. The cross-timestamp is available through the PTP clock
+	 driver precise cross-timestamp ioctl (PTP_SYS_OFFSET_PRECISE).
+
 config IGB
 	tristate "Intel(R) 82575/82576 PCI-Express Gigabit Ethernet support"
 	depends on PCI
@@ -192,6 +201,17 @@ config IXGBE
 
 	  To compile this driver as a module, choose M here. The module
 	  will be called ixgbe.
+
+config IXGBE_VXLAN
+	bool "Virtual eXtensible Local Area Network Support"
+	default n
+	depends on IXGBE && VXLAN && !(IXGBE=y && VXLAN=m)
+	---help---
+	  This allows one to create VXLAN virtual interfaces that provide
+	  Layer 2 Networks over Layer 3 Networks. VXLAN is often used
+	  to tunnel virtual network infrastructure in virtualized environments.
+	  Say Y here if you want to use Virtual eXtensible Local Area Network
+	  (VXLAN) in the driver.
 
 config IXGBE_HWMON
 	bool "Intel(R) 10GbE PCI Express adapters HWMON support"

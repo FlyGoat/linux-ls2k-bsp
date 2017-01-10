@@ -1519,6 +1519,13 @@ UNUSUAL_DEV( 0x0f88, 0x042e, 0x0100, 0x0100,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY ),
 
+/* Reported by Moritz Moeller-Herrmann <moritz-kernel@moeller-herrmann.de> */
+UNUSUAL_DEV(  0x0fca, 0x8004, 0x0201, 0x0201,
+		"Research In Motion",
+		"BlackBerry Bold 9000",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_MAX_SECTORS_64 ),
+
 /* Reported by Michael Stattmann <michael@stattmann.com> */
 UNUSUAL_DEV(  0x0fce, 0xd008, 0x0000, 0x0000,
 		"Sony Ericsson",
@@ -2058,6 +2065,18 @@ UNUSUAL_DEV( 0x1908, 0x3335, 0x0200, 0x0200,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_NO_READ_DISC_INFO ),
 
+/* Reported by Oliver Neukum <oneukum@suse.com>
+ * This device morphes spontaneously into another device if the access
+ * pattern of Windows isn't followed. Thus writable media would be dirty
+ * if the initial instance is used. So the device is limited to its
+ * virtual CD.
+ * And yes, the concept that BCD goes up to 9 is not heeded */
+UNUSUAL_DEV( 0x19d2, 0x1225, 0x0000, 0xffff,
+		"ZTE,Incorporated",
+		"ZTE WCDMA Technologies MSM",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_SINGLE_LUN ),
+
 /* Reported by Sven Geggus <sven-usbst@geggus.net>
  * This encrypted pen drive returns bogus data for the initial READ(10).
  */
@@ -2066,6 +2085,17 @@ UNUSUAL_DEV(  0x1b1c, 0x1ab5, 0x0200, 0x0200,
 		"Padlock v2",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_INITIAL_READ10 ),
+
+/* Reported by Hans de Goede <hdegoede@redhat.com>
+ * These are mini projectors using USB for both power and video data transport
+ * The usb-storage interface is a virtual windows driver CD, which the gm12u320
+ * driver automatically converts into framebuffer & kms dri device nodes.
+ */
+UNUSUAL_DEV( 0x1de1, 0xc102, 0x0000, 0xffff,
+		"Grain-media Technology Corp.",
+		"USB3.0 Device GM12U320",
+		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+		US_FL_IGNORE_DEVICE ),
 
 /* Patch by Richard Schütz <r.schtz@t-online.de>
  * This external hard drive enclosure uses a JMicron chip which

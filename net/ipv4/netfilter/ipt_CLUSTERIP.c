@@ -273,7 +273,7 @@ clusterip_hashfn(const struct sk_buff *skb,
 	}
 
 	/* node numbers are 1..n, not 0..n */
-	return (((u64)hashval * config->num_total_nodes) >> 32) + 1;
+	return reciprocal_scale(hashval, config->num_total_nodes) + 1;
 }
 
 static inline int
@@ -354,6 +354,11 @@ static int clusterip_tg_check(const struct xt_tgchk_param *par)
 	const struct ipt_entry *e = par->entryinfo;
 	struct clusterip_config *config;
 	int ret;
+
+	if (par->nft_compat) {
+		pr_err("cannot use CLUSTERIP target from nftables compat\n");
+		return -EOPNOTSUPP;
+	}
 
 	if (cipinfo->hash_mode != CLUSTERIP_HASHMODE_SIP &&
 	    cipinfo->hash_mode != CLUSTERIP_HASHMODE_SIP_SPT &&

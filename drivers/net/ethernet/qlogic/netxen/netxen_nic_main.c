@@ -3026,9 +3026,9 @@ netxen_sysfs_read_dimm(struct file *filp, struct kobject *kobj,
 	u8 dw, rows, cols, banks, ranks;
 	u32 val;
 
-	if (size != sizeof(struct netxen_dimm_cfg)) {
+	if (size < attr->size) {
 		netdev_err(netdev, "Invalid size\n");
-		return -1;
+		return -EINVAL;
 	}
 
 	memset(&dimm, 0, sizeof(struct netxen_dimm_cfg));
@@ -3138,7 +3138,7 @@ out:
 
 static struct bin_attribute bin_attr_dimm = {
 	.attr = { .name = "dimm", .mode = (S_IRUGO | S_IWUSR) },
-	.size = 0,
+	.size = sizeof(struct netxen_dimm_cfg),
 	.read = netxen_sysfs_read_dimm,
 };
 
@@ -3387,7 +3387,7 @@ static int netxen_netdev_event(struct notifier_block *this,
 				 unsigned long event, void *ptr)
 {
 	struct netxen_adapter *adapter;
-	struct net_device *dev = (struct net_device *)ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct net_device *orig_dev = dev;
 	struct net_device *slave;
 
@@ -3506,7 +3506,7 @@ static int __init netxen_init_module(void)
 	printk(KERN_INFO "%s\n", netxen_nic_driver_string);
 
 #ifdef CONFIG_INET
-	register_netdevice_notifier(&netxen_netdev_cb);
+	register_netdevice_notifier_rh(&netxen_netdev_cb);
 	register_inetaddr_notifier(&netxen_inetaddr_cb);
 #endif
 	return pci_register_driver(&netxen_driver);
@@ -3520,7 +3520,7 @@ static void __exit netxen_exit_module(void)
 
 #ifdef CONFIG_INET
 	unregister_inetaddr_notifier(&netxen_inetaddr_cb);
-	unregister_netdevice_notifier(&netxen_netdev_cb);
+	unregister_netdevice_notifier_rh(&netxen_netdev_cb);
 #endif
 }
 

@@ -346,6 +346,7 @@ struct e1000_adapter {
 	struct timecounter tc;
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_clock_info;
+	struct pm_qos_request pm_qos_req;
 
 	u16 eee_advert;
 };
@@ -450,6 +451,7 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
 #define FLAG2_PCIM2PCI_ARBITER_WA         (1 << 11)
 #define FLAG2_DFLT_CRC_STRIPPING          (1 << 12)
 #define FLAG2_CHECK_RX_HWTSTAMP           (1 << 13)
+#define FLAG2_CHECK_SYSTIM_OVERFLOW       (1 << 14)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
@@ -479,7 +481,7 @@ extern const char e1000e_driver_version[];
 void e1000e_check_options(struct e1000_adapter *adapter);
 void e1000e_set_ethtool_ops(struct net_device *netdev);
 
-int e1000e_up(struct e1000_adapter *adapter);
+void e1000e_up(struct e1000_adapter *adapter);
 void e1000e_down(struct e1000_adapter *adapter, bool reset);
 void e1000e_reinit_locked(struct e1000_adapter *adapter);
 void e1000e_reset(struct e1000_adapter *adapter);

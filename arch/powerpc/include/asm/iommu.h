@@ -29,6 +29,7 @@
 #include <linux/bitops.h>
 #include <asm/machdep.h>
 #include <asm/types.h>
+#include <asm/pci-bridge.h>
 
 #define IOMMU_PAGE_SHIFT_4K      12
 #define IOMMU_PAGE_SIZE_4K       (ASM_CONST(1) << IOMMU_PAGE_SHIFT_4K)
@@ -243,13 +244,16 @@ static inline int dma_iommu_dma_supported(struct device *dev, u64 mask)
 
 #endif /* CONFIG_PPC64 */
 
-extern int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
-			struct scatterlist *sglist, int nelems,
-			unsigned long mask, enum dma_data_direction direction,
-			struct dma_attrs *attrs);
-extern void iommu_unmap_sg(struct iommu_table *tbl, struct scatterlist *sglist,
-			   int nelems, enum dma_data_direction direction,
-			   struct dma_attrs *attrs);
+extern int ppc_iommu_map_sg(struct device *dev, struct iommu_table *tbl,
+			    struct scatterlist *sglist, int nelems,
+			    unsigned long mask,
+			    enum dma_data_direction direction,
+			    struct dma_attrs *attrs);
+extern void ppc_iommu_unmap_sg(struct iommu_table *tbl,
+			       struct scatterlist *sglist,
+			       int nelems,
+			       enum dma_data_direction direction,
+			       struct dma_attrs *attrs);
 
 extern void *iommu_alloc_coherent(struct device *dev, struct iommu_table *tbl,
 				  size_t size, dma_addr_t *dma_handle,
@@ -266,7 +270,7 @@ extern void iommu_unmap_page(struct iommu_table *tbl, dma_addr_t dma_handle,
 			     struct dma_attrs *attrs);
 
 extern void iommu_init_early_pSeries(void);
-extern void iommu_init_early_dart(void);
+extern void iommu_init_early_dart(struct pci_controller_ops *controller_ops);
 extern void iommu_init_early_pasemi(void);
 
 extern void alloc_dart_table(void);

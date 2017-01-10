@@ -524,7 +524,7 @@ static void unmap_rx_buf(struct adapter *adapter, struct sge_fl *fl)
  */
 static inline void ring_fl_db(struct adapter *adapter, struct sge_fl *fl)
 {
-	u32 val;
+	u32 val = adapter->params.arch.sge_fl_db;
 
 	/* The SGE keeps track of its Producer and Consumer Indices in terms
 	 * of Egress Queue Units so we can only tell it about integral numbers
@@ -532,11 +532,9 @@ static inline void ring_fl_db(struct adapter *adapter, struct sge_fl *fl)
 	 */
 	if (fl->pend_cred >= FL_PER_EQ_UNIT) {
 		if (is_t4(adapter->params.chip))
-			val = PIDX_V(fl->pend_cred / FL_PER_EQ_UNIT);
+			val |= PIDX_V(fl->pend_cred / FL_PER_EQ_UNIT);
 		else
-			val = PIDX_T5_V(fl->pend_cred / FL_PER_EQ_UNIT) |
-			      DBTYPE_F;
-		val |= DBPRIO_F;
+			val |= PIDX_T5_V(fl->pend_cred / FL_PER_EQ_UNIT);
 
 		/* Make sure all memory writes to the Free List queue are
 		 * committed before we tell the hardware about them.
@@ -1083,7 +1081,7 @@ static void inline_tx_skb(const struct sk_buff *skb, const struct sge_txq *tq,
  * Figure out what HW csum a packet wants and return the appropriate control
  * bits.
  */
-static u64 hwcsum(const struct sk_buff *skb)
+static u64 hwcsum(enum chip_type chip, const struct sk_buff *skb)
 {
 	int csum_type;
 	const struct iphdr *iph = ip_hdr(skb);
@@ -1115,11 +1113,16 @@ nocsum:
 			goto nocsum;
 	}
 
-	if (likely(csum_type >= TX_CSUM_TCPIP))
-		return TXPKT_CSUM_TYPE_V(csum_type) |
-			TXPKT_IPHDR_LEN_V(skb_network_header_len(skb)) |
-			TXPKT_ETHHDR_LEN_V(skb_network_offset(skb) - ETH_HLEN);
-	else {
+	if (likely(csum_type >= TX_CSUM_TCPIP)) {
+		u64 hdr_len = TXPKT_IPHDR_LEN_V(skb_network_header_len(skb));
+		int eth_hdr_len = skb_network_offset(skb) - ETH_HLEN;
+
+		if (chip <= CHELSIO_T5)
+			hdr_len |= TXPKT_ETHHDR_LEN_V(eth_hdr_len);
+		else
+			hdr_len |= T6_TXPKT_ETHHDR_LEN_V(eth_hdr_len);
+		return TXPKT_CSUM_TYPE_V(csum_type) | hdr_len;
+	} else {
 		int start = skb_transport_offset(skb);
 
 		return TXPKT_CSUM_TYPE_V(csum_type) |
@@ -1184,7 +1187,7 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	/* Discard the packet if the length is greater than mtu */
 	max_pkt_len = ETH_HLEN + dev->mtu;
-	if (skb_vlan_tag_present(skb))
+	if (skb_vlan_tagged(skb))
 		max_pkt_len += VLAN_HLEN;
 	if (!skb_shinfo(skb)->gso_size && (unlikely(skb->len > max_pkt_len)))
 		goto out_free;
@@ -1307,10 +1310,15 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		 * accounting.
 		 */
 		cpl = (void *)(lso + 1);
-		cntrl = (TXPKT_CSUM_TYPE_V(v6 ?
+
+		if (CHELSIO_CHIP_VERSION(adapter->params.chip) <= CHELSIO_T5)
+			cntrl = TXPKT_ETHHDR_LEN_V(eth_xtra_len);
+		else
+			cntrl = T6_TXPKT_ETHHDR_LEN_V(eth_xtra_len);
+
+		cntrl |= TXPKT_CSUM_TYPE_V(v6 ?
 					   TX_CSUM_TCPIP6 : TX_CSUM_TCPIP) |
-			 TXPKT_IPHDR_LEN_V(l3hdr_len) |
-			 TXPKT_ETHHDR_LEN_V(eth_xtra_len));
+			 TXPKT_IPHDR_LEN_V(l3hdr_len);
 		txq->tso++;
 		txq->tx_cso += ssi->gso_segs;
 	} else {
@@ -1327,7 +1335,8 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		 */
 		cpl = (void *)(wr + 1);
 		if (skb->ip_summed == CHECKSUM_PARTIAL) {
-			cntrl = hwcsum(skb) | TXPKT_IPCSUM_DIS_F;
+			cntrl = hwcsum(adapter->params.chip, skb) |
+				TXPKT_IPCSUM_DIS_F;
 			txq->tx_cso++;
 		} else
 			cntrl = TXPKT_L4CSUM_DIS_F | TXPKT_IPCSUM_DIS_F;
@@ -1854,7 +1863,7 @@ static int process_responses(struct sge_rspq *rspq, int budget)
 	 * for new buffer pointers, refill the Free List.
 	 */
 	if (rspq->offset >= 0 &&
-	    rxq->fl.size - rxq->fl.avail >= 2*FL_PER_EQ_UNIT)
+	    fl_cap(&rxq->fl) - rxq->fl.avail >= 2*FL_PER_EQ_UNIT)
 		__refill_fl(rspq->adapter, &rxq->fl);
 	return budget - budget_left;
 }
@@ -1888,7 +1897,10 @@ static int napi_rx_handler(struct napi_struct *napi, int budget)
 		rspq->unhandled_irqs++;
 
 	val = CIDXINC_V(work_done) | SEINTARM_V(intr_params);
-	if (is_t4(rspq->adapter->params.chip)) {
+	/* If we don't have access to the new User GTS (T5+), use the old
+	 * doorbell mechanism; otherwise use the new BAR2 mechanism.
+	 */
+	if (unlikely(!rspq->bar2_addr)) {
 		t4_write_reg(rspq->adapter,
 			     T4VF_SGE_BASE_ADDR + SGE_VF_GTS,
 			     val | INGRESSQID_V((u32)rspq->cntxt_id));
@@ -1988,10 +2000,13 @@ static unsigned int process_intrq(struct adapter *adapter)
 	}
 
 	val = CIDXINC_V(work_done) | SEINTARM_V(intrq->intr_params);
-	if (is_t4(adapter->params.chip))
+	/* If we don't have access to the new User GTS (T5+), use the old
+	 * doorbell mechanism; otherwise use the new BAR2 mechanism.
+	 */
+	if (unlikely(!intrq->bar2_addr)) {
 		t4_write_reg(adapter, T4VF_SGE_BASE_ADDR + SGE_VF_GTS,
 			     val | INGRESSQID_V(intrq->cntxt_id));
-	else {
+	} else {
 		writel(val | INGRESSQID_V(intrq->bar2_qid),
 		       intrq->bar2_addr + SGE_UDB_GTS);
 		wmb();
@@ -2246,6 +2261,8 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 	cmd.iqaddr = cpu_to_be64(rspq->phys_addr);
 
 	if (fl) {
+		enum chip_type chip =
+			CHELSIO_CHIP_VERSION(adapter->params.chip);
 		/*
 		 * Allocate the ring for the hardware free list (with space
 		 * for its status page) along with the associated software
@@ -2282,10 +2299,23 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 				FW_IQ_CMD_FL0HOSTFCMODE_V(SGE_HOSTFCMODE_NONE) |
 				FW_IQ_CMD_FL0PACKEN_F |
 				FW_IQ_CMD_FL0PADEN_F);
+
+		/* In T6, for egress queue type FL there is internal overhead
+		 * of 16B for header going into FLM module.  Hence the maximum
+		 * allowed burst size is 448 bytes.  For T4/T5, the hardware
+		 * doesn't coalesce fetch requests if more than 64 bytes of
+		 * Free List pointers are provided, so we use a 128-byte Fetch
+		 * Burst Minimum there (T6 implements coalescing so we can use
+		 * the smaller 64-byte value there).
+		 */
 		cmd.fl0dcaen_to_fl0cidxfthresh =
 			cpu_to_be16(
-				FW_IQ_CMD_FL0FBMIN_V(SGE_FETCHBURSTMIN_64B) |
-				FW_IQ_CMD_FL0FBMAX_V(SGE_FETCHBURSTMAX_512B));
+				FW_IQ_CMD_FL0FBMIN_V(chip <= CHELSIO_T5 ?
+						     FETCHBURSTMIN_128B_X :
+						     FETCHBURSTMIN_64B_X) |
+				FW_IQ_CMD_FL0FBMAX_V((chip <= CHELSIO_T5) ?
+						     FETCHBURSTMAX_512B_X :
+						     FETCHBURSTMAX_256B_X));
 		cmd.fl0size = cpu_to_be16(flsz);
 		cmd.fl0addr = cpu_to_be64(fl->addr);
 	}
@@ -2587,7 +2617,6 @@ int t4vf_sge_init(struct adapter *adapter)
 	u32 fl0 = sge_params->sge_fl_buffer_size[0];
 	u32 fl1 = sge_params->sge_fl_buffer_size[1];
 	struct sge *s = &adapter->sge;
-	unsigned int ingpadboundary, ingpackboundary;
 
 	/*
 	 * Start by vetting the basic SGE parameters which have been set up by
@@ -2599,7 +2628,8 @@ int t4vf_sge_init(struct adapter *adapter)
 			fl0, fl1);
 		return -EINVAL;
 	}
-	if ((sge_params->sge_control & RXPKTCPLMODE_F) == 0) {
+	if ((sge_params->sge_control & RXPKTCPLMODE_F) !=
+	    RXPKTCPLMODE_V(RXPKTCPLMODE_SPLIT_X)) {
 		dev_err(adapter->pdev_dev, "bad SGE CPL MODE\n");
 		return -EINVAL;
 	}
@@ -2612,34 +2642,7 @@ int t4vf_sge_init(struct adapter *adapter)
 	s->stat_len = ((sge_params->sge_control & EGRSTATUSPAGESIZE_F)
 			? 128 : 64);
 	s->pktshift = PKTSHIFT_G(sge_params->sge_control);
-
-	/* T4 uses a single control field to specify both the PCIe Padding and
-	 * Packing Boundary.  T5 introduced the ability to specify these
-	 * separately.  The actual Ingress Packet Data alignment boundary
-	 * within Packed Buffer Mode is the maximum of these two
-	 * specifications.  (Note that it makes no real practical sense to
-	 * have the Pading Boudary be larger than the Packing Boundary but you
-	 * could set the chip up that way and, in fact, legacy T4 code would
-	 * end doing this because it would initialize the Padding Boundary and
-	 * leave the Packing Boundary initialized to 0 (16 bytes).)
-	 */
-	ingpadboundary = 1 << (INGPADBOUNDARY_G(sge_params->sge_control) +
-			       INGPADBOUNDARY_SHIFT_X);
-	if (is_t4(adapter->params.chip)) {
-		s->fl_align = ingpadboundary;
-	} else {
-		/* T5 has a different interpretation of one of the PCIe Packing
-		 * Boundary values.
-		 */
-		ingpackboundary = INGPACKBOUNDARY_G(sge_params->sge_control2);
-		if (ingpackboundary == INGPACKBOUNDARY_16B_X)
-			ingpackboundary = 16;
-		else
-			ingpackboundary = 1 << (ingpackboundary +
-						INGPACKBOUNDARY_SHIFT_X);
-
-		s->fl_align = max(ingpadboundary, ingpackboundary);
-	}
+	s->fl_align = t4vf_fl_pkt_align(adapter);
 
 	/* A FL with <= fl_starve_thres buffers is starving and a periodic
 	 * timer will attempt to refill it.  This needs to be larger than the
@@ -2648,8 +2651,22 @@ int t4vf_sge_init(struct adapter *adapter)
 	 * give it more Free List entries.  (Note that the SGE's Egress
 	 * Congestion Threshold is in units of 2 Free List pointers.)
 	 */
-	s->fl_starve_thres
-		= EGRTHRESHOLD_G(sge_params->sge_congestion_control)*2 + 1;
+	switch (CHELSIO_CHIP_VERSION(adapter->params.chip)) {
+	case CHELSIO_T4:
+		s->fl_starve_thres =
+		   EGRTHRESHOLD_G(sge_params->sge_congestion_control);
+		break;
+	case CHELSIO_T5:
+		s->fl_starve_thres =
+		   EGRTHRESHOLDPACKING_G(sge_params->sge_congestion_control);
+		break;
+	case CHELSIO_T6:
+	default:
+		s->fl_starve_thres =
+		   T6_EGRTHRESHOLDPACKING_G(sge_params->sge_congestion_control);
+		break;
+	}
+	s->fl_starve_thres = s->fl_starve_thres * 2 + 1;
 
 	/*
 	 * Set up tasklet timers.

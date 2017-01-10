@@ -31,11 +31,24 @@ static char *pci_perf_names[] = {
 	"Refresh operations",
 	"DMA read bytes",
 	"DMA write bytes",
-	/* software counters */
+};
+
+static char *pci_sw_names[] = {
 	"Allocated pages",
 	"Mapped pages",
 	"Unmapped pages",
 };
+
+static void pci_sw_counter_show(struct seq_file *m)
+{
+	struct zpci_dev *zdev = m->private;
+	atomic64_t *counter = &zdev->allocated_pages;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(pci_sw_names); i++, counter++)
+		seq_printf(m, "%26s:\t%llu\n", pci_sw_names[i],
+			   atomic64_read(counter));
+}
 
 static int pci_perf_show(struct seq_file *m, void *v)
 {
@@ -63,12 +76,8 @@ static int pci_perf_show(struct seq_file *m, void *v)
 		for (i = 4; i < 6; i++)
 			seq_printf(m, "%26s:\t%llu\n",
 				   pci_perf_names[i], *(stat + i));
-	/* software counters */
-	for (i = 6; i < ARRAY_SIZE(pci_perf_names); i++)
-		seq_printf(m, "%26s:\t%llu\n",
-			   pci_perf_names[i],
-			   atomic64_read((atomic64_t *) (stat + i)));
 
+	pci_sw_counter_show(m);
 	return 0;
 }
 
@@ -115,10 +124,9 @@ static const struct file_operations debugfs_pci_perf_fops = {
 	.release = single_release,
 };
 
-void zpci_debug_init_device(struct zpci_dev *zdev)
+void zpci_debug_init_device(struct zpci_dev *zdev, const char *name)
 {
-	zdev->debugfs_dev = debugfs_create_dir(dev_name(&zdev->pdev->dev),
-					       debugfs_root);
+	zdev->debugfs_dev = debugfs_create_dir(name, debugfs_root);
 	if (IS_ERR(zdev->debugfs_dev))
 		zdev->debugfs_dev = NULL;
 

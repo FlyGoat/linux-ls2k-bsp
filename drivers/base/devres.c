@@ -82,12 +82,12 @@ static struct devres_group * node_to_group(struct devres_node *node)
 }
 
 static __always_inline struct devres * alloc_dr(dr_release_t release,
-						size_t size, gfp_t gfp)
+						size_t size, gfp_t gfp, int nid)
 {
 	size_t tot_size = sizeof(struct devres) + size;
 	struct devres *dr;
 
-	dr = kmalloc_track_caller(tot_size, gfp);
+	dr = kmalloc_node_track_caller(tot_size, gfp, nid);
 	if (unlikely(!dr))
 		return NULL;
 
@@ -106,24 +106,25 @@ static void add_dr(struct device *dev, struct devres_node *node)
 }
 
 #ifdef CONFIG_DEBUG_DEVRES
-void * __devres_alloc(dr_release_t release, size_t size, gfp_t gfp,
+void * __devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid,
 		      const char *name)
 {
 	struct devres *dr;
 
-	dr = alloc_dr(release, size, gfp | __GFP_ZERO);
+	dr = alloc_dr(release, size, gfp | __GFP_ZERO, nid);
 	if (unlikely(!dr))
 		return NULL;
 	set_node_dbginfo(&dr->node, name, size);
 	return dr->data;
 }
-EXPORT_SYMBOL_GPL(__devres_alloc);
+EXPORT_SYMBOL_GPL(__devres_alloc_node);
 #else
 /**
  * devres_alloc - Allocate device resource data
  * @release: Release function devres will be associated with
  * @size: Allocation size
  * @gfp: Allocation flags
+ * @nid: NUMA node
  *
  * Allocate devres of @size bytes.  The allocated area is zeroed, then
  * associated with @release.  The returned pointer can be passed to
@@ -132,16 +133,16 @@ EXPORT_SYMBOL_GPL(__devres_alloc);
  * RETURNS:
  * Pointer to allocated devres on success, NULL on failure.
  */
-void * devres_alloc(dr_release_t release, size_t size, gfp_t gfp)
+void * devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid)
 {
 	struct devres *dr;
 
-	dr = alloc_dr(release, size, gfp | __GFP_ZERO);
+	dr = alloc_dr(release, size, gfp | __GFP_ZERO, nid);
 	if (unlikely(!dr))
 		return NULL;
 	return dr->data;
 }
-EXPORT_SYMBOL_GPL(devres_alloc);
+EXPORT_SYMBOL_GPL(devres_alloc_node);
 #endif
 
 /**
@@ -776,7 +777,7 @@ void * devm_kmalloc(struct device *dev, size_t size, gfp_t gfp)
 	struct devres *dr;
 
 	/* use raw alloc_dr for kmalloc caller tracing */
-	dr = alloc_dr(devm_kmalloc_release, size, gfp);
+	dr = alloc_dr(devm_kmalloc_release, size, gfp, dev_to_node(dev));
 	if (unlikely(!dr))
 		return NULL;
 
@@ -789,6 +790,87 @@ void * devm_kmalloc(struct device *dev, size_t size, gfp_t gfp)
 	return dr->data;
 }
 EXPORT_SYMBOL_GPL(devm_kmalloc);
+
+/**
+ * devm_kstrdup - Allocate resource managed space and
+ *                copy an existing string into that.
+ * @dev: Device to allocate memory for
+ * @s: the string to duplicate
+ * @gfp: the GFP mask used in the devm_kmalloc() call when
+ *       allocating memory
+ * RETURNS:
+ * Pointer to allocated string on success, NULL on failure.
+ */
+char *devm_kstrdup(struct device *dev, const char *s, gfp_t gfp)
+{
+	size_t size;
+	char *buf;
+
+	if (!s)
+		return NULL;
+
+	size = strlen(s) + 1;
+	buf = devm_kmalloc(dev, size, gfp);
+	if (buf)
+		memcpy(buf, s, size);
+	return buf;
+}
+EXPORT_SYMBOL_GPL(devm_kstrdup);
+
+/**
+ * devm_kvasprintf - Allocate resource managed space
+ *			for the formatted string.
+ * @dev: Device to allocate memory for
+ * @gfp: the GFP mask used in the devm_kmalloc() call when
+ *       allocating memory
+ * @fmt: the formatted string to duplicate
+ * @ap: the list of tokens to be placed in the formatted string
+ * RETURNS:
+ * Pointer to allocated string on success, NULL on failure.
+ */
+char *devm_kvasprintf(struct device *dev, gfp_t gfp, const char *fmt,
+		      va_list ap)
+{
+	unsigned int len;
+	char *p;
+	va_list aq;
+
+	va_copy(aq, ap);
+	len = vsnprintf(NULL, 0, fmt, aq);
+	va_end(aq);
+
+	p = devm_kmalloc(dev, len+1, gfp);
+	if (!p)
+		return NULL;
+
+	vsnprintf(p, len+1, fmt, ap);
+
+	return p;
+}
+EXPORT_SYMBOL(devm_kvasprintf);
+
+/**
+ * devm_kasprintf - Allocate resource managed space
+ *		and copy an existing formatted string into that
+ * @dev: Device to allocate memory for
+ * @gfp: the GFP mask used in the devm_kmalloc() call when
+ *       allocating memory
+ * @fmt: the string to duplicate
+ * RETURNS:
+ * Pointer to allocated string on success, NULL on failure.
+ */
+char *devm_kasprintf(struct device *dev, gfp_t gfp, const char *fmt, ...)
+{
+	va_list ap;
+	char *p;
+
+	va_start(ap, fmt);
+	p = devm_kvasprintf(dev, gfp, fmt, ap);
+	va_end(ap);
+
+	return p;
+}
+EXPORT_SYMBOL_GPL(devm_kasprintf);
 
 /**
  * devm_kfree - Resource-managed kfree
@@ -805,3 +887,24 @@ void devm_kfree(struct device *dev, void *p)
 	WARN_ON(rc);
 }
 EXPORT_SYMBOL_GPL(devm_kfree);
+
+/**
+ * devm_kmemdup - Resource-managed kmemdup
+ * @dev: Device this memory belongs to
+ * @src: Memory region to duplicate
+ * @len: Memory region length
+ * @gfp: GFP mask to use
+ *
+ * Duplicate region of a memory using resource managed kmalloc
+ */
+void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp)
+{
+	void *p;
+
+	p = devm_kmalloc(dev, len, gfp);
+	if (p)
+		memcpy(p, src, len);
+
+	return p;
+}
+EXPORT_SYMBOL_GPL(devm_kmemdup);

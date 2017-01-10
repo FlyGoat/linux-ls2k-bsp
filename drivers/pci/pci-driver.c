@@ -19,6 +19,7 @@
 #include <linux/cpu.h>
 #include <linux/pm_runtime.h>
 #include <linux/suspend.h>
+#include <linux/kernel.h>
 #include "pci.h"
 
 extern bool kexec_in_progress;
@@ -68,7 +69,6 @@ int pci_add_dynid(struct pci_driver *drv,
 		  unsigned long driver_data)
 {
 	struct pci_dynid *dynid;
-	int retval;
 
 	dynid = kzalloc(sizeof(*dynid), GFP_KERNEL);
 	if (!dynid)
@@ -86,9 +86,7 @@ int pci_add_dynid(struct pci_driver *drv,
 	list_add_tail(&dynid->node, &drv->dynids.list);
 	spin_unlock(&drv->dynids.lock);
 
-	retval = driver_attach(&drv->driver);
-
-	return retval;
+	return driver_attach(&drv->driver);
 }
 EXPORT_SYMBOL_GPL(pci_add_dynid);
 
@@ -312,11 +310,14 @@ const struct pci_device_id *pci_hw_vendor_status(
 						const struct pci_device_id *ids,
 						struct pci_dev *dev)
 {
+	char devinfo[64];
 	const struct pci_device_id *ret = pci_match_id(ids, dev);
 
-	if (ret)
-		dev_printk(KERN_WARNING, &dev->dev,
-			   "The hardware vendor of this device has identified it as being unsupported.  Driver updates and fixes are limited for this device.  Please contact your device's hardware vendor for additional information.\n");
+	if (ret) {
+		snprintf(devinfo, sizeof(devinfo), "%s %s",
+			 dev_driver_string(&dev->dev), dev_name(&dev->dev));
+		mark_hardware_deprecated(devinfo);
+	}
 
 	return ret;
 }
@@ -1420,7 +1421,7 @@ static int pci_uevent(struct device *dev, struct kobj_uevent_env *env)
 	if (add_uevent_var(env, "PCI_SLOT_NAME=%s", pci_name(pdev)))
 		return -ENOMEM;
 
-	if (add_uevent_var(env, "MODALIAS=pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02x",
+	if (add_uevent_var(env, "MODALIAS=pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X",
 			   pdev->vendor, pdev->device,
 			   pdev->subsystem_vendor, pdev->subsystem_device,
 			   (u8)(pdev->class >> 16), (u8)(pdev->class >> 8),

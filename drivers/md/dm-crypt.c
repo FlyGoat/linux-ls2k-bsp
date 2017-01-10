@@ -114,7 +114,8 @@ struct iv_tcw_private {
  * and encrypts / decrypts at the same time.
  */
 enum flags { DM_CRYPT_SUSPENDED, DM_CRYPT_KEY_VALID,
-	     DM_CRYPT_SAME_CPU, DM_CRYPT_NO_OFFLOAD };
+	     DM_CRYPT_SAME_CPU, DM_CRYPT_NO_OFFLOAD,
+	     DM_CRYPT_EXIT_THREAD};
 
 /*
  * The fields in here must be read only after initialization.
@@ -1208,20 +1209,18 @@ continue_locked:
 		if (!RB_EMPTY_ROOT(&cc->write_tree))
 			goto pop_from_list;
 
+		if (unlikely(test_bit(DM_CRYPT_EXIT_THREAD, &cc->flags))) {
+			spin_unlock_irq(&cc->write_thread_wait.lock);
+			break;
+		}
+
 		__set_current_state(TASK_INTERRUPTIBLE);
 		__add_wait_queue(&cc->write_thread_wait, &wait);
 
 		spin_unlock_irq(&cc->write_thread_wait.lock);
 
-		if (unlikely(kthread_should_stop())) {
-			set_task_state(current, TASK_RUNNING);
-			remove_wait_queue(&cc->write_thread_wait, &wait);
-			break;
-		}
-
 		schedule();
 
-		set_task_state(current, TASK_RUNNING);
 		spin_lock_irq(&cc->write_thread_wait.lock);
 		__remove_wait_queue(&cc->write_thread_wait, &wait);
 		goto continue_locked;
@@ -1531,8 +1530,13 @@ static void crypt_dtr(struct dm_target *ti)
 	if (!cc)
 		return;
 
-	if (cc->write_thread)
+	if (cc->write_thread) {
+		spin_lock_irq(&cc->write_thread_wait.lock);
+		set_bit(DM_CRYPT_EXIT_THREAD, &cc->flags);
+		wake_up_locked(&cc->write_thread_wait);
+		spin_unlock_irq(&cc->write_thread_wait.lock);
 		kthread_stop(cc->write_thread);
+	}
 
 	if (cc->io_queue)
 		destroy_workqueue(cc->io_queue);
@@ -1544,10 +1548,8 @@ static void crypt_dtr(struct dm_target *ti)
 	if (cc->bs)
 		bioset_free(cc->bs);
 
-	if (cc->page_pool)
-		mempool_destroy(cc->page_pool);
-	if (cc->req_pool)
-		mempool_destroy(cc->req_pool);
+	mempool_destroy(cc->page_pool);
+	mempool_destroy(cc->req_pool);
 
 	if (cc->iv_gen_ops && cc->iv_gen_ops->dtr)
 		cc->iv_gen_ops->dtr(cc);
@@ -1786,7 +1788,7 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad;
 	}
 
-	cc->per_bio_data_size = ti->per_bio_data_size =
+	cc->per_bio_data_size = ti->per_io_data_size =
 		ALIGN(sizeof(struct dm_crypt_io) + cc->dmreq_start +
 		      sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size,
 		      ARCH_KMALLOC_MINALIGN);
@@ -1812,11 +1814,13 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	cc->iv_offset = tmpll;
 
-	if (dm_get_device(ti, argv[3], dm_table_get_mode(ti->table), &cc->dev)) {
+	ret = dm_get_device(ti, argv[3], dm_table_get_mode(ti->table), &cc->dev);
+	if (ret) {
 		ti->error = "Device lookup failed";
 		goto bad;
 	}
 
+	ret = -EINVAL;
 	if (sscanf(argv[4], "%llu%c", &tmpll, &dummy) != 1) {
 		ti->error = "Invalid device sector";
 		goto bad;

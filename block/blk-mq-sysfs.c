@@ -141,15 +141,26 @@ static ssize_t blk_mq_sysfs_completed_show(struct blk_mq_ctx *ctx, char *page)
 
 static ssize_t sysfs_list_show(char *page, struct list_head *list, char *msg)
 {
-	char *start_page = page;
 	struct request *rq;
+	int len = snprintf(page, PAGE_SIZE - 1, "%s:\n", msg);
 
-	page += sprintf(page, "%s:\n", msg);
+	list_for_each_entry(rq, list, queuelist) {
+		const int rq_len = 2 * sizeof(rq) + 2;
 
-	list_for_each_entry(rq, list, queuelist)
-		page += sprintf(page, "\t%p\n", rq);
+		/* if the output will be truncated */
+		if (PAGE_SIZE - 1 < len + rq_len) {
+			/* backspacing if it can't hold '\t...\n' */
+			if (PAGE_SIZE - 1 < len + 5)
+				len -= rq_len;
+			len += snprintf(page + len, PAGE_SIZE - 1 - len,
+					"\t...\n");
+			break;
+		}
+		len += snprintf(page + len, PAGE_SIZE - 1 - len,
+				"\t%p\n", rq);
+	}
 
-	return page - start_page;
+	return len;
 }
 
 static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
@@ -387,25 +398,20 @@ void blk_mq_unregister_disk(struct gendisk *disk)
 	blk_mq_enable_hotplug();
 }
 
+void blk_mq_hctx_kobj_init(struct blk_mq_hw_ctx *hctx)
+{
+	kobject_init(&hctx->kobj, &blk_mq_hw_ktype);
+}
+
 static void blk_mq_sysfs_init(struct request_queue *q)
 {
-	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
 	int i;
 
 	kobject_init(&q->mq_kobj, &blk_mq_ktype);
 
-	queue_for_each_hw_ctx(q, hctx, i)
-		kobject_init(&hctx->kobj, &blk_mq_hw_ktype);
-
 	queue_for_each_ctx(q, ctx, i)
 		kobject_init(&ctx->kobj, &blk_mq_ctx_ktype);
-}
-
-/* see blk_register_queue() */
-void blk_mq_finish_init(struct request_queue *q)
-{
-	percpu_ref_switch_to_percpu(&q->mq_usage_counter);
 }
 
 int blk_mq_register_disk(struct gendisk *disk)

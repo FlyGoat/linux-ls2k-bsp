@@ -169,8 +169,8 @@ static void ceph_invalidatepage(struct page *page, unsigned long offset)
 /* just a sanity check */
 static int ceph_releasepage(struct page *page, gfp_t g)
 {
-	struct inode *inode = page->mapping ? page->mapping->host : NULL;
-	dout("%p releasepage %p idx %lu\n", inode, page, page->index);
+	dout("%p releasepage %p idx %lu\n", page->mapping->host,
+	     page, page->index);
 	WARN_ON(PageDirty(page));
 	WARN_ON(PagePrivate(page));
 	return 0;
@@ -241,12 +241,12 @@ static int ceph_readpage(struct file *filp, struct page *page)
 /*
  * Finish an async read(ahead) op.
  */
-static void finish_read(struct ceph_osd_request *req, struct ceph_msg *msg)
+static void finish_read(struct ceph_osd_request *req)
 {
 	struct inode *inode = req->r_inode;
 	struct ceph_osd_data *osd_data;
-	int rc = req->r_result;
-	int bytes = le32_to_cpu(msg->hdr.data_len);
+	int rc = req->r_result <= 0 ? req->r_result : 0;
+	int bytes = req->r_result >= 0 ? req->r_result : 0;
 	int num_pages;
 	int i;
 
@@ -260,7 +260,7 @@ static void finish_read(struct ceph_osd_request *req, struct ceph_msg *msg)
 	for (i = 0; i < num_pages; i++) {
 		struct page *page = osd_data->pages[i];
 
-		if (rc < 0 && rc != ENOENT)
+		if (rc < 0 && rc != -ENOENT)
 			goto unlock;
 		if (bytes < (int)PAGE_CACHE_SIZE) {
 			/* zero (remainder of) page */
@@ -357,8 +357,6 @@ static int start_read(struct inode *inode, struct list_head *page_list, int max)
 	osd_req_op_extent_osd_data_pages(req, 0, pages, len, 0, false, false);
 	req->r_callback = finish_read;
 	req->r_inode = inode;
-
-	ceph_osdc_build_request(req, off, NULL, vino.snap, NULL);
 
 	dout("start_read %p starting %p %lld~%lld\n", inode, req, off, len);
 	ret = ceph_osdc_start_request(osdc, req, false);
@@ -573,77 +571,76 @@ static void ceph_release_pages(struct page **pages, int num)
  * If we get an error, set the mapping error bit, but not the individual
  * page error bits.
  */
-static void writepages_finish(struct ceph_osd_request *req,
-			      struct ceph_msg *msg)
+static void writepages_finish(struct ceph_osd_request *req)
 {
 	struct inode *inode = req->r_inode;
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_osd_data *osd_data;
-	unsigned wrote;
 	struct page *page;
-	int num_pages;
-	int i;
+	int num_pages, total_pages = 0;
+	int i, j;
+	int rc = req->r_result;
 	struct ceph_snap_context *snapc = req->r_snapc;
 	struct address_space *mapping = inode->i_mapping;
-	int rc = req->r_result;
-	u64 bytes = req->r_ops[0].extent.length;
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
-	long writeback_stat;
-	unsigned issued = ceph_caps_issued(ci);
+	bool remove_page;
 
-	osd_data = osd_req_op_extent_osd_data(req, 0);
-	BUG_ON(osd_data->type != CEPH_OSD_DATA_TYPE_PAGES);
-	num_pages = calc_pages_for((u64)osd_data->alignment,
-					(u64)osd_data->length);
-	if (rc >= 0) {
-		/*
-		 * Assume we wrote the pages we originally sent.  The
-		 * osd might reply with fewer pages if our writeback
-		 * raced with a truncation and was adjusted at the osd,
-		 * so don't believe the reply.
-		 */
-		wrote = num_pages;
-	} else {
-		wrote = 0;
+
+	dout("writepages_finish %p rc %d\n", inode, rc);
+	if (rc < 0)
 		mapping_set_error(mapping, rc);
-	}
-	dout("writepages_finish %p rc %d bytes %llu wrote %d (pages)\n",
-	     inode, rc, bytes, wrote);
+
+	/*
+	 * We lost the cache cap, need to truncate the page before
+	 * it is unlocked, otherwise we'd truncate it later in the
+	 * page truncation thread, possibly losing some data that
+	 * raced its way in
+	 */
+	remove_page = !(ceph_caps_issued(ci) &
+			(CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO));
 
 	/* clean all pages */
-	for (i = 0; i < num_pages; i++) {
-		page = osd_data->pages[i];
-		BUG_ON(!page);
-		WARN_ON(!PageUptodate(page));
+	for (i = 0; i < req->r_num_ops; i++) {
+		if (req->r_ops[i].op != CEPH_OSD_OP_WRITE)
+			break;
 
-		writeback_stat =
-			atomic_long_dec_return(&fsc->writeback_count);
-		if (writeback_stat <
-		    CONGESTION_OFF_THRESH(fsc->mount_options->congestion_kb))
-			clear_bdi_congested(&fsc->backing_dev_info,
-					    BLK_RW_ASYNC);
+		osd_data = osd_req_op_extent_osd_data(req, i);
+		BUG_ON(osd_data->type != CEPH_OSD_DATA_TYPE_PAGES);
+		num_pages = calc_pages_for((u64)osd_data->alignment,
+					   (u64)osd_data->length);
+		total_pages += num_pages;
+		for (j = 0; j < num_pages; j++) {
+			page = osd_data->pages[j];
+			BUG_ON(!page);
+			WARN_ON(!PageUptodate(page));
 
-		ceph_put_snap_context(page_snap_context(page));
-		page->private = 0;
-		ClearPagePrivate(page);
-		dout("unlocking %d %p\n", i, page);
-		end_page_writeback(page);
+			if (atomic_long_dec_return(&fsc->writeback_count) <
+			     CONGESTION_OFF_THRESH(
+					fsc->mount_options->congestion_kb))
+				clear_bdi_congested(&fsc->backing_dev_info,
+						    BLK_RW_ASYNC);
 
-		/*
-		 * We lost the cache cap, need to truncate the page before
-		 * it is unlocked, otherwise we'd truncate it later in the
-		 * page truncation thread, possibly losing some data that
-		 * raced its way in
-		 */
-		if ((issued & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) == 0)
-			generic_error_remove_page(inode->i_mapping, page);
+			ceph_put_snap_context(page_snap_context(page));
+			page->private = 0;
+			ClearPagePrivate(page);
+			dout("unlocking %p\n", page);
+			end_page_writeback(page);
 
-		unlock_page(page);
+			if (remove_page)
+				generic_error_remove_page(inode->i_mapping,
+							  page);
+
+			unlock_page(page);
+		}
+		dout("writepages_finish %p wrote %llu bytes cleaned %d pages\n",
+		     inode, osd_data->length, rc >= 0 ? num_pages : 0);
+
+		ceph_release_pages(osd_data->pages, num_pages);
 	}
-	dout("%p wrote+cleaned %d pages\n", inode, wrote);
-	ceph_put_wrbuffer_cap_refs(ci, num_pages, snapc);
 
-	ceph_release_pages(osd_data->pages, num_pages);
+	ceph_put_wrbuffer_cap_refs(ci, total_pages, snapc);
+
+	osd_data = osd_req_op_extent_osd_data(req, 0);
 	if (osd_data->pages_from_pool)
 		mempool_free(osd_data->pages,
 			     ceph_sb_to_client(inode->i_sb)->wb_pagevec_pool);
@@ -751,17 +748,15 @@ retry:
 	while (!done && index <= end) {
 		unsigned i;
 		int first;
-		pgoff_t next;
-		int pvec_pages, locked_pages;
-		struct page **pages = NULL;
+		pgoff_t strip_unit_end = 0;
+		int num_ops = 0, op_idx;
+		int pvec_pages, locked_pages = 0;
+		struct page **pages = NULL, **data_pages;
 		mempool_t *pool = NULL;	/* Becomes non-null if mempool used */
 		struct page *page;
 		int want;
-		u64 offset, len;
-		long writeback_stat;
+		u64 offset = 0, len = 0;
 
-		next = 0;
-		locked_pages = 0;
 		max_pages = max_pages_ever;
 
 get_more_pages:
@@ -797,8 +792,8 @@ get_more_pages:
 				unlock_page(page);
 				break;
 			}
-			if (next && (page->index != next)) {
-				dout("not consecutive %p\n", page);
+			if (strip_unit_end && (page->index > strip_unit_end)) {
+				dout("end of strip unit %p\n", page);
 				unlock_page(page);
 				break;
 			}
@@ -840,36 +835,31 @@ get_more_pages:
 			/*
 			 * We have something to write.  If this is
 			 * the first locked page this time through,
-			 * allocate an osd request and a page array
-			 * that it will use.
+			 * calculate max possinle write size and
+			 * allocate a page array
 			 */
 			if (locked_pages == 0) {
-				BUG_ON(pages);
+				u64 objnum;
+				u64 objoff;
+
 				/* prepare async write request */
 				offset = (u64)page_offset(page);
 				len = wsize;
-				req = ceph_osdc_new_request(&fsc->client->osdc,
-							&ci->i_layout, vino,
-							offset, &len, 0,
-							do_sync ? 2 : 1,
-							CEPH_OSD_OP_WRITE,
-							CEPH_OSD_FLAG_WRITE |
-							CEPH_OSD_FLAG_ONDISK,
-							snapc, truncate_seq,
-							truncate_size, true);
-				if (IS_ERR(req)) {
-					rc = PTR_ERR(req);
+
+				rc = ceph_calc_file_object_mapping(&ci->i_layout,
+								offset, len,
+								&objnum, &objoff,
+								&len);
+				if (rc < 0) {
 					unlock_page(page);
 					break;
 				}
 
-				if (do_sync)
-					osd_req_op_init(req, 1,
-							CEPH_OSD_OP_STARTSYNC, 0);
+				num_ops = 1 + do_sync;
+				strip_unit_end = page->index +
+					((len - 1) >> PAGE_CACHE_SHIFT);
 
-				req->r_callback = writepages_finish;
-				req->r_inode = inode;
-
+				BUG_ON(pages);
 				max_pages = calc_pages_for(0, (u64)len);
 				pages = kmalloc(max_pages * sizeof (*pages),
 						GFP_NOFS);
@@ -878,6 +868,20 @@ get_more_pages:
 					pages = mempool_alloc(pool, GFP_NOFS);
 					BUG_ON(!pages);
 				}
+
+				len = 0;
+			} else if (page->index !=
+				   (offset + len) >> PAGE_CACHE_SHIFT) {
+				if (num_ops >= (pool ?  CEPH_OSD_SLAB_OPS :
+							CEPH_OSD_MAX_OPS)) {
+					redirty_page_for_writepage(wbc, page);
+					unlock_page(page);
+					break;
+				}
+
+				num_ops++;
+				offset = (u64)page_offset(page);
+				len = 0;
 			}
 
 			/* note position of first page in pvec */
@@ -886,18 +890,16 @@ get_more_pages:
 			dout("%p will write page %p idx %lu\n",
 			     inode, page, page->index);
 
-			writeback_stat =
-			       atomic_long_inc_return(&fsc->writeback_count);
-			if (writeback_stat > CONGESTION_ON_THRESH(
+			if (atomic_long_inc_return(&fsc->writeback_count) >
+			    CONGESTION_ON_THRESH(
 				    fsc->mount_options->congestion_kb)) {
 				set_bdi_congested(&fsc->backing_dev_info,
 						  BLK_RW_ASYNC);
 			}
 
-			set_page_writeback(page);
 			pages[locked_pages] = page;
 			locked_pages++;
-			next = page->index + 1;
+			len += PAGE_CACHE_SIZE;
 		}
 
 		/* did we get anything? */
@@ -917,50 +919,129 @@ get_more_pages:
 			/* shift unused pages over in the pvec...  we
 			 * will need to release them below. */
 			for (j = i; j < pvec_pages; j++) {
-				dout(" pvec leftover page %p\n",
-				     pvec.pages[j]);
+				dout(" pvec leftover page %p\n", pvec.pages[j]);
 				pvec.pages[j-i+first] = pvec.pages[j];
 			}
 			pvec.nr -= i-first;
 		}
 
-		/* Format the osd request message and submit the write */
+new_request:
 		offset = page_offset(pages[0]);
-		len = (u64)locked_pages << PAGE_CACHE_SHIFT;
-		if (snap_size == -1) {
-			len = min(len, (u64)i_size_read(inode) - offset);
-			 /* writepages_finish() clears writeback pages
-			  * according to the data length, so make sure
-			  * data length covers all locked pages */
-			len = max(len, 1 +
-				((u64)(locked_pages - 1) << PAGE_CACHE_SHIFT));
-		} else {
-			len = min(len, snap_size - offset);
+		len = wsize;
+
+		req = ceph_osdc_new_request(&fsc->client->osdc,
+					&ci->i_layout, vino,
+					offset, &len, 0, num_ops,
+					CEPH_OSD_OP_WRITE,
+					CEPH_OSD_FLAG_WRITE |
+					CEPH_OSD_FLAG_ONDISK,
+					snapc, truncate_seq,
+					truncate_size, false);
+		if (IS_ERR(req)) {
+			req = ceph_osdc_new_request(&fsc->client->osdc,
+						&ci->i_layout, vino,
+						offset, &len, 0,
+						min(num_ops,
+						    CEPH_OSD_SLAB_OPS),
+						CEPH_OSD_OP_WRITE,
+						CEPH_OSD_FLAG_WRITE |
+						CEPH_OSD_FLAG_ONDISK,
+						snapc, truncate_seq,
+						truncate_size, true);
+			BUG_ON(IS_ERR(req));
 		}
-		dout("writepages got %d pages at %llu~%llu\n",
-		     locked_pages, offset, len);
+		BUG_ON(len < page_offset(pages[locked_pages - 1]) +
+			     PAGE_CACHE_SIZE - offset);
 
-		osd_req_op_extent_osd_data_pages(req, 0, pages, len, 0,
+		req->r_callback = writepages_finish;
+		req->r_inode = inode;
+
+		/* Format the osd request message and submit the write */
+		len = 0;
+		data_pages = pages;
+		op_idx = 0;
+		for (i = 0; i < locked_pages; i++) {
+			u64 cur_offset = page_offset(pages[i]);
+			if (offset + len != cur_offset) {
+				if (op_idx + do_sync + 1 == req->r_num_ops)
+					break;
+				osd_req_op_extent_dup_last(req, op_idx,
+							   cur_offset - offset);
+				dout("writepages got pages at %llu~%llu\n",
+				     offset, len);
+				osd_req_op_extent_osd_data_pages(req, op_idx,
+							data_pages, len, 0,
 							!!pool, false);
+				osd_req_op_extent_update(req, op_idx, len);
 
-		pages = NULL;	/* request message now owns the pages array */
+				len = 0;
+				offset = cur_offset; 
+				data_pages = pages + i;
+				op_idx++;
+			}
+
+			set_page_writeback(pages[i]);
+			len += PAGE_CACHE_SIZE;
+		}
+
+		if (snap_size != -1) {
+			len = min(len, snap_size - offset);
+		} else if (i == locked_pages) {
+			/* writepages_finish() clears writeback pages
+			 * according to the data length, so make sure
+			 * data length covers all locked pages */
+			u64 min_len = len + 1 - PAGE_CACHE_SIZE;
+			len = min(len, (u64)i_size_read(inode) - offset);
+			len = max(len, min_len);
+		}
+		dout("writepages got pages at %llu~%llu\n", offset, len);
+
+		osd_req_op_extent_osd_data_pages(req, op_idx, data_pages, len,
+						 0, !!pool, false);
+		osd_req_op_extent_update(req, op_idx, len);
+
+		if (do_sync) {
+			op_idx++;
+			osd_req_op_init(req, op_idx, CEPH_OSD_OP_STARTSYNC, 0);
+		}
+		BUG_ON(op_idx + 1 != req->r_num_ops);
+
 		pool = NULL;
+		if (i < locked_pages) {
+			BUG_ON(num_ops <= req->r_num_ops);
+			num_ops -= req->r_num_ops;
+			num_ops += do_sync;
+			locked_pages -= i;
 
-		/* Update the write op length in case we changed it */
+			/* allocate new pages array for next request */
+			data_pages = pages;
+			pages = kmalloc(locked_pages * sizeof (*pages),
+					GFP_NOFS);
+			if (!pages) {
+				pool = fsc->wb_pagevec_pool;
+				pages = mempool_alloc(pool, GFP_NOFS);
+				BUG_ON(!pages);
+			}
+			memcpy(pages, data_pages + i,
+			       locked_pages * sizeof(*pages));
+			memset(data_pages + i, 0,
+			       locked_pages * sizeof(*pages));
+		} else {
+			BUG_ON(num_ops != req->r_num_ops);
+			index = pages[i - 1]->index + 1;
+			/* request message now owns the pages array */
+			pages = NULL;
+		}
 
-		osd_req_op_extent_update(req, 0, len);
-
-		vino = ceph_vino(inode);
-		ceph_osdc_build_request(req, offset, snapc, vino.snap,
-					&inode->i_mtime);
-
+		req->r_mtime = inode->i_mtime;
 		rc = ceph_osdc_start_request(&fsc->client->osdc, req, true);
 		BUG_ON(rc);
 		req = NULL;
 
-		/* continue? */
-		index = next;
-		wbc->nr_to_write -= locked_pages;
+		wbc->nr_to_write -= i;
+		if (pages)
+			goto new_request;
+
 		if (wbc->nr_to_write <= 0)
 			done = 1;
 
@@ -985,8 +1066,7 @@ release_pvec_pages:
 		mapping->writeback_index = index;
 
 out:
-	if (req)
-		ceph_osdc_put_request(req);
+	ceph_osdc_put_request(req);
 	ceph_put_snap_context(snapc);
 	dout("writepages done, rc = %d\n", rc);
 	return rc;
@@ -1081,7 +1161,7 @@ retry_locked:
 		return 0;
 
 	/* past end of file? */
-	i_size = inode->i_size;   /* caller holds i_mutex */
+	i_size = i_size_read(inode);
 
 	if (page_off >= i_size ||
 	    (pos_in_page == 0 && (pos+len) >= i_size &&
@@ -1122,7 +1202,6 @@ static int ceph_write_begin(struct file *file, struct address_space *mapping,
 		page = grab_cache_page_write_begin(mapping, index, 0);
 		if (!page)
 			return -ENOMEM;
-		*pagep = page;
 
 		dout("write_begin file %p inode %p page %p %d~%d\n", file,
 		     inode, page, (int)pos, (int)len);
@@ -1157,8 +1236,7 @@ static int ceph_write_end(struct file *file, struct address_space *mapping,
 		zero_user_segment(page, from+copied, len);
 
 	/* did file size increase? */
-	/* (no need for i_size_read(); we caller holds i_mutex */
-	if (pos+copied > inode->i_size)
+	if (pos+copied > i_size_read(inode))
 		check_cap = ceph_inode_set_size(inode, pos+copied);
 
 	if (!PageUptodate(page))
@@ -1352,11 +1430,13 @@ static int ceph_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	ret = VM_FAULT_NOPAGE;
 	if ((off > size) ||
-	    (page->mapping != inode->i_mapping))
+	    (page->mapping != inode->i_mapping)) {
+		unlock_page(page);
 		goto out;
+	}
 
 	ret = ceph_update_writeable_page(vma->vm_file, off, len, page);
-	if (ret == 0) {
+	if (ret >= 0) {
 		/* success.  we'll keep the page locked. */
 		set_page_dirty(page);
 		ret = VM_FAULT_LOCKED;
@@ -1367,8 +1447,6 @@ static int ceph_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 			ret = VM_FAULT_SIGBUS;
 	}
 out:
-	if (ret != VM_FAULT_LOCKED)
-		unlock_page(page);
 	if (ret == VM_FAULT_LOCKED ||
 	    ci->i_inline_version != CEPH_INLINE_NONE) {
 		int dirty;
@@ -1497,13 +1575,13 @@ int ceph_uninline_data(struct file *filp, struct page *locked_page)
 				    ceph_vino(inode), 0, &len, 0, 1,
 				    CEPH_OSD_OP_CREATE,
 				    CEPH_OSD_FLAG_ONDISK | CEPH_OSD_FLAG_WRITE,
-				    ceph_empty_snapc, 0, 0, false);
+				    NULL, 0, 0, false);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
 		goto out;
 	}
 
-	ceph_osdc_build_request(req, 0, NULL, CEPH_NOSNAP, &inode->i_mtime);
+	req->r_mtime = inode->i_mtime;
 	err = ceph_osdc_start_request(&fsc->client->osdc, req, false);
 	if (!err)
 		err = ceph_osdc_wait_request(&fsc->client->osdc, req);
@@ -1515,9 +1593,8 @@ int ceph_uninline_data(struct file *filp, struct page *locked_page)
 				    ceph_vino(inode), 0, &len, 1, 3,
 				    CEPH_OSD_OP_WRITE,
 				    CEPH_OSD_FLAG_ONDISK | CEPH_OSD_FLAG_WRITE,
-				    ceph_empty_snapc,
-				    ci->i_truncate_seq, ci->i_truncate_size,
-				    false);
+				    NULL, ci->i_truncate_seq,
+				    ci->i_truncate_size, false);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
 		goto out;
@@ -1547,7 +1624,7 @@ int ceph_uninline_data(struct file *filp, struct page *locked_page)
 			goto out_put;
 	}
 
-	ceph_osdc_build_request(req, 0, NULL, CEPH_NOSNAP, &inode->i_mtime);
+	req->r_mtime = inode->i_mtime;
 	err = ceph_osdc_start_request(&fsc->client->osdc, req, false);
 	if (!err)
 		err = ceph_osdc_wait_request(&fsc->client->osdc, req);
@@ -1639,8 +1716,7 @@ static int __ceph_pool_perm_get(struct ceph_inode_info *ci, u32 pool)
 		goto out;
 	}
 
-	rd_req = ceph_osdc_alloc_request(&fsc->client->osdc,
-					 ceph_empty_snapc,
+	rd_req = ceph_osdc_alloc_request(&fsc->client->osdc, NULL,
 					 1, false, GFP_NOFS);
 	if (!rd_req) {
 		err = -ENOMEM;
@@ -1650,23 +1726,27 @@ static int __ceph_pool_perm_get(struct ceph_inode_info *ci, u32 pool)
 	rd_req->r_flags = CEPH_OSD_FLAG_READ;
 	osd_req_op_init(rd_req, 0, CEPH_OSD_OP_STAT, 0);
 	rd_req->r_base_oloc.pool = pool;
-	snprintf(rd_req->r_base_oid.name, sizeof(rd_req->r_base_oid.name),
-		 "%llx.00000000", ci->i_vino.ino);
-	rd_req->r_base_oid.name_len = strlen(rd_req->r_base_oid.name);
+	ceph_oid_printf(&rd_req->r_base_oid, "%llx.00000000", ci->i_vino.ino);
 
-	wr_req = ceph_osdc_alloc_request(&fsc->client->osdc,
-					 ceph_empty_snapc,
+	err = ceph_osdc_alloc_messages(rd_req, GFP_NOFS);
+	if (err)
+		goto out_unlock;
+
+	wr_req = ceph_osdc_alloc_request(&fsc->client->osdc, NULL,
 					 1, false, GFP_NOFS);
 	if (!wr_req) {
 		err = -ENOMEM;
 		goto out_unlock;
 	}
 
-	wr_req->r_flags = CEPH_OSD_FLAG_WRITE |
-			  CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK;
+	wr_req->r_flags = CEPH_OSD_FLAG_WRITE | CEPH_OSD_FLAG_ACK;
 	osd_req_op_init(wr_req, 0, CEPH_OSD_OP_CREATE, CEPH_OSD_OP_FLAG_EXCL);
-	wr_req->r_base_oloc.pool = pool;
-	wr_req->r_base_oid = rd_req->r_base_oid;
+	ceph_oloc_copy(&wr_req->r_base_oloc, &rd_req->r_base_oloc);
+	ceph_oid_copy(&wr_req->r_base_oid, &rd_req->r_base_oid);
+
+	err = ceph_osdc_alloc_messages(wr_req, GFP_NOFS);
+	if (err)
+		goto out_unlock;
 
 	/* one page should be large enough for STAT data */
 	pages = ceph_alloc_page_vector(1, GFP_KERNEL);
@@ -1677,12 +1757,9 @@ static int __ceph_pool_perm_get(struct ceph_inode_info *ci, u32 pool)
 
 	osd_req_op_raw_data_in_pages(rd_req, 0, pages, PAGE_SIZE,
 				     0, false, true);
-	ceph_osdc_build_request(rd_req, 0, NULL, CEPH_NOSNAP,
-				&ci->vfs_inode.i_mtime);
 	err = ceph_osdc_start_request(&fsc->client->osdc, rd_req, false);
 
-	ceph_osdc_build_request(wr_req, 0, NULL, CEPH_NOSNAP,
-				&ci->vfs_inode.i_mtime);
+	wr_req->r_mtime = ci->vfs_inode.i_mtime;
 	err2 = ceph_osdc_start_request(&fsc->client->osdc, wr_req, false);
 
 	if (!err)
@@ -1716,10 +1793,8 @@ static int __ceph_pool_perm_get(struct ceph_inode_info *ci, u32 pool)
 out_unlock:
 	up_write(&mdsc->pool_perm_rwsem);
 
-	if (rd_req)
-		ceph_osdc_put_request(rd_req);
-	if (wr_req)
-		ceph_osdc_put_request(wr_req);
+	ceph_osdc_put_request(rd_req);
+	ceph_osdc_put_request(wr_req);
 out:
 	if (!err)
 		err = have;
@@ -1731,6 +1806,10 @@ int ceph_pool_perm_check(struct ceph_inode_info *ci, int need)
 {
 	u32 pool;
 	int ret, flags;
+
+	/* does not support pool namespace yet */
+	if (ci->i_pool_ns_len)
+		return -EIO;
 
 	if (ceph_test_mount_opt(ceph_inode_to_client(&ci->vfs_inode),
 				NOPOOLPERM))

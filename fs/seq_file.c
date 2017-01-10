@@ -14,20 +14,10 @@
 #ifndef __GENKSYMS__
 #include <linux/mm.h>
 #endif
+#include <linux/printk.h>
 
 #include <asm/uaccess.h>
 #include <asm/page.h>
-
-
-/*
- * seq_files have a buffer which can may overflow. When this happens a larger
- * buffer is reallocated and all the data will be printed again.
- * The overflow state is true when m->count == m->size.
- */
-static bool seq_overflow(struct seq_file *m)
-{
-	return m->count == m->size;
-}
 
 static void seq_set_overflow(struct seq_file *m)
 {
@@ -134,7 +124,7 @@ static int traverse(struct seq_file *m, loff_t offset)
 			error = 0;
 			m->count = 0;
 		}
-		if (seq_overflow(m))
+		if (seq_has_overflowed(m))
 			goto Eoverflow;
 		if (pos + m->count > offset) {
 			m->from = offset - pos;
@@ -277,7 +267,7 @@ Fill:
 			break;
 		}
 		err = m->op->show(m, p);
-		if (seq_overflow(m) || err) {
+		if (seq_has_overflowed(m) || err) {
 			m->count = offs;
 			if (likely(err <= 0))
 				break;
@@ -555,6 +545,7 @@ int seq_dentry(struct seq_file *m, struct dentry *dentry, const char *esc)
 
 	return res;
 }
+EXPORT_SYMBOL(seq_dentry);
 
 int seq_bitmap(struct seq_file *m, const unsigned long *bits,
 				   unsigned int nr_bits)
@@ -788,6 +779,47 @@ int seq_write(struct seq_file *seq, const void *data, size_t len)
 	return -1;
 }
 EXPORT_SYMBOL(seq_write);
+
+/* A complete analogue of print_hex_dump() */
+void seq_hex_dump(struct seq_file *m, const char *prefix_str, int prefix_type,
+		  int rowsize, int groupsize, const void *buf, size_t len,
+		  bool ascii)
+{
+	const u8 *ptr = buf;
+	int i, linelen, remaining = len;
+	int ret;
+
+	if (rowsize != 16 && rowsize != 32)
+		rowsize = 16;
+
+	for (i = 0; i < len && !seq_has_overflowed(m); i += rowsize) {
+		linelen = min(remaining, rowsize);
+		remaining -= rowsize;
+
+		switch (prefix_type) {
+		case DUMP_PREFIX_ADDRESS:
+			seq_printf(m, "%s%p: ", prefix_str, ptr + i);
+			break;
+		case DUMP_PREFIX_OFFSET:
+			seq_printf(m, "%s%.8x: ", prefix_str, i);
+			break;
+		default:
+			seq_printf(m, "%s", prefix_str);
+			break;
+		}
+
+		ret = hex_dump_to_buffer(ptr + i, linelen, rowsize, groupsize,
+					 m->buf + m->count, m->size - m->count,
+					 ascii);
+		if (ret >= m->size - m->count) {
+			seq_set_overflow(m);
+		} else {
+			m->count += ret;
+			seq_putc(m, '\n');
+		}
+	}
+}
+EXPORT_SYMBOL(seq_hex_dump);
 
 struct list_head *seq_list_start(struct list_head *head, loff_t pos)
 {

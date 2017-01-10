@@ -138,6 +138,7 @@ static const struct be_ethtool_stat et_stats[] = {
 static const struct be_ethtool_stat et_rx_stats[] = {
 	{DRVSTAT_RX_INFO(rx_bytes)},/* If moving this member see above note */
 	{DRVSTAT_RX_INFO(rx_pkts)}, /* If moving this member see above note */
+	{DRVSTAT_RX_INFO(rx_vxlan_offload_pkts)},
 	{DRVSTAT_RX_INFO(rx_compl)},
 	{DRVSTAT_RX_INFO(rx_compl_err)},
 	{DRVSTAT_RX_INFO(rx_mcast_pkts)},
@@ -190,6 +191,7 @@ static const struct be_ethtool_stat et_tx_stats[] = {
 	{DRVSTAT_TX_INFO(tx_internal_parity_err)},
 	{DRVSTAT_TX_INFO(tx_bytes)},
 	{DRVSTAT_TX_INFO(tx_pkts)},
+	{DRVSTAT_TX_INFO(tx_vxlan_offload_pkts)},
 	/* Number of skbs queued for trasmission by the driver */
 	{DRVSTAT_TX_INFO(tx_reqs)},
 	/* Number of times the TX queue was stopped due to lack
@@ -232,9 +234,6 @@ static void be_get_drvinfo(struct net_device *netdev,
 
 	strlcpy(drvinfo->bus_info, pci_name(adapter->pdev),
 		sizeof(drvinfo->bus_info));
-	drvinfo->testinfo_len = 0;
-	drvinfo->regdump_len = 0;
-	drvinfo->eedump_len = 0;
 }
 
 static u32 lancer_cmd_get_file_len(struct be_adapter *adapter, u8 *file_name)
@@ -242,15 +241,26 @@ static u32 lancer_cmd_get_file_len(struct be_adapter *adapter, u8 *file_name)
 	u32 data_read = 0, eof;
 	u8 addn_status;
 	struct be_dma_mem data_len_cmd;
-	int status;
 
 	memset(&data_len_cmd, 0, sizeof(data_len_cmd));
 	/* data_offset and data_size should be 0 to get reg len */
-	status = lancer_cmd_read_object(adapter, &data_len_cmd, 0, 0,
-					file_name, &data_read, &eof,
-					&addn_status);
+	lancer_cmd_read_object(adapter, &data_len_cmd, 0, 0, file_name,
+			       &data_read, &eof, &addn_status);
 
 	return data_read;
+}
+
+static int be_get_dump_len(struct be_adapter *adapter)
+{
+	u32 dump_size = 0;
+
+	if (lancer_chip(adapter))
+		dump_size = lancer_cmd_get_file_len(adapter,
+						    LANCER_FW_DUMP_FILE);
+	else
+		dump_size = adapter->fat_dump_len;
+
+	return dump_size;
 }
 
 static int lancer_cmd_read_file(struct be_adapter *adapter, u8 *file_name,
@@ -294,37 +304,18 @@ static int lancer_cmd_read_file(struct be_adapter *adapter, u8 *file_name,
 	return status;
 }
 
-static int be_get_reg_len(struct net_device *netdev)
+static int be_read_dump_data(struct be_adapter *adapter, u32 dump_len,
+			     void *buf)
 {
-	struct be_adapter *adapter = netdev_priv(netdev);
-	u32 log_size = 0;
+	int status = 0;
 
-	if (!check_privilege(adapter, MAX_PRIVILEGES))
-		return 0;
+	if (lancer_chip(adapter))
+		status = lancer_cmd_read_file(adapter, LANCER_FW_DUMP_FILE,
+					      dump_len, buf);
+	else
+		status = be_cmd_get_fat_dump(adapter, dump_len, buf);
 
-	if (be_physfn(adapter)) {
-		if (lancer_chip(adapter))
-			log_size = lancer_cmd_get_file_len(adapter,
-							   LANCER_FW_DUMP_FILE);
-		else
-			be_cmd_get_reg_len(adapter, &log_size);
-	}
-	return log_size;
-}
-
-static void
-be_get_regs(struct net_device *netdev, struct ethtool_regs *regs, void *buf)
-{
-	struct be_adapter *adapter = netdev_priv(netdev);
-
-	if (be_physfn(adapter)) {
-		memset(buf, 0, regs->len);
-		if (lancer_chip(adapter))
-			lancer_cmd_read_file(adapter, LANCER_FW_DUMP_FILE,
-					     regs->len, buf);
-		else
-			be_cmd_get_regs(adapter, regs->len, buf);
-	}
+	return status;
 }
 
 static int be_get_coalesce(struct net_device *netdev,
@@ -729,29 +720,32 @@ static int be_set_phys_id(struct net_device *netdev,
 			  enum ethtool_phys_id_state state)
 {
 	struct be_adapter *adapter = netdev_priv(netdev);
+	int status = 0;
 
 	switch (state) {
 	case ETHTOOL_ID_ACTIVE:
-		be_cmd_get_beacon_state(adapter, adapter->hba_port_num,
-					&adapter->beacon_state);
-		return 1;	/* cycle on/off once per second */
+		status = be_cmd_get_beacon_state(adapter, adapter->hba_port_num,
+						 &adapter->beacon_state);
+		if (status)
+			return be_cmd_status(status);
+		return 1;       /* cycle on/off once per second */
 
 	case ETHTOOL_ID_ON:
-		be_cmd_set_beacon_state(adapter, adapter->hba_port_num, 0, 0,
-					BEACON_STATE_ENABLED);
+		status = be_cmd_set_beacon_state(adapter, adapter->hba_port_num,
+						 0, 0, BEACON_STATE_ENABLED);
 		break;
 
 	case ETHTOOL_ID_OFF:
-		be_cmd_set_beacon_state(adapter, adapter->hba_port_num, 0, 0,
-					BEACON_STATE_DISABLED);
+		status = be_cmd_set_beacon_state(adapter, adapter->hba_port_num,
+						 0, 0, BEACON_STATE_DISABLED);
 		break;
 
 	case ETHTOOL_ID_INACTIVE:
-		be_cmd_set_beacon_state(adapter, adapter->hba_port_num, 0, 0,
-					adapter->beacon_state);
+		status = be_cmd_set_beacon_state(adapter, adapter->hba_port_num,
+						 0, 0, adapter->beacon_state);
 	}
 
-	return 0;
+	return be_cmd_status(status);
 }
 
 static int be_set_dump(struct net_device *netdev, struct ethtool_dump *dump)
@@ -799,6 +793,11 @@ static void be_get_wol(struct net_device *netdev, struct ethtool_wolinfo *wol)
 static int be_set_wol(struct net_device *netdev, struct ethtool_wolinfo *wol)
 {
 	struct be_adapter *adapter = netdev_priv(netdev);
+	struct device *dev = &adapter->pdev->dev;
+	struct be_dma_mem cmd;
+	u8 mac[ETH_ALEN];
+	bool enable;
+	int status;
 
 	if (wol->wolopts & ~WAKE_MAGIC)
 		return -EOPNOTSUPP;
@@ -808,12 +807,32 @@ static int be_set_wol(struct net_device *netdev, struct ethtool_wolinfo *wol)
 		return -EOPNOTSUPP;
 	}
 
-	if (wol->wolopts & WAKE_MAGIC)
-		adapter->wol_en = true;
-	else
-		adapter->wol_en = false;
+	cmd.size = sizeof(struct be_cmd_req_acpi_wol_magic_config);
+	cmd.va = dma_zalloc_coherent(dev, cmd.size, &cmd.dma, GFP_KERNEL);
+	if (!cmd.va)
+		return -ENOMEM;
 
-	return 0;
+	eth_zero_addr(mac);
+
+	enable = wol->wolopts & WAKE_MAGIC;
+	if (enable)
+		ether_addr_copy(mac, adapter->netdev->dev_addr);
+
+	status = be_cmd_enable_magic_wol(adapter, mac, &cmd);
+	if (status) {
+		dev_err(dev, "Could not set Wake-on-lan mac address\n");
+		status = be_cmd_status(status);
+		goto err;
+	}
+
+	pci_enable_wake(adapter->pdev, PCI_D3hot, enable);
+	pci_enable_wake(adapter->pdev, PCI_D3cold, enable);
+
+	adapter->wol_en = enable ? true : false;
+
+err:
+	dma_free_coherent(dev, cmd.size, cmd.va, cmd.dma);
+	return status;
 }
 
 static int be_test_ddr_dma(struct be_adapter *adapter)
@@ -915,6 +934,34 @@ static int be_do_flash(struct net_device *netdev, struct ethtool_flash *efl)
 	struct be_adapter *adapter = netdev_priv(netdev);
 
 	return be_load_fw(adapter, efl->data);
+}
+
+static int
+be_get_dump_flag(struct net_device *netdev, struct ethtool_dump *dump)
+{
+	struct be_adapter *adapter = netdev_priv(netdev);
+
+	if (!check_privilege(adapter, MAX_PRIVILEGES))
+		return -EOPNOTSUPP;
+
+	dump->len = be_get_dump_len(adapter);
+	dump->version = 1;
+	dump->flag = 0x1;	/* FW dump is enabled */
+	return 0;
+}
+
+static int
+be_get_dump_data(struct net_device *netdev, struct ethtool_dump *dump,
+		 void *buf)
+{
+	struct be_adapter *adapter = netdev_priv(netdev);
+	int status;
+
+	if (!check_privilege(adapter, MAX_PRIVILEGES))
+		return -EOPNOTSUPP;
+
+	status = be_read_dump_data(adapter, dump->len, buf);
+	return be_cmd_status(status);
 }
 
 static int be_get_eeprom_len(struct net_device *netdev)
@@ -1063,9 +1110,7 @@ static int be_get_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd,
 static int be_set_rss_hash_opts(struct be_adapter *adapter,
 				struct ethtool_rxnfc *cmd)
 {
-	struct be_rx_obj *rxo;
-	int status = 0, i, j;
-	u8 rsstable[128];
+	int status;
 	u32 rss_flags = adapter->rss_info.rss_flags;
 
 	if (cmd->data != L3_RSS_FLAGS &&
@@ -1114,20 +1159,11 @@ static int be_set_rss_hash_opts(struct be_adapter *adapter,
 	}
 
 	if (rss_flags == adapter->rss_info.rss_flags)
-		return status;
-
-	if (be_multi_rxq(adapter)) {
-		for (j = 0; j < 128; j += adapter->num_rss_qs) {
-			for_all_rss_queues(adapter, rxo, i) {
-				if ((j + i) >= 128)
-					break;
-				rsstable[j + i] = rxo->rss_id;
-			}
-		}
-	}
+		return 0;
 
 	status = be_cmd_rss_config(adapter, adapter->rss_info.rsstable,
-				   rss_flags, 128, adapter->rss_info.rss_hkey);
+				   rss_flags, RSS_INDIR_TABLE_LEN,
+				   adapter->rss_info.rss_hkey);
 	if (!status)
 		adapter->rss_info.rss_flags = rss_flags;
 
@@ -1325,8 +1361,6 @@ const struct ethtool_ops be_ethtool_ops = {
 	.set_msglevel = be_set_msg_level,
 	.get_sset_count = be_get_sset_count,
 	.get_ethtool_stats = be_get_ethtool_stats,
-	.get_regs_len = be_get_reg_len,
-	.get_regs = be_get_regs,
 	.flash_device = be_do_flash,
 	.self_test = be_self_test,
 	.get_rxnfc = be_get_rxnfc,
@@ -1335,6 +1369,8 @@ const struct ethtool_ops be_ethtool_ops = {
 	.get_rxfh_key_size = be_get_rxfh_key_size,
 	.get_rxfh = be_get_rxfh,
 	.set_rxfh = be_set_rxfh,
+	.get_dump_flag = be_get_dump_flag,
+	.get_dump_data = be_get_dump_data,
 	.get_channels = be_get_channels,
 	.set_channels = be_set_channels,
 	.get_module_info = be_get_module_info,

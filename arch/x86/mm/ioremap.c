@@ -60,15 +60,18 @@ static int __ioremap_check_ram(unsigned long start_pfn, unsigned long nr_pages,
 		    !PageReserved(pfn_to_page(start_pfn + i)))
 			return 1;
 
-	WARN_ONCE(1, "ioremap on RAM pfn 0x%lx\n", start_pfn);
-
 	return 0;
 }
 
 /*
  * Remap an arbitrary physical address space into the kernel virtual
- * address space. Needed when the kernel wants to access high addresses
- * directly.
+ * address space. It transparently creates kernel huge I/O mapping when
+ * the physical address is aligned by a huge page size (1GB or 2MB) and
+ * the requested size is at least the huge page size.
+ *
+ * NOTE: MTRRs can override PAT memory types with a 4KB granularity.
+ * Therefore, the mapping code falls back to use a smaller page toward 4KB
+ * when a mapping range is covered by non-WB type of MTRRs.
  *
  * NOTE! We need to allow non-page-aligned mappings too: we will obviously
  * have to convert them into an offset in a page-aligned mapping, but the
@@ -86,7 +89,6 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 	pgprot_t prot;
 	int retval;
 	void __iomem *ret_addr;
-	int ram_region;
 
 	/* Don't allow wraparound or zero size */
 	last_addr = phys_addr + size - 1;
@@ -109,23 +111,15 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 	/*
 	 * Don't allow anybody to remap normal RAM that we're using..
 	 */
-	/* First check if whole region can be identified as RAM or not */
-	ram_region = region_is_ram(phys_addr, size);
-	if (ram_region > 0) {
-		WARN_ONCE(1, "ioremap on RAM at 0x%lx - 0x%lx\n",
-				(unsigned long int)phys_addr,
-				(unsigned long int)last_addr);
+	pfn      = phys_addr >> PAGE_SHIFT;
+	last_pfn = last_addr >> PAGE_SHIFT;
+	if (walk_system_ram_range(pfn, last_pfn - pfn + 1, NULL,
+					  __ioremap_check_ram) == 1) {
+		WARN_ONCE(1, "ioremap on RAM at 0x%llx - 0x%llx\n",
+					phys_addr, last_addr);
 		return NULL;
 	}
 
-	/* If could not be identified(-1), check page by page */
-	if (ram_region < 0) {
-		pfn      = phys_addr >> PAGE_SHIFT;
-		last_pfn = last_addr >> PAGE_SHIFT;
-		if (walk_system_ram_range(pfn, last_pfn - pfn + 1, NULL,
-					  __ioremap_check_ram) == 1)
-			return NULL;
-	}
 	/*
 	 * Mappings have to be page-aligned
 	 */
@@ -191,8 +185,8 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 	 * Check if the request spans more than any BAR in the iomem resource
 	 * tree.
 	 */
-	WARN_ONCE(iomem_map_sanity_check(unaligned_phys_addr, unaligned_size),
-		  KERN_INFO "Info: mapping multiple BARs. Your kernel is fine.");
+	if (iomem_map_sanity_check(unaligned_phys_addr, unaligned_size))
+		pr_warn("caller %pS mapping multiple BARs\n", caller);
 
 	return ret_addr;
 err_free_area:
@@ -322,6 +316,20 @@ void iounmap(volatile void __iomem *addr)
 	kfree(p);
 }
 EXPORT_SYMBOL(iounmap);
+
+int arch_ioremap_pud_supported(void)
+{
+#ifdef CONFIG_X86_64
+	return cpu_has_gbpages;
+#else
+	return 0;
+#endif
+}
+
+int arch_ioremap_pmd_supported(void)
+{
+	return cpu_has_pse;
+}
 
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem

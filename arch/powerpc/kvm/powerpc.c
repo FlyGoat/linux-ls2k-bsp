@@ -115,7 +115,7 @@ int kvmppc_prepare_to_enter(struct kvm_vcpu *vcpu)
 			continue;
 		}
 
-		kvm_guest_enter();
+		__kvm_guest_enter();
 		return 1;
 	}
 
@@ -540,18 +540,12 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 			r = 0;
 		break;
 	case KVM_CAP_PPC_RMA:
-		r = hv_enabled;
-		/* PPC970 requires an RMA */
-		if (r && cpu_has_feature(CPU_FTR_ARCH_201))
-			r = 2;
+		r = 0;
 		break;
 #endif
 	case KVM_CAP_SYNC_MMU:
 #ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
-		if (hv_enabled)
-			r = cpu_has_feature(CPU_FTR_ARCH_206) ? 1 : 0;
-		else
-			r = 0;
+		r = hv_enabled;
 #elif defined(KVM_ARCH_WANT_MMU_NOTIFIER)
 		r = 1;
 #else
@@ -687,7 +681,7 @@ int kvm_cpu_has_pending_timer(struct kvm_vcpu *vcpu)
 	return kvmppc_core_pending_dec(vcpu);
 }
 
-enum hrtimer_restart kvmppc_decrementer_wakeup(struct hrtimer *timer)
+static enum hrtimer_restart kvmppc_decrementer_wakeup(struct hrtimer *timer)
 {
 	struct kvm_vcpu *vcpu;
 
@@ -761,7 +755,7 @@ static void kvmppc_complete_mmio_load(struct kvm_vcpu *vcpu,
 		return;
 	}
 
-	if (vcpu->arch.mmio_is_bigendian) {
+	if (!vcpu->arch.mmio_host_swabbed) {
 		switch (run->mmio.len) {
 		case 8: gpr = *(u64 *)run->mmio.data; break;
 		case 4: gpr = *(u32 *)run->mmio.data; break;
@@ -769,10 +763,10 @@ static void kvmppc_complete_mmio_load(struct kvm_vcpu *vcpu,
 		case 1: gpr = *(u8 *)run->mmio.data; break;
 		}
 	} else {
-		/* Convert BE data from userland back to LE. */
 		switch (run->mmio.len) {
-		case 4: gpr = ld_le32((u32 *)run->mmio.data); break;
-		case 2: gpr = ld_le16((u16 *)run->mmio.data); break;
+		case 8: gpr = swab64(*(u64 *)run->mmio.data); break;
+		case 4: gpr = swab32(*(u32 *)run->mmio.data); break;
+		case 2: gpr = swab16(*(u16 *)run->mmio.data); break;
 		case 1: gpr = *(u8 *)run->mmio.data; break;
 		}
 	}
@@ -816,19 +810,18 @@ static void kvmppc_complete_mmio_load(struct kvm_vcpu *vcpu,
 	}
 }
 
-int kvmppc_handle_load(struct kvm_run *run, struct kvm_vcpu *vcpu,
-		       unsigned int rt, unsigned int bytes,
-		       int is_default_endian)
+static int __kvmppc_handle_load(struct kvm_run *run, struct kvm_vcpu *vcpu,
+				unsigned int rt, unsigned int bytes,
+				int is_default_endian, int sign_extend)
 {
 	int idx, ret;
-	int is_bigendian;
+	bool host_swabbed;
 
+	/* Pity C doesn't have a logical XOR operator */
 	if (kvmppc_need_byteswap(vcpu)) {
-		/* Default endianness is "little endian". */
-		is_bigendian = !is_default_endian;
+		host_swabbed = is_default_endian;
 	} else {
-		/* Default endianness is "big endian". */
-		is_bigendian = is_default_endian;
+		host_swabbed = !is_default_endian;
 	}
 
 	if (bytes > sizeof(run->mmio.data)) {
@@ -841,10 +834,10 @@ int kvmppc_handle_load(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	run->mmio.is_write = 0;
 
 	vcpu->arch.io_gpr = rt;
-	vcpu->arch.mmio_is_bigendian = is_bigendian;
+	vcpu->arch.mmio_host_swabbed = host_swabbed;
 	vcpu->mmio_needed = 1;
 	vcpu->mmio_is_write = 0;
-	vcpu->arch.mmio_sign_extend = 0;
+	vcpu->arch.mmio_sign_extend = sign_extend;
 
 	idx = srcu_read_lock(&vcpu->kvm->srcu);
 
@@ -861,6 +854,13 @@ int kvmppc_handle_load(struct kvm_run *run, struct kvm_vcpu *vcpu,
 
 	return EMULATE_DO_MMIO;
 }
+
+int kvmppc_handle_load(struct kvm_run *run, struct kvm_vcpu *vcpu,
+		       unsigned int rt, unsigned int bytes,
+		       int is_default_endian)
+{
+	return __kvmppc_handle_load(run, vcpu, rt, bytes, is_default_endian, 0);
+}
 EXPORT_SYMBOL_GPL(kvmppc_handle_load);
 
 /* Same as above, but sign extends */
@@ -868,12 +868,7 @@ int kvmppc_handle_loads(struct kvm_run *run, struct kvm_vcpu *vcpu,
 			unsigned int rt, unsigned int bytes,
 			int is_default_endian)
 {
-	int r;
-
-	vcpu->arch.mmio_sign_extend = 1;
-	r = kvmppc_handle_load(run, vcpu, rt, bytes, is_default_endian);
-
-	return r;
+	return __kvmppc_handle_load(run, vcpu, rt, bytes, is_default_endian, 1);
 }
 
 int kvmppc_handle_store(struct kvm_run *run, struct kvm_vcpu *vcpu,
@@ -881,14 +876,13 @@ int kvmppc_handle_store(struct kvm_run *run, struct kvm_vcpu *vcpu,
 {
 	void *data = run->mmio.data;
 	int idx, ret;
-	int is_bigendian;
+	bool host_swabbed;
 
+	/* Pity C doesn't have a logical XOR operator */
 	if (kvmppc_need_byteswap(vcpu)) {
-		/* Default endianness is "little endian". */
-		is_bigendian = !is_default_endian;
+		host_swabbed = is_default_endian;
 	} else {
-		/* Default endianness is "big endian". */
-		is_bigendian = is_default_endian;
+		host_swabbed = !is_default_endian;
 	}
 
 	if (bytes > sizeof(run->mmio.data)) {
@@ -903,7 +897,7 @@ int kvmppc_handle_store(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	vcpu->mmio_is_write = 1;
 
 	/* Store the value at the lowest bytes in 'data'. */
-	if (is_bigendian) {
+	if (!host_swabbed) {
 		switch (bytes) {
 		case 8: *(u64 *)data = val; break;
 		case 4: *(u32 *)data = val; break;
@@ -911,11 +905,11 @@ int kvmppc_handle_store(struct kvm_run *run, struct kvm_vcpu *vcpu,
 		case 1: *(u8  *)data = val; break;
 		}
 	} else {
-		/* Store LE value into 'data'. */
 		switch (bytes) {
-		case 4: st_le32(data, val); break;
-		case 2: st_le16(data, val); break;
-		case 1: *(u8 *)data = val; break;
+		case 8: *(u64 *)data = swab64(val); break;
+		case 4: *(u32 *)data = swab32(val); break;
+		case 2: *(u16 *)data = swab16(val); break;
+		case 1: *(u8  *)data = val; break;
 		}
 	}
 
@@ -1084,6 +1078,19 @@ static int kvm_vcpu_ioctl_enable_cap(struct kvm_vcpu *vcpu,
 		r = kvmppc_sanity_check(vcpu);
 
 	return r;
+}
+
+bool kvm_arch_intc_initialized(struct kvm *kvm)
+{
+#ifdef CONFIG_KVM_MPIC
+	if (kvm->arch.mpic)
+		return true;
+#endif
+#ifdef CONFIG_KVM_XICS
+	if (kvm->arch.xics)
+		return true;
+#endif
+	return false;
 }
 
 int kvm_arch_vcpu_ioctl_get_mpstate(struct kvm_vcpu *vcpu,

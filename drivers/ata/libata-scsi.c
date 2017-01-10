@@ -174,13 +174,13 @@ static ssize_t ata_scsi_park_show(struct device *device,
 	struct ata_port *ap;
 	struct ata_link *link;
 	struct ata_device *dev;
-	unsigned long flags, now;
+	unsigned long now;
 	unsigned int uninitialized_var(msecs);
 	int rc = 0;
 
 	ap = ata_shost_to_port(sdev->host);
 
-	spin_lock_irqsave(ap->lock, flags);
+	spin_lock_irq(ap->lock);
 	dev = ata_scsi_find_dev(ap, sdev);
 	if (!dev) {
 		rc = -ENODEV;
@@ -672,19 +672,18 @@ static int ata_ioc32(struct ata_port *ap)
 int ata_sas_scsi_ioctl(struct ata_port *ap, struct scsi_device *scsidev,
 		     int cmd, void __user *arg)
 {
-	int val = -EINVAL, rc = -EINVAL;
+	unsigned long val;
+	int rc = -EINVAL;
 	unsigned long flags;
 
 	switch (cmd) {
-	case ATA_IOC_GET_IO32:
+	case HDIO_GET_32BIT:
 		spin_lock_irqsave(ap->lock, flags);
 		val = ata_ioc32(ap);
 		spin_unlock_irqrestore(ap->lock, flags);
-		if (copy_to_user(arg, &val, 1))
-			return -EFAULT;
-		return 0;
+		return put_user(val, (unsigned long __user *)arg);
 
-	case ATA_IOC_SET_IO32:
+	case HDIO_SET_32BIT:
 		val = (unsigned long) arg;
 		rc = 0;
 		spin_lock_irqsave(ap->lock, flags);
@@ -796,26 +795,27 @@ static void ata_dump_status(unsigned id, struct ata_taskfile *tf)
 	if (stat & ATA_BUSY) {
 		printk("Busy }\n");	/* Data is not valid in this case */
 	} else {
-		if (stat & 0x40)	printk("DriveReady ");
-		if (stat & 0x20)	printk("DeviceFault ");
-		if (stat & 0x10)	printk("SeekComplete ");
-		if (stat & 0x08)	printk("DataRequest ");
-		if (stat & 0x04)	printk("CorrectedError ");
-		if (stat & 0x02)	printk("Index ");
-		if (stat & 0x01)	printk("Error ");
+		if (stat & ATA_DRDY)	printk("DriveReady ");
+		if (stat & ATA_DF)	printk("DeviceFault ");
+		if (stat & ATA_DSC)	printk("SeekComplete ");
+		if (stat & ATA_DRQ)	printk("DataRequest ");
+		if (stat & ATA_CORR)	printk("CorrectedError ");
+		if (stat & ATA_SENSE)	printk("Sense ");
+		if (stat & ATA_ERR)	printk("Error ");
 		printk("}\n");
 
 		if (err) {
 			printk(KERN_WARNING "ata%u: error=0x%02x { ", id, err);
-			if (err & 0x04)		printk("DriveStatusError ");
-			if (err & 0x80) {
-				if (err & 0x04)	printk("BadCRC ");
+			if (err & ATA_ABORTED)	printk("DriveStatusError ");
+			if (err & ATA_ICRC) {
+				if (err & ATA_ABORTED)
+						printk("BadCRC ");
 				else		printk("Sector ");
 			}
-			if (err & 0x40)		printk("UncorrectableError ");
-			if (err & 0x10)		printk("SectorIdNotFound ");
-			if (err & 0x02)		printk("TrackZeroNotFound ");
-			if (err & 0x01)		printk("AddrMarkNotFound ");
+			if (err & ATA_UNC)	printk("UncorrectableError ");
+			if (err & ATA_IDNF)	printk("SectorIdNotFound ");
+			if (err & ATA_TRK0NF)	printk("TrackZeroNotFound ");
+			if (err & ATA_AMNF)	printk("AddrMarkNotFound ");
 			printk("}\n");
 		}
 	}
@@ -846,40 +846,59 @@ static void ata_to_sense_error(unsigned id, u8 drv_stat, u8 drv_err, u8 *sk,
 	/* Based on the 3ware driver translation table */
 	static const unsigned char sense_table[][4] = {
 		/* BBD|ECC|ID|MAR */
-		{0xd1, 		ABORTED_COMMAND, 0x00, 0x00}, 	// Device busy                  Aborted command
+		{0xd1,		ABORTED_COMMAND, 0x00, 0x00},
+			// Device busy                  Aborted command
 		/* BBD|ECC|ID */
-		{0xd0,  	ABORTED_COMMAND, 0x00, 0x00}, 	// Device busy                  Aborted command
+		{0xd0,		ABORTED_COMMAND, 0x00, 0x00},
+			// Device busy                  Aborted command
 		/* ECC|MC|MARK */
-		{0x61, 		HARDWARE_ERROR, 0x00, 0x00}, 	// Device fault                 Hardware error
+		{0x61,		HARDWARE_ERROR, 0x00, 0x00},
+			// Device fault                 Hardware error
 		/* ICRC|ABRT */		/* NB: ICRC & !ABRT is BBD */
-		{0x84, 		ABORTED_COMMAND, 0x47, 0x00}, 	// Data CRC error               SCSI parity error
+		{0x84,		ABORTED_COMMAND, 0x47, 0x00},
+			// Data CRC error               SCSI parity error
 		/* MC|ID|ABRT|TRK0|MARK */
-		{0x37, 		NOT_READY, 0x04, 0x00}, 	// Unit offline                 Not ready
+		{0x37,		NOT_READY, 0x04, 0x00},
+			// Unit offline                 Not ready
 		/* MCR|MARK */
-		{0x09, 		NOT_READY, 0x04, 0x00}, 	// Unrecovered disk error       Not ready
+		{0x09,		NOT_READY, 0x04, 0x00},
+			// Unrecovered disk error       Not ready
 		/*  Bad address mark */
-		{0x01, 		MEDIUM_ERROR, 0x13, 0x00}, 	// Address mark not found       Address mark not found for data field
-		/* TRK0 */
-		{0x02, 		HARDWARE_ERROR, 0x00, 0x00}, 	// Track 0 not found		Hardware error
+		{0x01,		MEDIUM_ERROR, 0x13, 0x00},
+			// Address mark not found for data field
+		/* TRK0 - Track 0 not found */
+		{0x02,		HARDWARE_ERROR, 0x00, 0x00},
+			// Hardware error
 		/* Abort: 0x04 is not translated here, see below */
 		/* Media change request */
-		{0x08, 		NOT_READY, 0x04, 0x00}, 	// Media change request	  FIXME: faking offline
-		/* SRV/IDNF */
-		{0x10, 		ILLEGAL_REQUEST, 0x21, 0x00}, 	// ID not found                 Logical address out of range
-		/* MC */
-		{0x20, 		UNIT_ATTENTION, 0x28, 0x00}, 	// Media Changed		Not ready to ready change, medium may have changed
-		/* ECC */
-		{0x40, 		MEDIUM_ERROR, 0x11, 0x04}, 	// Uncorrectable ECC error      Unrecovered read error
+		{0x08,		NOT_READY, 0x04, 0x00},
+			// FIXME: faking offline
+		/* SRV/IDNF - ID not found */
+		{0x10,		ILLEGAL_REQUEST, 0x21, 0x00},
+			// Logical address out of range
+		/* MC - Media Changed */
+		{0x20,		UNIT_ATTENTION, 0x28, 0x00},
+			// Not ready to ready change, medium may have changed
+		/* ECC - Uncorrectable ECC error */
+		{0x40,		MEDIUM_ERROR, 0x11, 0x04},
+			// Unrecovered read error
 		/* BBD - block marked bad */
-		{0x80, 		MEDIUM_ERROR, 0x11, 0x04}, 	// Block marked bad		Medium error, unrecovered read error
+		{0x80,		MEDIUM_ERROR, 0x11, 0x04},
+			// Block marked bad	Medium error, unrecovered read error
 		{0xFF, 0xFF, 0xFF, 0xFF}, // END mark
 	};
 	static const unsigned char stat_table[][4] = {
 		/* Must be first because BUSY means no other bits valid */
-		{0x80, 		ABORTED_COMMAND, 0x47, 0x00},	// Busy, fake parity for now
-		{0x20, 		HARDWARE_ERROR,  0x44, 0x00}, 	// Device fault, internal target failure
-		{0x08, 		ABORTED_COMMAND, 0x47, 0x00},	// Timed out in xfer, fake parity for now
-		{0x04, 		RECOVERED_ERROR, 0x11, 0x00},	// Recovered ECC error	  Medium error, recovered
+		{0x80,		ABORTED_COMMAND, 0x47, 0x00},
+		// Busy, fake parity for now
+		{0x40,		ILLEGAL_REQUEST, 0x21, 0x04},
+		// Device ready, unaligned write command
+		{0x20,		HARDWARE_ERROR,  0x44, 0x00},
+		// Device fault, internal target failure
+		{0x08,		ABORTED_COMMAND, 0x47, 0x00},
+		// Timed out in xfer, fake parity for now
+		{0x04,		RECOVERED_ERROR, 0x11, 0x00},
+		// Recovered ECC error	  Medium error, recovered
 		{0xFF, 0xFF, 0xFF, 0xFF}, // END mark
 	};
 
@@ -1762,21 +1781,12 @@ static void ata_scsi_qc_complete(struct ata_queued_cmd *qc)
 	 * asc,ascq = ATA PASS-THROUGH INFORMATION AVAILABLE
 	 */
 	if (((cdb[0] == ATA_16) || (cdb[0] == ATA_12)) &&
-	    ((cdb[2] & 0x20) || need_sense)) {
+	    ((cdb[2] & 0x20) || need_sense))
 		ata_gen_passthru_sense(qc);
-	} else {
-		if (!need_sense) {
-			cmd->result = SAM_STAT_GOOD;
-		} else {
-			/* TODO: decide which descriptor format to use
-			 * for 48b LBA devices and call that here
-			 * instead of the fixed desc, which is only
-			 * good for smaller LBA (and maybe CHS?)
-			 * devices.
-			 */
-			ata_gen_ata_sense(qc);
-		}
-	}
+	else if (need_sense)
+		ata_gen_ata_sense(qc);
+	else
+		cmd->result = SAM_STAT_GOOD;
 
 	if (need_sense && !ap->ops->error_handler)
 		ata_dump_status(ap->print_id, &qc->result_tf);
@@ -1988,8 +1998,11 @@ static unsigned int ata_scsiop_inq_std(struct ata_scsi_args *args, u8 *rbuf)
 
 	VPRINTK("ENTER\n");
 
-	/* set scsi removable (RMB) bit per ata bit */
-	if (ata_id_removable(args->id))
+	/* set scsi removable (RMB) bit per ata bit, or if the
+	 * AHCI port says it's external (Hotplug-capable, eSATA).
+	 */
+	if (ata_id_removable(args->id) ||
+	    (args->dev->link->ap->pflags & ATA_PFLAG_EXTERNAL))
 		hdr[1] |= (1 << 7);
 
 	memcpy(rbuf, hdr, sizeof(hdr));
@@ -2516,7 +2529,8 @@ static unsigned int ata_scsiop_read_cap(struct ata_scsi_args *args, u8 *rbuf)
 		rbuf[14] = (lowest_aligned >> 8) & 0x3f;
 		rbuf[15] = lowest_aligned;
 
-		if (ata_id_has_trim(args->id)) {
+		if (ata_id_has_trim(args->id) &&
+		    !(dev->horkage & ATA_HORKAGE_NOTRIM)) {
 			rbuf[14] |= 0x80; /* LBPME */
 
 			if (ata_id_has_zero_after_trim(args->id) &&
@@ -2878,12 +2892,14 @@ ata_scsi_map_proto(u8 byte1)
 	case 5:		/* PIO Data-out */
 		return ATA_PROT_PIO;
 
+	case 12:	/* FPDMA */
+		return ATA_PROT_NCQ;
+
 	case 0:		/* Hard Reset */
 	case 1:		/* SRST */
 	case 8:		/* Device Diagnostic */
 	case 9:		/* Device Reset */
 	case 7:		/* DMA Queued */
-	case 12:	/* FPDMA */
 	case 15:	/* Return Response Info */
 	default:	/* Reserved */
 		break;
@@ -2910,6 +2926,9 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 
 	if ((tf->protocol = ata_scsi_map_proto(cdb[1])) == ATA_PROT_UNKNOWN)
 		goto invalid_fld;
+
+	/* enable LBA */
+	tf->flags |= ATA_TFLAG_LBA;
 
 	/*
 	 * 12 and 16 byte CDBs use different offsets to
@@ -2955,6 +2974,10 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 		tf->device = cdb[8];
 		tf->command = cdb[9];
 	}
+
+	/* For NCQ commands with FPDMA protocol, copy the tag value */
+	if (tf->protocol == ATA_PROT_NCQ)
+		tf->nsect = qc->tag << 3;
 
 	/* enforce correct master/slave bit */
 	tf->device = dev->devno ?

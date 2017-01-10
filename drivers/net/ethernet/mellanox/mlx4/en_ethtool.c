@@ -95,13 +95,11 @@ mlx4_en_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *drvinfo)
 		(u16) (mdev->dev->caps.fw_ver & 0xffff));
 	strlcpy(drvinfo->bus_info, pci_name(mdev->dev->persist->pdev),
 		sizeof(drvinfo->bus_info));
-	drvinfo->n_stats = 0;
-	drvinfo->regdump_len = 0;
-	drvinfo->eedump_len = 0;
 }
 
 static const char mlx4_en_priv_flags[][ETH_GSTRING_LEN] = {
 	"blueflame",
+	"phv-bit"
 };
 
 static const char main_strings[][ETH_GSTRING_LEN] = {
@@ -339,11 +337,7 @@ static int mlx4_en_get_sset_count(struct net_device *dev, int sset)
 	case ETH_SS_STATS:
 		return bitmap_iterator_count(&it) +
 			(priv->tx_ring_num * 2) +
-#ifdef CONFIG_NET_RX_BUSY_POLL
-			(priv->rx_ring_num * 5);
-#else
-			(priv->rx_ring_num * 2);
-#endif
+			(priv->rx_ring_num * 3);
 	case ETH_SS_TEST:
 		return MLX4_EN_NUM_SELF_TEST - !(priv->mdev->dev->caps.flags
 					& MLX4_DEV_CAP_FLAG_UC_LOOPBACK) * 2;
@@ -368,7 +362,7 @@ static void mlx4_en_get_ethtool_stats(struct net_device *dev,
 
 	for (i = 0; i < NUM_MAIN_STATS; i++, bitmap_iterator_inc(&it))
 		if (bitmap_iterator_test(&it))
-			data[index++] = ((unsigned long *)&priv->stats)[i];
+			data[index++] = ((unsigned long *)&dev->stats)[i];
 
 	for (i = 0; i < NUM_PORT_STATS; i++, bitmap_iterator_inc(&it))
 		if (bitmap_iterator_test(&it))
@@ -410,11 +404,7 @@ static void mlx4_en_get_ethtool_stats(struct net_device *dev,
 	for (i = 0; i < priv->rx_ring_num; i++) {
 		data[index++] = priv->rx_ring[i]->packets;
 		data[index++] = priv->rx_ring[i]->bytes;
-#ifdef CONFIG_NET_RX_BUSY_POLL
-		data[index++] = priv->rx_ring[i]->yields;
-		data[index++] = priv->rx_ring[i]->misses;
-		data[index++] = priv->rx_ring[i]->cleaned;
-#endif
+		data[index++] = priv->rx_ring[i]->dropped;
 	}
 	spin_unlock_bh(&priv->stats_lock);
 
@@ -488,14 +478,8 @@ static void mlx4_en_get_strings(struct net_device *dev,
 				"rx%d_packets", i);
 			sprintf(data + (index++) * ETH_GSTRING_LEN,
 				"rx%d_bytes", i);
-#ifdef CONFIG_NET_RX_BUSY_POLL
 			sprintf(data + (index++) * ETH_GSTRING_LEN,
-				"rx%d_napi_yield", i);
-			sprintf(data + (index++) * ETH_GSTRING_LEN,
-				"rx%d_misses", i);
-			sprintf(data + (index++) * ETH_GSTRING_LEN,
-				"rx%d_cleaned", i);
-#endif
+				"rx%d_dropped", i);
 		}
 		break;
 	case ETH_SS_PRIV_FLAGS:
@@ -1041,6 +1025,8 @@ static int mlx4_en_set_ringparam(struct net_device *dev,
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	struct mlx4_en_dev *mdev = priv->mdev;
+	struct mlx4_en_port_profile new_prof;
+	struct mlx4_en_priv *tmp;
 	u32 rx_size, tx_size;
 	int port_up = 0;
 	int err = 0;
@@ -1060,22 +1046,25 @@ static int mlx4_en_set_ringparam(struct net_device *dev,
 	    tx_size == priv->tx_ring[0]->size)
 		return 0;
 
+	tmp = kzalloc(sizeof(*tmp), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
 	mutex_lock(&mdev->state_lock);
+	memcpy(&new_prof, priv->prof, sizeof(struct mlx4_en_port_profile));
+	new_prof.tx_ring_size = tx_size;
+	new_prof.rx_ring_size = rx_size;
+	err = mlx4_en_try_alloc_resources(priv, tmp, &new_prof);
+	if (err)
+		goto out;
+
 	if (priv->port_up) {
 		port_up = 1;
 		mlx4_en_stop_port(dev, 1);
 	}
 
-	mlx4_en_free_resources(priv);
+	mlx4_en_safe_replace_resources(priv, tmp);
 
-	priv->prof->tx_ring_size = tx_size;
-	priv->prof->rx_ring_size = rx_size;
-
-	err = mlx4_en_alloc_resources(priv);
-	if (err) {
-		en_err(priv, "Failed reallocating port resources\n");
-		goto out;
-	}
 	if (port_up) {
 		err = mlx4_en_start_port(dev);
 		if (err)
@@ -1083,8 +1072,8 @@ static int mlx4_en_set_ringparam(struct net_device *dev,
 	}
 
 	err = mlx4_en_moderation_update(priv);
-
 out:
+	kfree(tmp);
 	mutex_unlock(&mdev->state_lock);
 	return err;
 }
@@ -1713,6 +1702,8 @@ static int mlx4_en_set_channels(struct net_device *dev,
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	struct mlx4_en_dev *mdev = priv->mdev;
+	struct mlx4_en_port_profile new_prof;
+	struct mlx4_en_priv *tmp;
 	int port_up = 0;
 	int err = 0;
 
@@ -1722,23 +1713,26 @@ static int mlx4_en_set_channels(struct net_device *dev,
 	    !channel->tx_count || !channel->rx_count)
 		return -EINVAL;
 
+	tmp = kzalloc(sizeof(*tmp), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
 	mutex_lock(&mdev->state_lock);
+	memcpy(&new_prof, priv->prof, sizeof(struct mlx4_en_port_profile));
+	new_prof.num_tx_rings_p_up = channel->tx_count;
+	new_prof.tx_ring_num = channel->tx_count * MLX4_EN_NUM_UP;
+	new_prof.rx_ring_num = channel->rx_count;
+
+	err = mlx4_en_try_alloc_resources(priv, tmp, &new_prof);
+	if (err)
+		goto out;
+
 	if (priv->port_up) {
 		port_up = 1;
 		mlx4_en_stop_port(dev, 1);
 	}
 
-	mlx4_en_free_resources(priv);
-
-	priv->num_tx_rings_p_up = channel->tx_count;
-	priv->tx_ring_num = channel->tx_count * MLX4_EN_NUM_UP;
-	priv->rx_ring_num = channel->rx_count;
-
-	err = mlx4_en_alloc_resources(priv);
-	if (err) {
-		en_err(priv, "Failed reallocating port resources\n");
-		goto out;
-	}
+	mlx4_en_safe_replace_resources(priv, tmp);
 
 	netif_set_real_num_tx_queues(dev, priv->tx_ring_num);
 	netif_set_real_num_rx_queues(dev, priv->rx_ring_num);
@@ -1756,8 +1750,8 @@ static int mlx4_en_set_channels(struct net_device *dev,
 	}
 
 	err = mlx4_en_moderation_update(priv);
-
 out:
+	kfree(tmp);
 	mutex_unlock(&mdev->state_lock);
 	return err;
 }
@@ -1797,35 +1791,49 @@ static int mlx4_en_get_ts_info(struct net_device *dev,
 static int mlx4_en_set_priv_flags(struct net_device *dev, u32 flags)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
+	struct mlx4_en_dev *mdev = priv->mdev;
 	bool bf_enabled_new = !!(flags & MLX4_EN_PRIV_FLAGS_BLUEFLAME);
 	bool bf_enabled_old = !!(priv->pflags & MLX4_EN_PRIV_FLAGS_BLUEFLAME);
+	bool phv_enabled_new = !!(flags & MLX4_EN_PRIV_FLAGS_PHV);
+	bool phv_enabled_old = !!(priv->pflags & MLX4_EN_PRIV_FLAGS_PHV);
 	int i;
+	int ret = 0;
 
-	if (bf_enabled_new == bf_enabled_old)
-		return 0; /* Nothing to do */
+	if (bf_enabled_new != bf_enabled_old) {
+		if (bf_enabled_new) {
+			bool bf_supported = true;
 
-	if (bf_enabled_new) {
-		bool bf_supported = true;
+			for (i = 0; i < priv->tx_ring_num; i++)
+				bf_supported &= priv->tx_ring[i]->bf_alloced;
 
-		for (i = 0; i < priv->tx_ring_num; i++)
-			bf_supported &= priv->tx_ring[i]->bf_alloced;
+			if (!bf_supported) {
+				en_err(priv, "BlueFlame is not supported\n");
+				return -EINVAL;
+			}
 
-		if (!bf_supported) {
-			en_err(priv, "BlueFlame is not supported\n");
-			return -EINVAL;
+			priv->pflags |= MLX4_EN_PRIV_FLAGS_BLUEFLAME;
+		} else {
+			priv->pflags &= ~MLX4_EN_PRIV_FLAGS_BLUEFLAME;
 		}
 
-		priv->pflags |= MLX4_EN_PRIV_FLAGS_BLUEFLAME;
-	} else {
-		priv->pflags &= ~MLX4_EN_PRIV_FLAGS_BLUEFLAME;
+		for (i = 0; i < priv->tx_ring_num; i++)
+			priv->tx_ring[i]->bf_enabled = bf_enabled_new;
+
+		en_info(priv, "BlueFlame %s\n",
+			bf_enabled_new ?  "Enabled" : "Disabled");
 	}
 
-	for (i = 0; i < priv->tx_ring_num; i++)
-		priv->tx_ring[i]->bf_enabled = bf_enabled_new;
-
-	en_info(priv, "BlueFlame %s\n",
-		bf_enabled_new ?  "Enabled" : "Disabled");
-
+	if (phv_enabled_new != phv_enabled_old) {
+		ret = set_phv_bit(mdev->dev, priv->port, (int)phv_enabled_new);
+		if (ret)
+			return ret;
+		else if (phv_enabled_new)
+			priv->pflags |= MLX4_EN_PRIV_FLAGS_PHV;
+		else
+			priv->pflags &= ~MLX4_EN_PRIV_FLAGS_PHV;
+		en_info(priv, "PHV bit %s\n",
+			phv_enabled_new ?  "Enabled" : "Disabled");
+	}
 	return 0;
 }
 
@@ -1834,6 +1842,48 @@ static u32 mlx4_en_get_priv_flags(struct net_device *dev)
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 
 	return priv->pflags;
+}
+
+static int mlx4_en_get_tunable(struct net_device *dev,
+			       const struct ethtool_tunable *tuna,
+			       void *data)
+{
+	const struct mlx4_en_priv *priv = netdev_priv(dev);
+	int ret = 0;
+
+	switch (tuna->id) {
+	case ETHTOOL_TX_COPYBREAK:
+		*(u32 *)data = priv->prof->inline_thold;
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
+static int mlx4_en_set_tunable(struct net_device *dev,
+			       const struct ethtool_tunable *tuna,
+			       const void *data)
+{
+	struct mlx4_en_priv *priv = netdev_priv(dev);
+	int val, ret = 0;
+
+	switch (tuna->id) {
+	case ETHTOOL_TX_COPYBREAK:
+		val = *(u32 *)data;
+		if (val < MIN_PKT_LEN || val > MAX_INLINE)
+			ret = -EINVAL;
+		else
+			priv->prof->inline_thold = val;
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
 }
 
 static int mlx4_en_get_module_info(struct net_device *dev,
@@ -1974,6 +2024,8 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
 	.get_ts_info = mlx4_en_get_ts_info,
 	.set_priv_flags = mlx4_en_set_priv_flags,
 	.get_priv_flags = mlx4_en_get_priv_flags,
+	.get_tunable		= mlx4_en_get_tunable,
+	.set_tunable		= mlx4_en_set_tunable,
 	.get_module_info = mlx4_en_get_module_info,
 	.get_module_eeprom = mlx4_en_get_module_eeprom
 };

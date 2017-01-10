@@ -61,7 +61,6 @@ static DEFINE_MUTEX(bridge_mutex);
 static int acpiphp_hotplug_notify(struct acpi_device *adev, u32 type);
 static void acpiphp_post_dock_fixup(struct acpi_device *adev);
 static void acpiphp_sanitize_bus(struct pci_bus *bus);
-static void acpiphp_set_hpp_values(struct pci_bus *bus);
 static void hotplug_event(u32 type, struct acpiphp_context *context);
 static void free_bridge(struct kref *kref);
 
@@ -510,7 +509,7 @@ static void enable_slot(struct acpiphp_slot *slot)
 	__pci_bus_assign_resources(bus, &add_list, NULL);
 
 	acpiphp_sanitize_bus(bus);
-	acpiphp_set_hpp_values(bus);
+	pcie_bus_configure_settings(bus);
 	acpiphp_set_acpi_region(slot);
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
@@ -651,15 +650,14 @@ static void trim_stale_devices(struct pci_dev *dev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(&dev->dev);
 	struct pci_bus *bus = dev->subordinate;
-	bool alive = false;
+	bool alive = dev->ignore_hotplug;
 
 	if (adev) {
 		acpi_status status;
 		unsigned long long sta;
 
 		status = acpi_evaluate_integer(adev->handle, "_STA", NULL, &sta);
-		alive = (ACPI_SUCCESS(status) && device_status_valid(sta))
-			|| dev->ignore_hotplug;
+		alive = alive || (ACPI_SUCCESS(status) && device_status_valid(sta));
 	}
 	if (!alive)
 		alive = pci_device_is_present(dev);
@@ -714,14 +712,6 @@ static void acpiphp_check_bridge(struct acpiphp_bridge *bridge)
 			disable_slot(slot);
 		}
 	}
-}
-
-static void acpiphp_set_hpp_values(struct pci_bus *bus)
-{
-	struct pci_dev *dev;
-
-	list_for_each_entry(dev, &bus->devices, bus_list)
-		pci_configure_slot(dev);
 }
 
 /*

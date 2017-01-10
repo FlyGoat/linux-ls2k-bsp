@@ -601,6 +601,7 @@ struct xfrm_mgr {
 					   const struct xfrm_migrate *m,
 					   int num_bundles,
 					   const struct xfrm_kmaddress *k);
+	bool			(*is_alive)(const struct km_event *c);
 };
 
 int xfrm_register_km(struct xfrm_mgr *km);
@@ -1605,7 +1606,9 @@ struct xfrm_policy *xfrm_policy_bysel_ctx(struct net *net, u32 mark,
 struct xfrm_policy *xfrm_policy_byid(struct net *net, u32 mark, u8, int dir,
 				     u32 id, int delete, int *err);
 int xfrm_policy_flush(struct net *net, u8 type, struct xfrm_audit *audit_info);
+void xfrm_policy_hash_rebuild(struct net *net);
 u32 xfrm_get_acqseq(void);
+int verify_spi_info(u8 proto, u32 min, u32 max);
 int xfrm_alloc_spi(struct xfrm_state *x, u32 minspi, u32 maxspi);
 struct xfrm_state *xfrm_find_acq(struct net *net, const struct xfrm_mark *mark,
 				 u8 mode, u32 reqid, u8 proto,
@@ -1686,7 +1689,26 @@ static inline int xfrm_aevent_is_on(struct net *net)
 	rcu_read_unlock();
 	return ret;
 }
+
+static inline int xfrm_acquire_is_on(struct net *net)
+{
+	struct sock *nlsk;
+	int ret = 0;
+
+	rcu_read_lock();
+	nlsk = rcu_dereference(net->xfrm.nlsk);
+	if (nlsk)
+		ret = netlink_has_listeners(nlsk, XFRMNLGRP_ACQUIRE);
+	rcu_read_unlock();
+
+	return ret;
+}
 #endif
+
+static inline int aead_len(struct xfrm_algo_aead *alg)
+{
+	return sizeof(*alg) + ((alg->alg_key_len + 7) / 8);
+}
 
 static inline int xfrm_alg_len(const struct xfrm_algo *alg)
 {
@@ -1725,6 +1747,12 @@ static inline int xfrm_replay_clone(struct xfrm_state *x,
 
 	return 0;
 }
+
+static inline struct xfrm_algo_aead *xfrm_algo_aead_clone(struct xfrm_algo_aead *orig)
+{
+	return kmemdup(orig, aead_len(orig), GFP_KERNEL);
+}
+
 
 static inline struct xfrm_algo *xfrm_algo_clone(struct xfrm_algo *orig)
 {

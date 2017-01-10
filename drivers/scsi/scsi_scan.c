@@ -55,6 +55,7 @@
  * Default timeout
  */
 #define SCSI_TIMEOUT (2*HZ)
+#define SCSI_REPORT_LUNS_TIMEOUT (30*HZ)
 
 /*
  * Prefix values for the SCSI id's (stored in sysfs name field)
@@ -98,12 +99,15 @@ MODULE_PARM_DESC(max_luns,
 #define SCSI_SCAN_TYPE_DEFAULT "sync"
 #endif
 
-static char scsi_scan_type[6] = SCSI_SCAN_TYPE_DEFAULT;
+char scsi_scan_type[7] = SCSI_SCAN_TYPE_DEFAULT;
 
 #define MAX_INIT_REPORT_LUNS 511
 
-module_param_string(scan, scsi_scan_type, sizeof(scsi_scan_type), S_IRUGO);
-MODULE_PARM_DESC(scan, "sync, async or none");
+module_param_string(scan, scsi_scan_type, sizeof(scsi_scan_type),
+		    S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(scan, "sync, async, manual, or none. "
+		 "Setting to 'manual' disables automatic scanning, but allows "
+		 "for manual device scan via the 'scan' sysfs attribute.");
 
 /*
  * max_scsi_report_luns: the maximum number of LUNS that will be
@@ -255,6 +259,7 @@ static struct scsi_device *scsi_alloc_sdev(struct scsi_target *starget,
 	INIT_LIST_HEAD(&sdev->starved_entry);
 	INIT_LIST_HEAD(&sdev->event_list);
 	spin_lock_init(&sdev->list_lock);
+	spin_lock_init(&sdev->inquiry_lock);
 	INIT_WORK(&sdev->event_work, scsi_evt_thread);
 	INIT_WORK(&sdev->requeue_work, scsi_requeue_run_queue);
 
@@ -293,7 +298,12 @@ static struct scsi_device *scsi_alloc_sdev(struct scsi_target *starget,
 	}
 	WARN_ON_ONCE(!blk_get_queue(sdev->request_queue));
 	sdev->request_queue->queuedata = sdev;
-	scsi_adjust_queue_depth(sdev, 0, sdev->host->cmd_per_lun);
+	if (!shost_use_blk_mq(sdev->host) && shost->hostt->use_host_wide_tags) {
+		blk_queue_init_tags(sdev->request_queue,
+				    sdev->host->cmd_per_lun, shost->bqt);
+	}
+	scsi_adjust_queue_depth(sdev, 0, sdev->host->cmd_per_lun ?
+					sdev->host->cmd_per_lun : 1);
 
 	scsi_sysfs_device_initialize(sdev);
 
@@ -505,7 +515,8 @@ void scsi_target_reap(struct scsi_target *starget)
 }
 
 /**
- * sanitize_inquiry_string - remove non-graphical chars from an INQUIRY result string
+ * scsi_sanitize_inquiry_string - remove non-graphical chars from an
+ *                                INQUIRY result string
  * @s: INQUIRY result string to sanitize
  * @len: length of the string
  *
@@ -518,7 +529,7 @@ void scsi_target_reap(struct scsi_target *starget)
  *	string terminator, so all the following characters are set to
  *	spaces.
  **/
-static void sanitize_inquiry_string(unsigned char *s, int len)
+void scsi_sanitize_inquiry_string(unsigned char *s, int len)
 {
 	int terminated = 0;
 
@@ -529,6 +540,7 @@ static void sanitize_inquiry_string(unsigned char *s, int len)
 			*s = ' ';
 	}
 }
+EXPORT_SYMBOL(scsi_sanitize_inquiry_string);
 
 /**
  * scsi_probe_lun - probe a single LUN using a SCSI INQUIRY
@@ -614,9 +626,9 @@ static int scsi_probe_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	}
 
 	if (result == 0) {
-		sanitize_inquiry_string(&inq_result[8], 8);
-		sanitize_inquiry_string(&inq_result[16], 16);
-		sanitize_inquiry_string(&inq_result[32], 4);
+		scsi_sanitize_inquiry_string(&inq_result[8], 8);
+		scsi_sanitize_inquiry_string(&inq_result[16], 16);
+		scsi_sanitize_inquiry_string(&inq_result[32], 4);
 
 		response_len = inq_result[4] + 5;
 		if (response_len > 255)
@@ -689,10 +701,12 @@ static int scsi_probe_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	 * strings.
 	 */
 	if (sdev->inquiry_len < 36) {
-		printk_once(KERN_INFO
-			    "%s %s: scsi scan: INQUIRY result too short (%d),"
-			    " using 36\n", dev_driver_string(&sdev->sdev_gendev),
-			    dev_name(&sdev->sdev_gendev), sdev->inquiry_len);
+		if (!sdev->host->short_inquiry) {
+			shost_printk(KERN_INFO, sdev->host,
+				    "scsi scan: INQUIRY result too short (%d),"
+				    " using 36\n", sdev->inquiry_len);
+			sdev->host->short_inquiry = 1;
+		}
 		sdev->inquiry_len = 36;
 	}
 
@@ -799,6 +813,19 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	} else {
 		sdev->type = (inq_result[0] & 0x1f);
 		sdev->removable = (inq_result[1] & 0x80) >> 7;
+
+		/*
+		 * some devices may respond with wrong type for
+		 * well-known logical units. Force well-known type
+		 * to enumerate them correctly.
+		 */
+		if (scsi_is_wlun(sdev->lun) && sdev->type != TYPE_WLUN) {
+			sdev_printk(KERN_WARNING, sdev,
+				"%s: correcting incorrect peripheral device type 0x%x for W-LUN 0x%16xhN\n",
+				__func__, sdev->type, (unsigned int)sdev->lun);
+			sdev->type = TYPE_WLUN;
+		}
+
 	}
 
 	switch (sdev->type) {
@@ -896,6 +923,12 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	 */
 	if (*bflags & BLIST_MAX_512)
 		blk_queue_max_hw_sectors(sdev->request_queue, 512);
+	/*
+	 * Max 1024 sector transfer length for targets that report incorrect
+	 * max/optimal lengths and relied on the old block layer safe default
+	 */
+	else if (*bflags & BLIST_MAX_1024)
+		blk_queue_max_hw_sectors(sdev->request_queue, 1024);
 
 	/*
 	 * Some devices may not want to have a start command automatically
@@ -952,7 +985,9 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 
 	sdev->eh_timeout = SCSI_DEFAULT_EH_TIMEOUT;
 
-	if (*bflags & BLIST_SKIP_VPD_PAGES)
+	if (*bflags & BLIST_TRY_VPD_PAGES)
+		sdev->try_vpd_pages = 1;
+	else if (*bflags & BLIST_SKIP_VPD_PAGES)
 		sdev->skip_vpd_pages = 1;
 
 	transport_configure_device(&sdev->sdev_gendev);
@@ -1020,7 +1055,8 @@ static unsigned char *scsi_inq_str(unsigned char *buf, unsigned char *inq,
  * @lun:	LUN of target device
  * @bflagsp:	store bflags here if not NULL
  * @sdevp:	probe the LUN corresponding to this scsi_device
- * @rescan:     if nonzero skip some code only needed on first scan
+ * @rescan:     if not equal to SCSI_SCAN_INITIAL skip some code only
+ *              needed on first scan
  * @hostdata:	passed to scsi_alloc_sdev()
  *
  * Description:
@@ -1035,7 +1071,8 @@ static unsigned char *scsi_inq_str(unsigned char *buf, unsigned char *inq,
  **/
 static int scsi_probe_and_add_lun(struct scsi_target *starget,
 				  uint lun, int *bflagsp,
-				  struct scsi_device **sdevp, int rescan,
+				  struct scsi_device **sdevp,
+				  enum scsi_scan_mode rescan,
 				  void *hostdata)
 {
 	struct scsi_device *sdev;
@@ -1049,7 +1086,7 @@ static int scsi_probe_and_add_lun(struct scsi_target *starget,
 	 */
 	sdev = scsi_device_lookup_by_target(starget, lun);
 	if (sdev) {
-		if (rescan || !scsi_device_created(sdev)) {
+		if (rescan != SCSI_SCAN_INITIAL || !scsi_device_created(sdev)) {
 			SCSI_LOG_SCAN_BUS(3, sdev_printk(KERN_INFO, sdev,
 				"scsi scan: device exists on %s\n",
 				dev_name(&sdev->sdev_gendev)));
@@ -1185,7 +1222,8 @@ static int scsi_probe_and_add_lun(struct scsi_target *starget,
  *     Modifies sdevscan->lun.
  **/
 static void scsi_sequential_lun_scan(struct scsi_target *starget,
-				     int bflags, int scsi_level, int rescan)
+				     int bflags, int scsi_level,
+				     enum scsi_scan_mode rescan)
 {
 	unsigned int sparse_lun, lun, max_dev_lun;
 	struct Scsi_Host *shost = dev_to_shost(starget->dev.parent);
@@ -1206,9 +1244,9 @@ static void scsi_sequential_lun_scan(struct scsi_target *starget,
 		sparse_lun = 0;
 
 	/*
-	 * If less than SCSI_1_CSS, and no special lun scaning, stop
+	 * If less than SCSI_1_CCS, and no special lun scanning, stop
 	 * scanning; this matches 2.4 behaviour, but could just be a bug
-	 * (to continue scanning a SCSI_1_CSS device).
+	 * (to continue scanning a SCSI_1_CCS device).
 	 *
 	 * This test is broken.  We might not have any device on lun0 for
 	 * a sparselun device, and if that's the case then how would we
@@ -1337,7 +1375,7 @@ EXPORT_SYMBOL(int_to_scsilun);
  *     1: could not scan with REPORT LUN
  **/
 static int scsi_report_lun_scan(struct scsi_target *starget, int bflags,
-				int rescan)
+				enum scsi_scan_mode rescan)
 {
 	char devname[64];
 	unsigned char scsi_cmd[MAX_COMMAND_SIZE];
@@ -1431,7 +1469,7 @@ retry:
 
 		result = scsi_execute_req(sdev, scsi_cmd, DMA_FROM_DEVICE,
 					  lun_data, length, &sshdr,
-					  SCSI_TIMEOUT + 4 * HZ, 3, NULL);
+					  SCSI_REPORT_LUNS_TIMEOUT, 3, NULL);
 
 		SCSI_LOG_SCAN_BUS(3, sdev_printk (KERN_INFO, sdev,
 				"scsi scan: REPORT LUNS"
@@ -1590,20 +1628,24 @@ void scsi_rescan_device(struct device *dev)
 {
 	struct scsi_driver *drv;
 	
-	if (!dev->driver)
-		return;
+	device_lock(dev);
 
-	drv = to_scsi_driver(dev->driver);
-	if (try_module_get(drv->owner)) {
-		if (drv->rescan)
-			drv->rescan(dev);
-		module_put(drv->owner);
+	scsi_attach_vpd(to_scsi_device(dev));
+
+	if (dev->driver) {
+		drv = to_scsi_driver(dev->driver);
+		if (try_module_get(drv->owner)) {
+			if (drv->rescan)
+				drv->rescan(dev);
+			module_put(drv->owner);
+		}
 	}
+	device_unlock(dev);
 }
 EXPORT_SYMBOL(scsi_rescan_device);
 
 static void __scsi_scan_target(struct device *parent, unsigned int channel,
-		unsigned int id, unsigned int lun, int rescan)
+		unsigned int id, unsigned int lun, enum scsi_scan_mode rescan)
 {
 	struct Scsi_Host *shost = dev_to_shost(parent);
 	int bflags = 0;
@@ -1659,7 +1701,10 @@ static void __scsi_scan_target(struct device *parent, unsigned int channel,
  * @channel:	channel to scan
  * @id:		target id to scan
  * @lun:	Specific LUN to scan or SCAN_WILD_CARD
- * @rescan:	passed to LUN scanning routines
+ * @rescan:	passed to LUN scanning routines; SCSI_SCAN_INITIAL for
+ *              no rescan, SCSI_SCAN_RESCAN to rescan existing LUNs,
+ *              and SCSI_SCAN_MANUAL to force scanning even if
+ *              'scan=manual' is set.
  *
  * Description:
  *     Scan the target id on @parent, @channel, and @id. Scan at least LUN 0,
@@ -1669,11 +1714,15 @@ static void __scsi_scan_target(struct device *parent, unsigned int channel,
  *     sequential scan of LUNs on the target id.
  **/
 void scsi_scan_target(struct device *parent, unsigned int channel,
-		      unsigned int id, unsigned int lun, int rescan)
+		      unsigned int id, unsigned int lun, enum scsi_scan_mode rescan)
 {
 	struct Scsi_Host *shost = dev_to_shost(parent);
 
 	if (strncmp(scsi_scan_type, "none", 4) == 0)
+		return;
+
+	if (rescan != SCSI_SCAN_MANUAL &&
+	    strncmp(scsi_scan_type, "manual", 6) == 0)
 		return;
 
 	mutex_lock(&shost->scan_mutex);
@@ -1689,7 +1738,8 @@ void scsi_scan_target(struct device *parent, unsigned int channel,
 EXPORT_SYMBOL(scsi_scan_target);
 
 static void scsi_scan_channel(struct Scsi_Host *shost, unsigned int channel,
-			      unsigned int id, unsigned int lun, int rescan)
+			      unsigned int id, unsigned int lun,
+			      enum scsi_scan_mode rescan)
 {
 	uint order_id;
 
@@ -1720,7 +1770,8 @@ static void scsi_scan_channel(struct Scsi_Host *shost, unsigned int channel,
 }
 
 int scsi_scan_host_selected(struct Scsi_Host *shost, unsigned int channel,
-			    unsigned int id, unsigned int lun, int rescan)
+			    unsigned int id, unsigned int lun,
+			    enum scsi_scan_mode rescan)
 {
 	SCSI_LOG_SCAN_BUS(3, shost_printk (KERN_INFO, shost,
 		"%s: <%u:%u:%u>\n",
@@ -1728,7 +1779,7 @@ int scsi_scan_host_selected(struct Scsi_Host *shost, unsigned int channel,
 
 	if (((channel != SCAN_WILD_CARD) && (channel > shost->max_channel)) ||
 	    ((id != SCAN_WILD_CARD) && (id >= shost->max_id)) ||
-	    ((lun != SCAN_WILD_CARD) && (lun > shost->max_lun)))
+	    ((lun != SCAN_WILD_CARD) && (lun >= shost->max_lun)))
 		return -EINVAL;
 
 	mutex_lock(&shost->scan_mutex);
@@ -1899,7 +1950,8 @@ void scsi_scan_host(struct Scsi_Host *shost)
 {
 	struct async_scan_data *data;
 
-	if (strncmp(scsi_scan_type, "none", 4) == 0)
+	if (strncmp(scsi_scan_type, "none", 4) == 0 ||
+	    strncmp(scsi_scan_type, "manual", 6) == 0)
 		return;
 	if (scsi_autopm_get_host(shost) < 0)
 		return;

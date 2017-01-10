@@ -146,7 +146,9 @@ int dm_btree_empty(struct dm_btree_info *info, dm_block_t *root)
 	n->header.value_size = cpu_to_le32(info->value_type.size);
 
 	*root = dm_block_location(b);
-	return unlock_block(info, b);
+	unlock_block(info, b);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(dm_btree_empty);
 
@@ -255,6 +257,16 @@ static void pop_frame(struct del_stack *s)
 	dm_tm_unlock(s->tm, f->b);
 }
 
+static void unlock_all_frames(struct del_stack *s)
+{
+	struct frame *f;
+
+	while (unprocessed_frames(s)) {
+		f = s->spine + s->top--;
+		dm_tm_unlock(s->tm, f->b);
+	}
+}
+
 int dm_btree_del(struct dm_btree_info *info, dm_block_t root)
 {
 	int r;
@@ -311,9 +323,13 @@ int dm_btree_del(struct dm_btree_info *info, dm_block_t root)
 			pop_frame(s);
 		}
 	}
-
 out:
+	if (r) {
+		/* cleanup all frames of del_stack */
+		unlock_all_frames(s);
+	}
 	kfree(s);
+
 	return r;
 }
 EXPORT_SYMBOL_GPL(dm_btree_del);
@@ -501,8 +517,8 @@ EXPORT_SYMBOL_GPL(dm_btree_lookup_next);
  *
  * Where A* is a shadow of A.
  */
-static int btree_split_sibling(struct shadow_spine *s, dm_block_t root,
-			       unsigned parent_index, uint64_t key)
+static int btree_split_sibling(struct shadow_spine *s, unsigned parent_index,
+			       uint64_t key)
 {
 	int r;
 	size_t size;
@@ -552,8 +568,10 @@ static int btree_split_sibling(struct shadow_spine *s, dm_block_t root,
 
 	r = insert_at(sizeof(__le64), pn, parent_index + 1,
 		      le64_to_cpu(rn->keys[0]), &location);
-	if (r)
+	if (r) {
+		unlock_block(s->info, right);
 		return r;
+	}
 
 	if (key < le64_to_cpu(rn->keys[0])) {
 		unlock_block(s->info, right);
@@ -706,7 +724,7 @@ static int btree_insert_raw(struct shadow_spine *s, dm_block_t root,
 			if (top)
 				r = btree_split_beneath(s, key);
 			else
-				r = btree_split_sibling(s, root, i, key);
+				r = btree_split_sibling(s, i, key);
 
 			if (r < 0)
 				return r;
@@ -736,12 +754,19 @@ static int btree_insert_raw(struct shadow_spine *s, dm_block_t root,
 	return 0;
 }
 
+static bool need_insert(struct btree_node *node, uint64_t *keys,
+			unsigned level, unsigned index)
+{
+        return ((index >= le32_to_cpu(node->header.nr_entries)) ||
+		(le64_to_cpu(node->keys[index]) != keys[level]));
+}
+
 static int insert(struct dm_btree_info *info, dm_block_t root,
 		  uint64_t *keys, void *value, dm_block_t *new_root,
 		  int *inserted)
 		  __dm_written_to_disk(value)
 {
-	int r, need_insert;
+	int r;
 	unsigned level, index = -1, last_level = info->levels - 1;
 	dm_block_t block = root;
 	struct shadow_spine spine;
@@ -757,10 +782,8 @@ static int insert(struct dm_btree_info *info, dm_block_t root,
 			goto bad;
 
 		n = dm_block_data(shadow_current(&spine));
-		need_insert = ((index >= le32_to_cpu(n->header.nr_entries)) ||
-			       (le64_to_cpu(n->keys[index]) != keys[level]));
 
-		if (need_insert) {
+		if (need_insert(n, keys, level, index)) {
 			dm_block_t new_tree;
 			__le64 new_le;
 
@@ -787,10 +810,8 @@ static int insert(struct dm_btree_info *info, dm_block_t root,
 		goto bad;
 
 	n = dm_block_data(shadow_current(&spine));
-	need_insert = ((index >= le32_to_cpu(n->header.nr_entries)) ||
-		       (le64_to_cpu(n->keys[index]) != keys[level]));
 
-	if (need_insert) {
+	if (need_insert(n, keys, level, index)) {
 		if (inserted)
 			*inserted = 1;
 

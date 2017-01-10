@@ -34,19 +34,24 @@ static void siena_init_wol(struct efx_nic *efx);
 
 static void siena_push_irq_moderation(struct efx_channel *channel)
 {
+	struct efx_nic *efx = channel->efx;
 	efx_dword_t timer_cmd;
 
-	if (channel->irq_moderation)
+	if (channel->irq_moderation_us) {
+		unsigned int ticks;
+
+		ticks = efx_usecs_to_ticks(efx, channel->irq_moderation_us);
 		EFX_POPULATE_DWORD_2(timer_cmd,
 				     FRF_CZ_TC_TIMER_MODE,
 				     FFE_CZ_TIMER_MODE_INT_HLDOFF,
 				     FRF_CZ_TC_TIMER_VAL,
-				     channel->irq_moderation - 1);
-	else
+				     ticks - 1);
+	} else {
 		EFX_POPULATE_DWORD_2(timer_cmd,
 				     FRF_CZ_TC_TIMER_MODE,
 				     FFE_CZ_TIMER_MODE_DIS,
 				     FRF_CZ_TC_TIMER_VAL, 0);
+	}
 	efx_writed_page_locked(channel->efx, &timer_cmd, FR_BZ_TIMER_COMMAND_P0,
 			       channel->channel);
 }
@@ -222,6 +227,9 @@ static int siena_probe_nvconfig(struct efx_nic *efx)
 	efx->timer_quantum_ns =
 		(caps & (1 << MC_CMD_CAPABILITIES_TURBO_ACTIVE_LBN)) ?
 		3072 : 6144; /* 768 cycles */
+	efx->timer_max_ns = efx->type->timer_period_max *
+			    efx->timer_quantum_ns;
+
 	return rc;
 }
 
@@ -262,6 +270,7 @@ static int siena_probe_nic(struct efx_nic *efx)
 	}
 
 	efx->max_channels = EFX_MAX_CHANNELS;
+	efx->max_tx_channels = EFX_MAX_CHANNELS;
 
 	efx_reado(efx, &reg, FR_AZ_CS_DEBUG);
 	efx->port_num = EFX_OWORD_FIELD(reg, FRF_CZ_CS_PORT_NUM) - 1;
@@ -1042,9 +1051,5 @@ const struct efx_nic_type siena_a0_nic_type = {
 	.max_rx_ip_filters = FR_BZ_RX_FILTER_TBL0_ROWS,
 	.hwtstamp_filters = (1 << HWTSTAMP_FILTER_NONE |
 			     1 << HWTSTAMP_FILTER_PTP_V1_L4_EVENT |
-			     1 << HWTSTAMP_FILTER_PTP_V1_L4_SYNC |
-			     1 << HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ |
-			     1 << HWTSTAMP_FILTER_PTP_V2_L4_EVENT |
-			     1 << HWTSTAMP_FILTER_PTP_V2_L4_SYNC |
-			     1 << HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ),
+			     1 << HWTSTAMP_FILTER_PTP_V2_L4_EVENT),
 };

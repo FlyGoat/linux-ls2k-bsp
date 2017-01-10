@@ -36,6 +36,7 @@ static ssize_t type##_show(struct device *dev,			\
 } \
 static DEVICE_ATTR_RO(type)
 
+CODEC_ATTR(type);
 CODEC_ATTR(vendor_id);
 CODEC_ATTR(subsystem_id);
 CODEC_ATTR(revision_id);
@@ -44,7 +45,15 @@ CODEC_ATTR(mfg);
 CODEC_ATTR_STR(vendor_name);
 CODEC_ATTR_STR(chip_name);
 
+static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	return snd_hdac_codec_modalias(dev_to_hdac_dev(dev), buf, 256);
+}
+static DEVICE_ATTR_RO(modalias);
+
 static struct attribute *hdac_dev_attrs[] = {
+	&dev_attr_type.attr,
 	&dev_attr_vendor_id.attr,
 	&dev_attr_subsystem_id.attr,
 	&dev_attr_revision_id.attr,
@@ -52,6 +61,7 @@ static struct attribute *hdac_dev_attrs[] = {
 	&dev_attr_mfg.attr,
 	&dev_attr_vendor_name.attr,
 	&dev_attr_chip_name.attr,
+	&dev_attr_modalias.attr,
 	NULL
 };
 
@@ -313,14 +323,13 @@ static void widget_tree_free(struct hdac_device *codec)
 
 	if (!tree)
 		return;
+	free_widget_node(tree->afg, &widget_afg_group);
 	if (tree->nodes) {
 		for (p = tree->nodes; *p; p++)
 			free_widget_node(*p, &widget_node_group);
 		kfree(tree->nodes);
 	}
-	free_widget_node(tree->afg, &widget_afg_group);
-	if (tree->root)
-		kobject_put(tree->root);
+	kobject_put(tree->root);
 	kfree(tree);
 	codec->widgets = NULL;
 }
@@ -362,13 +371,6 @@ static int widget_tree_create(struct hdac_device *codec)
 	if (!tree->root)
 		return -ENOMEM;
 
-	if (codec->afg) {
-		err = add_widget_node(tree->root, codec->afg,
-				      &widget_afg_group, &tree->afg);
-		if (err < 0)
-			return err;
-	}
-
 	tree->nodes = kcalloc(codec->num_nodes + 1, sizeof(*tree->nodes),
 			      GFP_KERNEL);
 	if (!tree->nodes)
@@ -381,6 +383,13 @@ static int widget_tree_create(struct hdac_device *codec)
 			return err;
 	}
 
+	if (codec->afg) {
+		err = add_widget_node(tree->root, codec->afg,
+				      &widget_afg_group, &tree->afg);
+		if (err < 0)
+			return err;
+	}
+
 	kobject_uevent(tree->root, KOBJ_CHANGE);
 	return 0;
 }
@@ -388,6 +397,9 @@ static int widget_tree_create(struct hdac_device *codec)
 int hda_widget_sysfs_init(struct hdac_device *codec)
 {
 	int err;
+
+	if (codec->widgets)
+		return 0; /* already created */
 
 	err = widget_tree_create(codec);
 	if (err < 0) {

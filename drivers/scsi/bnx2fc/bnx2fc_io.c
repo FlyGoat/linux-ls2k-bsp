@@ -1,8 +1,8 @@
-/* bnx2fc_io.c: QLogic NetXtreme II Linux FCoE offload driver.
+/* bnx2fc_io.c: QLogic Linux FCoE offload driver.
  * IO manager and SCSI IO processing.
  *
- * Copyright (c) 2008 - 2013 Broadcom Corporation
- * Copyright (c) 2014, QLogic Corporation
+ * Copyright (c) 2008-2013 Broadcom Corporation
+ * Copyright (c) 2014-2015 QLogic Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -179,12 +179,24 @@ static void bnx2fc_scsi_done(struct bnx2fc_cmd *io_req, int err_code)
 
 	bnx2fc_unmap_sg_list(io_req);
 	io_req->sc_cmd = NULL;
+
+	/* Sanity checks before returning command to mid-layer */
 	if (!sc_cmd) {
 		printk(KERN_ERR PFX "scsi_done - sc_cmd NULL. "
 				    "IO(0x%x) already cleaned up\n",
 		       io_req->xid);
 		return;
 	}
+	if (!sc_cmd->device) {
+		pr_err(PFX "0x%x: sc_cmd->device is NULL.\n", io_req->xid);
+		return;
+	}
+	if (!sc_cmd->device->host) {
+		pr_err(PFX "0x%x: sc_cmd->device->host is NULL.\n",
+		    io_req->xid);
+		return;
+	}
+
 	sc_cmd->result = err_code << 16;
 
 	BNX2FC_IO_DBG(io_req, "sc=%p, result=0x%x, retries=%d, allowed=%d\n",
@@ -578,8 +590,12 @@ int bnx2fc_init_mp_req(struct bnx2fc_cmd *io_req)
 	mp_req = (struct bnx2fc_mp_req *)&(io_req->mp_req);
 	memset(mp_req, 0, sizeof(struct bnx2fc_mp_req));
 
-	mp_req->req_len = sizeof(struct fcp_cmnd);
-	io_req->data_xfer_len = mp_req->req_len;
+	if (io_req->cmd_type != BNX2FC_ELS) {
+		mp_req->req_len = sizeof(struct fcp_cmnd);
+		io_req->data_xfer_len = mp_req->req_len;
+	} else
+		mp_req->req_len = io_req->data_xfer_len;
+
 	mp_req->req_buf = dma_alloc_coherent(&hba->pcidev->dev, CNIC_PAGE_SIZE,
 					     &mp_req->req_buf_dma,
 					     GFP_ATOMIC);
@@ -766,7 +782,7 @@ retry_tmf:
 	spin_unlock_bh(&tgt->tgt_lock);
 
 	rc = wait_for_completion_timeout(&io_req->tm_done,
-					 BNX2FC_TM_TIMEOUT * HZ);
+					 interface->tm_timeout * HZ);
 	spin_lock_bh(&tgt->tgt_lock);
 
 	io_req->wait_for_comp = 0;
@@ -1100,8 +1116,7 @@ int bnx2fc_eh_abort(struct scsi_cmnd *sc_cmd)
 	struct bnx2fc_cmd *io_req;
 	struct fc_lport *lport;
 	struct bnx2fc_rport *tgt;
-	int rc = FAILED;
-
+	int rc;
 
 	rc = fc_block_scsi_eh(sc_cmd);
 	if (rc)
@@ -1110,7 +1125,7 @@ int bnx2fc_eh_abort(struct scsi_cmnd *sc_cmd)
 	lport = shost_priv(sc_cmd->device->host);
 	if ((lport->state != LPORT_ST_READY) || !(lport->link_up)) {
 		printk(KERN_ERR PFX "eh_abort: link not ready\n");
-		return rc;
+		return FAILED;
 	}
 
 	tgt = (struct bnx2fc_rport *)&rp[1];
@@ -1759,7 +1774,7 @@ static void bnx2fc_parse_fcp_rsp(struct bnx2fc_cmd *io_req,
 		if ((fcp_rsp_len == 4) || (fcp_rsp_len == 8)) {
 			/* Only for task management function */
 			io_req->fcp_rsp_code = rq_data[3];
-			printk(KERN_ERR PFX "fcp_rsp_code = %d\n",
+			BNX2FC_IO_DBG(io_req, "fcp_rsp_code = %d\n",
 				io_req->fcp_rsp_code);
 		}
 

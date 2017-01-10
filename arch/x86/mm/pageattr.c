@@ -33,7 +33,7 @@ struct cpa_data {
 	pgd_t		*pgd;
 	pgprot_t	mask_set;
 	pgprot_t	mask_clr;
-	int		numpages;
+	unsigned long	numpages;
 	int		flags;
 	unsigned long	pfn;
 	unsigned	force_split : 1;
@@ -131,16 +131,15 @@ within(unsigned long addr, unsigned long start, unsigned long end)
  */
 void clflush_cache_range(void *vaddr, unsigned int size)
 {
-	void *vend = vaddr + size - 1;
+	unsigned long clflush_mask = boot_cpu_data.x86_clflush_size - 1;
+	void *vend = vaddr + size;
+	void *p;
 
 	mb();
 
-	for (; vaddr < vend; vaddr += boot_cpu_data.x86_clflush_size)
-		clflushopt(vaddr);
-	/*
-	 * Flush any possible final partial cacheline:
-	 */
-	clflushopt(vend);
+	for (p = (void *)((unsigned long)vaddr & ~clflush_mask);
+	     p < vend; p += boot_cpu_data.x86_clflush_size)
+		clflushopt(p);
 
 	mb();
 }
@@ -1289,7 +1288,7 @@ static int __change_page_attr_set_clr(struct cpa_data *cpa, int checkalias)
 		 * CPA operation. Either a large page has been
 		 * preserved or a single page update happened.
 		 */
-		BUG_ON(cpa->numpages > numpages);
+		BUG_ON(cpa->numpages > numpages || !cpa->numpages);
 		numpages -= cpa->numpages;
 		if (cpa->flags & (CPA_PAGES_ARRAY | CPA_ARRAY))
 			cpa->curpage++;

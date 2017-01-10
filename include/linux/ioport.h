@@ -148,6 +148,7 @@ extern void reserve_region_with_split(struct resource *root,
 extern struct resource *insert_resource_conflict(struct resource *parent, struct resource *new);
 extern int insert_resource(struct resource *parent, struct resource *new);
 extern void insert_resource_expand_to_fit(struct resource *root, struct resource *new);
+extern int remove_resource(struct resource *old);
 extern void arch_remove_reservations(struct resource *avail);
 extern int allocate_resource(struct resource *root, struct resource *new,
 			     resource_size_t size, resource_size_t min,
@@ -215,6 +216,11 @@ static inline int __deprecated check_region(resource_size_t s,
 
 /* Wrappers for managed devices */
 struct device;
+
+extern int devm_request_resource(struct device *dev, struct resource *root,
+				 struct resource *new);
+extern void devm_release_resource(struct device *dev, struct resource *new);
+
 #define devm_request_region(dev,start,n,name) \
 	__devm_request_region(dev, &ioport_resource, (start), (n), (name))
 #define devm_request_mem_region(dev,start,n,name) \

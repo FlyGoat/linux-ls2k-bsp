@@ -189,6 +189,7 @@ config NET_IPGRE_DEMUX
 
 config NET_IP_TUNNEL
 	tristate
+	select DST_CACHE
 	default n
 
 config NET_IPGRE
@@ -335,20 +336,6 @@ config NET_FOU_IP_TUNNELS
 	  Allow configuration of FOU or GUE encapsulation for IP tunnels.
 	  When this option is enabled IP tunnels can be configured to use
 	  FOU or GUE encapsulation.
-
-config GENEVE
-	tristate "Generic Network Virtualization Encapsulation (Geneve)"
-	depends on INET
-	select NET_UDP_TUNNEL
-	---help---
-	This allows one to create Geneve virtual interfaces that provide
-	Layer 2 Networks over Layer 3 Networks. Geneve is often used
-	to tunnel virtual network infrastructure in virtualized environments.
-	For more information see:
-	  http://tools.ietf.org/html/draft-gross-geneve-01
-
-	  To compile this driver as a module, choose M here: the module
-
 
 config INET_AH
 	tristate "IP: AH transformation"

@@ -95,6 +95,7 @@
  */
 
 #define MLX4_EN_PRIV_FLAGS_BLUEFLAME 1
+#define MLX4_EN_PRIV_FLAGS_PHV	     2
 
 #define MLX4_EN_WATCHDOG_TIMEOUT	(15 * HZ)
 
@@ -274,6 +275,7 @@ struct mlx4_en_tx_ring {
 	unsigned long		tx_csum;
 	unsigned long		tso_packets;
 	unsigned long		xmit_more;
+	unsigned int		tx_dropped;
 	struct mlx4_bf		bf;
 	unsigned long		queue_stopped;
 
@@ -300,7 +302,6 @@ struct mlx4_en_tx_ring {
 	bool			bf_alloced;
 	struct netdev_queue	*tx_queue;
 	int			hwtstamp_tx_type;
-	int			inline_thold;
 } ____cacheline_aligned_in_smp;
 
 struct mlx4_en_rx_desc {
@@ -325,14 +326,10 @@ struct mlx4_en_rx_ring {
 	void *rx_info;
 	unsigned long bytes;
 	unsigned long packets;
-#ifdef CONFIG_NET_RX_BUSY_POLL
-	unsigned long yields;
-	unsigned long misses;
-	unsigned long cleaned;
-#endif
 	unsigned long csum_ok;
 	unsigned long csum_none;
 	unsigned long csum_complete;
+	unsigned long dropped;
 	int hwtstamp_rx_filter;
 	cpumask_var_t affinity_mask;
 };
@@ -355,18 +352,6 @@ struct mlx4_en_cq {
 	u32 tot_rx;
 #endif
 
-#ifdef CONFIG_NET_RX_BUSY_POLL
-	unsigned int state;
-#define MLX4_EN_CQ_STATE_IDLE        0
-#define MLX4_EN_CQ_STATE_NAPI     1    /* NAPI owns this CQ */
-#define MLX4_EN_CQ_STATE_POLL     2    /* poll owns this CQ */
-#define MLX4_CQ_LOCKED (MLX4_EN_CQ_STATE_NAPI | MLX4_EN_CQ_STATE_POLL)
-#define MLX4_EN_CQ_STATE_NAPI_YIELD  4    /* NAPI yielded this CQ */
-#define MLX4_EN_CQ_STATE_POLL_YIELD  8    /* poll yielded this CQ */
-#define CQ_YIELD (MLX4_EN_CQ_STATE_NAPI_YIELD | MLX4_EN_CQ_STATE_POLL_YIELD)
-#define CQ_USER_PEND (MLX4_EN_CQ_STATE_POLL | MLX4_EN_CQ_STATE_POLL_YIELD)
-	spinlock_t poll_lock; /* protects from LLS/napi conflicts */
-#endif  /* CONFIG_NET_RX_BUSY_POLL */
 	struct irq_desc *irq_desc;
 };
 
@@ -376,12 +361,14 @@ struct mlx4_en_port_profile {
 	u32 rx_ring_num;
 	u32 tx_ring_size;
 	u32 rx_ring_size;
+	u8 num_tx_rings_p_up;
 	u8 rx_pause;
 	u8 rx_ppp;
 	u8 tx_pause;
 	u8 tx_ppp;
 	int rss_rings;
 	int inline_thold;
+	struct hwtstamp_config hwtstamp_config;
 };
 
 struct mlx4_en_profile {
@@ -399,6 +386,7 @@ struct mlx4_en_dev {
 	struct pci_dev		*pdev;
 	struct mutex		state_lock;
 	struct net_device       *pndev[MLX4_MAX_PORTS + 1];
+	struct net_device       *upper[MLX4_MAX_PORTS + 1];
 	u32                     port_cnt;
 	bool			device_up;
 	struct mlx4_en_profile  profile;
@@ -419,6 +407,7 @@ struct mlx4_en_dev {
 	unsigned long		overflow_period;
 	struct ptp_clock	*ptp_clock;
 	struct ptp_clock_info	ptp_clock_info;
+	struct notifier_block	nb;
 };
 
 
@@ -504,8 +493,6 @@ struct mlx4_en_priv {
 	struct mlx4_en_port_profile *prof;
 	struct net_device *dev;
 	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
-	struct net_device_stats stats;
-	struct net_device_stats ret_stats;
 	struct mlx4_en_port_state port_state;
 	spinlock_t stats_lock;
 	struct ethtool_flow_id ethtool_rules[MAX_NUM_OF_FS_RULES];
@@ -595,6 +582,7 @@ struct mlx4_en_priv {
 #ifdef CONFIG_MLX4_EN_DCB
 	struct ieee_ets ets;
 	u16 maxrate[IEEE_8021QAZ_MAX_TCS];
+	enum dcbnl_cndd_states cndd_state[IEEE_8021QAZ_MAX_TCS];
 #endif
 #ifdef CONFIG_RFS_ACCEL
 	spinlock_t filters_lock;
@@ -627,115 +615,6 @@ static inline struct mlx4_cqe *mlx4_en_get_cqe(void *buf, int idx, int cqe_sz)
 	return buf + idx * cqe_sz;
 }
 
-#ifdef CONFIG_NET_RX_BUSY_POLL
-static inline void mlx4_en_cq_init_lock(struct mlx4_en_cq *cq)
-{
-	spin_lock_init(&cq->poll_lock);
-	cq->state = MLX4_EN_CQ_STATE_IDLE;
-}
-
-/* called from the device poll rutine to get ownership of a cq */
-static inline bool mlx4_en_cq_lock_napi(struct mlx4_en_cq *cq)
-{
-	int rc = true;
-	spin_lock(&cq->poll_lock);
-	if (cq->state & MLX4_CQ_LOCKED) {
-		WARN_ON(cq->state & MLX4_EN_CQ_STATE_NAPI);
-		cq->state |= MLX4_EN_CQ_STATE_NAPI_YIELD;
-		rc = false;
-	} else
-		/* we don't care if someone yielded */
-		cq->state = MLX4_EN_CQ_STATE_NAPI;
-	spin_unlock(&cq->poll_lock);
-	return rc;
-}
-
-/* returns true is someone tried to get the cq while napi had it */
-static inline bool mlx4_en_cq_unlock_napi(struct mlx4_en_cq *cq)
-{
-	int rc = false;
-	spin_lock(&cq->poll_lock);
-	WARN_ON(cq->state & (MLX4_EN_CQ_STATE_POLL |
-			       MLX4_EN_CQ_STATE_NAPI_YIELD));
-
-	if (cq->state & MLX4_EN_CQ_STATE_POLL_YIELD)
-		rc = true;
-	cq->state = MLX4_EN_CQ_STATE_IDLE;
-	spin_unlock(&cq->poll_lock);
-	return rc;
-}
-
-/* called from mlx4_en_low_latency_poll() */
-static inline bool mlx4_en_cq_lock_poll(struct mlx4_en_cq *cq)
-{
-	int rc = true;
-	spin_lock_bh(&cq->poll_lock);
-	if ((cq->state & MLX4_CQ_LOCKED)) {
-		struct net_device *dev = cq->dev;
-		struct mlx4_en_priv *priv = netdev_priv(dev);
-		struct mlx4_en_rx_ring *rx_ring = priv->rx_ring[cq->ring];
-
-		cq->state |= MLX4_EN_CQ_STATE_POLL_YIELD;
-		rc = false;
-		rx_ring->yields++;
-	} else
-		/* preserve yield marks */
-		cq->state |= MLX4_EN_CQ_STATE_POLL;
-	spin_unlock_bh(&cq->poll_lock);
-	return rc;
-}
-
-/* returns true if someone tried to get the cq while it was locked */
-static inline bool mlx4_en_cq_unlock_poll(struct mlx4_en_cq *cq)
-{
-	int rc = false;
-	spin_lock_bh(&cq->poll_lock);
-	WARN_ON(cq->state & (MLX4_EN_CQ_STATE_NAPI));
-
-	if (cq->state & MLX4_EN_CQ_STATE_POLL_YIELD)
-		rc = true;
-	cq->state = MLX4_EN_CQ_STATE_IDLE;
-	spin_unlock_bh(&cq->poll_lock);
-	return rc;
-}
-
-/* true if a socket is polling, even if it did not get the lock */
-static inline bool mlx4_en_cq_busy_polling(struct mlx4_en_cq *cq)
-{
-	WARN_ON(!(cq->state & MLX4_CQ_LOCKED));
-	return cq->state & CQ_USER_PEND;
-}
-#else
-static inline void mlx4_en_cq_init_lock(struct mlx4_en_cq *cq)
-{
-}
-
-static inline bool mlx4_en_cq_lock_napi(struct mlx4_en_cq *cq)
-{
-	return true;
-}
-
-static inline bool mlx4_en_cq_unlock_napi(struct mlx4_en_cq *cq)
-{
-	return false;
-}
-
-static inline bool mlx4_en_cq_lock_poll(struct mlx4_en_cq *cq)
-{
-	return false;
-}
-
-static inline bool mlx4_en_cq_unlock_poll(struct mlx4_en_cq *cq)
-{
-	return false;
-}
-
-static inline bool mlx4_en_cq_busy_polling(struct mlx4_en_cq *cq)
-{
-	return false;
-}
-#endif /* CONFIG_NET_RX_BUSY_POLL */
-
 #define MLX4_EN_WOL_DO_MODIFY (1ULL << 63)
 
 void mlx4_en_update_loopback_state(struct net_device *dev,
@@ -753,8 +632,11 @@ void mlx4_en_set_stats_bitmap(struct mlx4_dev *dev,
 			      u8 rx_ppp, u8 rx_pause,
 			      u8 tx_ppp, u8 tx_pause);
 
-void mlx4_en_free_resources(struct mlx4_en_priv *priv);
-int mlx4_en_alloc_resources(struct mlx4_en_priv *priv);
+int mlx4_en_try_alloc_resources(struct mlx4_en_priv *priv,
+				struct mlx4_en_priv *tmp,
+				struct mlx4_en_port_profile *prof);
+void mlx4_en_safe_replace_resources(struct mlx4_en_priv *priv,
+				    struct mlx4_en_priv *tmp);
 
 int mlx4_en_create_cq(struct mlx4_en_priv *priv, struct mlx4_en_cq **pcq,
 		      int entries, int ring, enum cq_type mode, int node);
@@ -766,7 +648,8 @@ int mlx4_en_set_cq_moder(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq);
 int mlx4_en_arm_cq(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq);
 
 void mlx4_en_tx_irq(struct mlx4_cq *mcq);
-u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb);
+u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb,
+			 void *accel_priv, select_queue_fallback_t fallback);
 netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev);
 
 int mlx4_en_create_tx_ring(struct mlx4_en_priv *priv,
@@ -800,9 +683,8 @@ void mlx4_en_fill_qp_context(struct mlx4_en_priv *priv, int size, int stride,
 		int is_tx, int rss, int qpn, int cqn, int user_prio,
 		struct mlx4_qp_context *context);
 void mlx4_en_sqp_event(struct mlx4_qp *qp, enum mlx4_event event);
-int mlx4_en_map_buffer(struct mlx4_buf *buf);
-void mlx4_en_unmap_buffer(struct mlx4_buf *buf);
-
+int mlx4_en_change_mcast_lb(struct mlx4_en_priv *priv, struct mlx4_qp *qp,
+			    int loopback);
 void mlx4_en_calc_rx_buf(struct net_device *dev);
 int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv);
 void mlx4_en_release_rss_steer(struct mlx4_en_priv *priv);
@@ -819,6 +701,7 @@ int mlx4_en_QUERY_PORT(struct mlx4_en_dev *mdev, u8 port);
 
 #ifdef CONFIG_MLX4_EN_DCB
 extern const struct dcbnl_rtnl_ops mlx4_en_dcbnl_ops;
+extern const struct dcbnl_rtnl_ops_ext mlx4_en_dcbnl_ops_ext;
 extern const struct dcbnl_rtnl_ops mlx4_en_dcbnl_pfc_ops;
 #endif
 
@@ -842,6 +725,9 @@ void mlx4_en_update_pfc_stats_bitmap(struct mlx4_dev *dev,
 				     struct mlx4_en_stats_bitmap *stats_bitmap,
 				     u8 rx_ppp, u8 rx_pause,
 				     u8 tx_ppp, u8 tx_pause);
+
+int mlx4_en_netdev_event(struct notifier_block *this,
+			 unsigned long event, void *ptr);
 
 /*
  * Functions for time stamping

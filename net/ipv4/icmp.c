@@ -378,6 +378,22 @@ out_unlock:
 	icmp_xmit_unlock(sk);
 }
 
+#ifdef CONFIG_IP_ROUTE_MULTIPATH
+
+/* Source and destination is swapped. See ip_multipath_icmp_hash */
+static int icmp_multipath_hash_skb(const struct sk_buff *skb)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+
+	return fib_multipath_hash(iph->daddr, iph->saddr);
+}
+
+#else
+
+#define icmp_multipath_hash_skb(skb) (-1)
+
+#endif
+
 static struct rtable *icmp_route_lookup(struct net *net,
 					struct flowi4 *fl4,
 					struct sk_buff *skb_in,
@@ -399,7 +415,8 @@ static struct rtable *icmp_route_lookup(struct net *net,
 	fl4->fl4_icmp_type = type;
 	fl4->fl4_icmp_code = code;
 	security_skb_classify_flow(skb_in, flowi4_to_flowi(fl4));
-	rt = __ip_route_output_key(net, fl4);
+	rt = __ip_route_output_key_hash(net, fl4,
+					icmp_multipath_hash_skb(skb_in));
 	if (IS_ERR(rt))
 		return rt;
 
@@ -436,6 +453,7 @@ static struct rtable *icmp_route_lookup(struct net *net,
 		}
 		/* Ugh! */
 		orefdst = skb_in->_skb_refdst; /* save old refdst */
+		skb_dst_set(skb_in, NULL);
 		err = ip_route_input(skb_in, fl4_dec.daddr, fl4_dec.saddr,
 				     RT_TOS(tos), rt2->dst.dev);
 
@@ -650,8 +668,10 @@ static void icmp_socket_deliver(struct sk_buff *skb, u32 info)
 	/* Checkin full IP header plus 8 bytes of protocol to
 	 * avoid additional coding at protocol handlers.
 	 */
-	if (!pskb_may_pull(skb, iph->ihl * 4 + 8))
+	if (!pskb_may_pull(skb, iph->ihl * 4 + 8)) {
+		ICMP_INC_STATS_BH(dev_net(skb->dev), ICMP_MIB_INERRORS);
 		return;
+	}
 
 	raw_icmp_error(skb, protocol, info);
 

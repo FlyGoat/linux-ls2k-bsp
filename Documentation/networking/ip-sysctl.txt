@@ -518,7 +518,7 @@ tcp_fastopen - INTEGER
 
 tcp_syn_retries - INTEGER
 	Number of times initial SYNs for an active TCP connection attempt
-	will be retransmitted. Should not be higher than 255. Default value
+	will be retransmitted. Should not be higher than 127. Default value
 	is 6, which corresponds to 63seconds till the last retransmission
 	with the current initial RTO of 1second. With this the final timeout
 	for an active TCP connection attempt will happen after 127seconds.
@@ -908,15 +908,17 @@ proxy_arp_pvlan - BOOLEAN
 
 shared_media - BOOLEAN
 	Send(router) or accept(host) RFC1620 shared media redirects.
-	Overrides ip_secure_redirects.
+	Overrides secure_redirects.
 	shared_media for the interface will be enabled if at least one of
 	conf/{all,interface}/shared_media is set to TRUE,
 	it will be disabled otherwise
 	default TRUE
 
 secure_redirects - BOOLEAN
-	Accept ICMP redirect messages only for gateways,
-	listed in default gateway list.
+	Accept ICMP redirect messages only to gateways listed in the
+	interface's current gateway list. Even if disabled, RFC1122 redirect
+	rules still apply.
+	Overridden by shared_media.
 	secure_redirects for the interface will be enabled if at least one of
 	conf/{all,interface}/secure_redirects is set to TRUE,
 	it will be disabled otherwise
@@ -1095,6 +1097,11 @@ tag - INTEGER
 	Allows you to write a number, which can be used as required.
 	Default value is 0.
 
+xfrm4_gc_thresh - INTEGER
+	The threshold at which we will start garbage collecting for IPv4
+	destination cache entries.  At twice this value the system will
+	refuse new allocations.
+
 Alexey Kuznetsov.
 kuznet@ms2.inr.ac.ru
 
@@ -1125,6 +1132,13 @@ mld_qrv - INTEGER
 	Controls the MLD query robustness variable (see RFC3810 9.1).
 	Default: 2 (as specified by RFC3810 9.1)
 	Minimum: 1 (as specified by RFC6636 4.5)
+
+anycast_src_echo_reply - BOOLEAN
+	Controls the use of anycast addresses as source addresses for ICMPv6
+	echo reply
+	TRUE:  enabled
+	FALSE: disabled
+	Default: FALSE
 
 IPv6 Fragmentation:
 
@@ -1408,6 +1422,11 @@ ratelimit - INTEGER
 	otherwise the minimal space between responses in milliseconds.
 	Default: 1000
 
+xfrm6_gc_thresh - INTEGER
+	The threshold at which we will start garbage collecting for IPv6
+	destination cache entries.  At twice this value the system will
+	refuse new allocations.
+
 
 IPv6 Update by:
 Pekka Savola <pekkas@netcore.fi>
@@ -1464,6 +1483,25 @@ addip_enable - BOOLEAN
 	0: Disable extension.
 
 	Default: 0
+
+pf_enable - INTEGER
+	Enable or disable pf (pf is short for potentially failed) state. A value
+	of pf_retrans > path_max_retrans also disables pf state. That is, one of
+	both pf_enable and pf_retrans > path_max_retrans can disable pf state.
+	Since pf_retrans and path_max_retrans can be changed by userspace
+	application, sometimes user expects to disable pf state by the value of
+	pf_retrans > path_max_retrans, but occasionally the value of pf_retrans
+	or path_max_retrans is changed by the user application, this pf state is
+	enabled. As such, it is necessary to add this to dynamically enable
+	and disable pf state. See:
+	https://datatracker.ietf.org/doc/draft-ietf-tsvwg-sctp-failover for
+	details.
+
+	1: Enable pf.
+
+	0: Disable pf.
+
+	Default: 1
 
 addip_noauth_enable - BOOLEAN
 	Dynamic Address Reconfiguration (ADD-IP) requires the use of
@@ -1541,7 +1579,9 @@ pf_retrans - INTEGER
 	having to reduce path_max_retrans to a very low value.  See:
 	http://www.ietf.org/id/draft-nishida-tsvwg-sctp-failover-05.txt
 	for details.  Note also that a value of pf_retrans > path_max_retrans
-	disables this feature
+	disables this feature. Since both pf_retrans and path_max_retrans can
+	be changed by userspace application, a variable pf_enable is used to
+	disable pf state.
 
 	Default: 0
 

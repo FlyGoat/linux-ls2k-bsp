@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Driver
- * Copyright(c) 2013 - 2014 Intel Corporation.
+ * Copyright(c) 2013 - 2016 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -32,11 +32,14 @@
 #define I40E_MAX_ITR               0x0FF0  /* reg uses 2 usec resolution */
 #define I40E_MIN_ITR               0x0001  /* reg uses 2 usec resolution */
 #define I40E_ITR_100K              0x0005
+#define I40E_ITR_50K               0x000A
 #define I40E_ITR_20K               0x0019
+#define I40E_ITR_18K               0x001B
 #define I40E_ITR_8K                0x003E
 #define I40E_ITR_4K                0x007A
-#define I40E_ITR_RX_DEF            I40E_ITR_8K
-#define I40E_ITR_TX_DEF            I40E_ITR_4K
+#define I40E_MAX_INTRL             0x3B    /* reg uses 4 usec resolution */
+#define I40E_ITR_RX_DEF            I40E_ITR_20K
+#define I40E_ITR_TX_DEF            I40E_ITR_20K
 #define I40E_ITR_DYNAMIC           0x8000  /* use top bit as a flag */
 #define I40E_MIN_INT_RATE          250     /* ~= 1000000 / (I40E_MAX_ITR * 2) */
 #define I40E_MAX_INT_RATE          500000  /* == 1000000 / (I40E_MIN_ITR * 2) */
@@ -44,6 +47,15 @@
 #define ITR_TO_REG(setting) ((setting & ~I40E_ITR_DYNAMIC) >> 1)
 #define ITR_IS_DYNAMIC(setting) (!!(setting & I40E_ITR_DYNAMIC))
 #define ITR_REG_TO_USEC(itr_reg) (itr_reg << 1)
+/* 0x40 is the enable bit for interrupt rate limiting, and must be set if
+ * the value of the rate limit is non-zero
+ */
+#define INTRL_ENA                  BIT(6)
+#define INTRL_REG_TO_USEC(intrl) ((intrl & ~INTRL_ENA) << 2)
+#define INTRL_USEC_TO_REG(set) ((set) ? ((set) >> 2) | INTRL_ENA : 0)
+#define I40E_INTRL_8K              125     /* 8000 ints/sec */
+#define I40E_INTRL_62K             16      /* 62500 ints/sec */
+#define I40E_INTRL_83K             12      /* 83333 ints/sec */
 
 #define I40E_QUEUE_END_OF_LIST 0x7FF
 
@@ -134,14 +146,42 @@ enum i40e_dyn_idx_t {
 
 #define I40E_MAX_BUFFER_TXD	8
 #define I40E_MIN_TX_LEN		17
-#define I40E_MAX_DATA_PER_TXD	8192
+
+/* The size limit for a transmit buffer in a descriptor is (16K - 1).
+ * In order to align with the read requests we will align the value to
+ * the nearest 4K which represents our maximum read request size.
+ */
+#define I40E_MAX_READ_REQ_SIZE		4096
+#define I40E_MAX_DATA_PER_TXD		(16 * 1024 - 1)
+#define I40E_MAX_DATA_PER_TXD_ALIGNED \
+	(I40E_MAX_DATA_PER_TXD & ~(I40E_MAX_READ_REQ_SIZE - 1))
+
+/* This ugly bit of math is equivalent to DIV_ROUNDUP(size, X) where X is
+ * the value I40E_MAX_DATA_PER_TXD_ALIGNED.  It is needed due to the fact
+ * that 12K is not a power of 2 and division is expensive.  It is used to
+ * approximate the number of descriptors used per linear buffer.  Note
+ * that this will overestimate in some cases as it doesn't account for the
+ * fact that we will add up to 4K - 1 in aligning the 12K buffer, however
+ * the error should not impact things much as large buffers usually mean
+ * we will use fewer descriptors then there are frags in an skb.
+ */
+static inline unsigned int i40e_txd_use_count(unsigned int size)
+{
+	const unsigned int max = I40E_MAX_DATA_PER_TXD_ALIGNED;
+	const unsigned int reciprocal = ((1ull << 32) - 1 + (max / 2)) / max;
+	unsigned int adjust = ~(u32)0;
+
+	/* if we rounded up on the reciprocal pull down the adjustment */
+	if ((max * reciprocal) > adjust)
+		adjust = ~(u32)(reciprocal - 1);
+
+	return (u32)((((u64)size * reciprocal) + adjust) >> 32);
+}
 
 /* Tx Descriptors needed, worst case */
-#define TXD_USE_COUNT(S) DIV_ROUND_UP((S), I40E_MAX_DATA_PER_TXD)
 #define DESC_NEEDED (MAX_SKB_FRAGS + 4)
 #define I40E_MIN_DESC_PENDING	4
 
-#define I40E_TX_FLAGS_CSUM		BIT(0)
 #define I40E_TX_FLAGS_HW_VLAN		BIT(1)
 #define I40E_TX_FLAGS_SW_VLAN		BIT(2)
 #define I40E_TX_FLAGS_TSO		BIT(3)
@@ -151,7 +191,7 @@ enum i40e_dyn_idx_t {
 #define I40E_TX_FLAGS_FSO		BIT(7)
 #define I40E_TX_FLAGS_TSYN		BIT(8)
 #define I40E_TX_FLAGS_FD_SB		BIT(9)
-#define I40E_TX_FLAGS_VXLAN_TUNNEL	BIT(10)
+#define I40E_TX_FLAGS_UDP_TUNNEL	BIT(10)
 #define I40E_TX_FLAGS_VLAN_MASK		0xffff0000
 #define I40E_TX_FLAGS_VLAN_PRIO_MASK	0xe0000000
 #define I40E_TX_FLAGS_VLAN_PRIO_SHIFT	29
@@ -165,6 +205,7 @@ struct i40e_tx_buffer {
 	};
 	unsigned int bytecount;
 	unsigned short gso_segs;
+
 	DEFINE_DMA_UNMAP_ADDR(dma);
 	DEFINE_DMA_UNMAP_LEN(len);
 	u32 tx_flags;
@@ -188,12 +229,17 @@ struct i40e_tx_queue_stats {
 	u64 restart_queue;
 	u64 tx_busy;
 	u64 tx_done_old;
+	u64 tx_linearize;
+	u64 tx_force_wb;
+	u64 tx_lost_interrupt;
 };
 
 struct i40e_rx_queue_stats {
 	u64 non_eop_descs;
 	u64 alloc_page_failed;
 	u64 alloc_buff_failed;
+	u64 page_reuse_count;
+	u64 realloc_count;
 };
 
 enum i40e_ring_state_t {
@@ -231,6 +277,14 @@ struct i40e_ring {
 	u8 dcb_tc;			/* Traffic class of ring */
 	u8 __iomem *tail;
 
+	/* high bit set means dynamic, use accessor routines to read/write.
+	 * hardware only supports 2us resolution for the ITR registers.
+	 * these values always store the USER setting, and must be converted
+	 * before programming to a register.
+	 */
+	u16 rx_itr_setting;
+	u16 tx_itr_setting;
+
 	u16 count;			/* Number of descriptors */
 	u16 reg_idx;			/* HW register index of the ring */
 	u16 rx_hdr_len;
@@ -239,7 +293,6 @@ struct i40e_ring {
 #define I40E_RX_DTYPE_NO_SPLIT      0
 #define I40E_RX_DTYPE_HEADER_SPLIT  1
 #define I40E_RX_DTYPE_SPLIT_ALWAYS  2
-	u8  hsplit;
 #define I40E_RX_SPLIT_L2      0x1
 #define I40E_RX_SPLIT_IP      0x2
 #define I40E_RX_SPLIT_TCP_UDP 0x4
@@ -260,7 +313,6 @@ struct i40e_ring {
 
 	u16 flags;
 #define I40E_TXR_FLAGS_WB_ON_ITR	BIT(0)
-#define I40E_TXR_FLAGS_OUTER_UDP_CSUM	BIT(1)
 #define I40E_TXR_FLAGS_LAST_XMIT_MORE_SET BIT(2)
 
 	/* stats structs */
@@ -284,6 +336,7 @@ enum i40e_latency_range {
 	I40E_LOWEST_LATENCY = 0,
 	I40E_LOW_LATENCY = 1,
 	I40E_BULK_LATENCY = 2,
+	I40E_ULTRA_LATENCY = 3,
 };
 
 struct i40e_ring_container {
@@ -300,8 +353,8 @@ struct i40e_ring_container {
 #define i40e_for_each_ring(pos, head) \
 	for (pos = (head).ring; pos != NULL; pos = pos->next)
 
-void i40e_alloc_rx_buffers_ps(struct i40e_ring *rxr, u16 cleaned_count);
-void i40e_alloc_rx_buffers_1buf(struct i40e_ring *rxr, u16 cleaned_count);
+bool i40e_alloc_rx_buffers_ps(struct i40e_ring *rxr, u16 cleaned_count);
+bool i40e_alloc_rx_buffers_1buf(struct i40e_ring *rxr, u16 cleaned_count);
 void i40e_alloc_rx_headers(struct i40e_ring *rxr);
 netdev_tx_t i40e_lan_xmit_frame(struct sk_buff *skb, struct net_device *netdev);
 void i40e_clean_tx_ring(struct i40e_ring *tx_ring);
@@ -315,13 +368,13 @@ int i40e_napi_poll(struct napi_struct *napi, int budget);
 void i40e_tx_map(struct i40e_ring *tx_ring, struct sk_buff *skb,
 		 struct i40e_tx_buffer *first, u32 tx_flags,
 		 const u8 hdr_len, u32 td_cmd, u32 td_offset);
-int i40e_maybe_stop_tx(struct i40e_ring *tx_ring, int size);
-int i40e_xmit_descriptor_count(struct sk_buff *skb, struct i40e_ring *tx_ring);
 int i40e_tx_prepare_vlan_flags(struct sk_buff *skb,
 			       struct i40e_ring *tx_ring, u32 *flags);
 #endif
 void i40e_force_wb(struct i40e_vsi *vsi, struct i40e_q_vector *q_vector);
-u32 i40e_get_tx_pending(struct i40e_ring *ring);
+u32 i40e_get_tx_pending(struct i40e_ring *ring, bool in_sw);
+int __i40e_maybe_stop_tx(struct i40e_ring *tx_ring, int size);
+bool __i40e_chk_linearize(struct sk_buff *skb);
 
 /**
  * i40e_get_head - Retrieve head from head writeback
@@ -335,5 +388,78 @@ static inline u32 i40e_get_head(struct i40e_ring *tx_ring)
 	void *head = (struct i40e_tx_desc *)tx_ring->desc + tx_ring->count;
 
 	return le32_to_cpu(*(volatile __le32 *)head);
+}
+
+/**
+ * i40e_xmit_descriptor_count - calculate number of Tx descriptors needed
+ * @skb:     send buffer
+ * @tx_ring: ring to send buffer on
+ *
+ * Returns number of data descriptors needed for this skb. Returns 0 to indicate
+ * there is not enough descriptors available in this ring since we need at least
+ * one descriptor.
+ **/
+static inline int i40e_xmit_descriptor_count(struct sk_buff *skb)
+{
+	const struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[0];
+	unsigned int nr_frags = skb_shinfo(skb)->nr_frags;
+	int count = 0, size = skb_headlen(skb);
+
+	for (;;) {
+		count += i40e_txd_use_count(size);
+
+		if (!nr_frags--)
+			break;
+
+		size = skb_frag_size(frag++);
+	}
+
+	return count;
+}
+
+/**
+ * i40e_maybe_stop_tx - 1st level check for Tx stop conditions
+ * @tx_ring: the ring to be checked
+ * @size:    the size buffer we want to assure is available
+ *
+ * Returns 0 if stop is not needed
+ **/
+static inline int i40e_maybe_stop_tx(struct i40e_ring *tx_ring, int size)
+{
+	if (likely(I40E_DESC_UNUSED(tx_ring) >= size))
+		return 0;
+	return __i40e_maybe_stop_tx(tx_ring, size);
+}
+
+/**
+ * i40e_chk_linearize - Check if there are more than 8 fragments per packet
+ * @skb:      send buffer
+ * @count:    number of buffers used
+ *
+ * Note: Our HW can't scatter-gather more than 8 fragments to build
+ * a packet on the wire and so we need to figure out the cases where we
+ * need to linearize the skb.
+ **/
+static inline bool i40e_chk_linearize(struct sk_buff *skb, int count)
+{
+	/* Both TSO and single send will work if count is less than 8 */
+	if (likely(count < I40E_MAX_BUFFER_TXD))
+		return false;
+
+	if (skb_is_gso(skb))
+		return __i40e_chk_linearize(skb);
+
+	/* we can support up to 8 data buffers for a single send */
+	return count != I40E_MAX_BUFFER_TXD;
+}
+
+/**
+ * i40e_rx_is_fcoe - returns true if the Rx packet type is FCoE
+ * @ptype: the packet type field from Rx descriptor write-back
+ **/
+static inline bool i40e_rx_is_fcoe(u16 ptype)
+{
+	return (ptype >= I40E_RX_PTYPE_L2_FCOE_PAY3) &&
+	       (ptype <= I40E_RX_PTYPE_L2_FCOE_VFT_FCOTHER);
 }
 #endif /* _I40E_TXRX_H_ */

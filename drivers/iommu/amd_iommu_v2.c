@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010-2012 Advanced Micro Devices, Inc.
- * Author: Joerg Roedel <joerg.roedel@amd.com>
+ * Author: Joerg Roedel <jroedel@suse.de>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -31,7 +31,7 @@
 #include "amd_iommu_proto.h"
 
 MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Joerg Roedel <joerg.roedel@amd.com>");
+MODULE_AUTHOR("Joerg Roedel <jroedel@suse.de>");
 
 #define MAX_DEVICES		0x10000
 #define PRI_QUEUE_SIZE		512
@@ -132,11 +132,19 @@ static struct device_state *get_device_state(u16 devid)
 
 static void free_device_state(struct device_state *dev_state)
 {
+	struct iommu_group *group;
+
 	/*
 	 * First detach device from domain - No more PRI requests will arrive
 	 * from that device after it is unbound from the IOMMUv2 domain.
 	 */
-	iommu_detach_device(dev_state->domain, &dev_state->pdev->dev);
+	group = iommu_group_get(&dev_state->pdev->dev);
+	if (WARN_ON(!group))
+		return;
+
+	iommu_detach_group(dev_state->domain, group);
+
+	iommu_group_put(group);
 
 	/* Everything is down now, free the IOMMUv2 domain */
 	iommu_domain_free(dev_state->domain);
@@ -417,7 +425,7 @@ static void mn_release(struct mmu_notifier_rhel7 *mn, struct mm_struct *mm)
 	dev_state      = pasid_state->device_state;
 	run_inv_ctx_cb = !pasid_state->invalid;
 
-	if (run_inv_ctx_cb && pasid_state->device_state->inv_ctx_cb)
+	if (run_inv_ctx_cb && dev_state->inv_ctx_cb)
 		dev_state->inv_ctx_cb(dev_state->pdev, pasid_state->pasid);
 
 	unbind_pasid(pasid_state);
@@ -730,6 +738,7 @@ EXPORT_SYMBOL(amd_iommu_unbind_pasid);
 int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 {
 	struct device_state *dev_state;
+	struct iommu_group *group;
 	unsigned long flags;
 	int ret, tmp;
 	u16 devid;
@@ -775,9 +784,15 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	if (ret)
 		goto out_free_domain;
 
-	ret = iommu_attach_device(dev_state->domain, &pdev->dev);
-	if (ret != 0)
+	group = iommu_group_get(&pdev->dev);
+	if (!group)
 		goto out_free_domain;
+
+	ret = iommu_attach_group(dev_state->domain, group);
+	if (ret != 0)
+		goto out_drop_group;
+
+	iommu_group_put(group);
 
 	spin_lock_irqsave(&state_lock, flags);
 
@@ -792,6 +807,9 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	spin_unlock_irqrestore(&state_lock, flags);
 
 	return 0;
+
+out_drop_group:
+	iommu_group_put(group);
 
 out_free_domain:
 	iommu_domain_free(dev_state->domain);
@@ -908,7 +926,7 @@ static int __init amd_iommu_v2_init(void)
 {
 	int ret;
 
-	pr_info("AMD IOMMUv2 driver by Joerg Roedel <joerg.roedel@amd.com>\n");
+	pr_info("AMD IOMMUv2 driver by Joerg Roedel <jroedel@suse.de>\n");
 
 	if (!amd_iommu_v2_supported()) {
 		pr_info("AMD IOMMUv2 functionality not available on this system\n");

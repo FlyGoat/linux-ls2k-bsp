@@ -20,6 +20,41 @@
 
 #include "mm_internal.h"
 
+/*
+ * Tables translating between page_cache_type_t and pte encoding.
+ *
+ * The default values are defined statically as minimal supported mode;
+ * WC and WT fall back to UC-.  pat_init() updates these values to support
+ * more cache modes, WC and WT, when it is safe to do so.  See pat_init()
+ * for the details.  Note, __early_ioremap() used during early boot-time
+ * takes pgprot_t (pte encoding) and does not use these tables.
+ *
+ * Index into __cachemode2pte_tbl is the cachemode.
+ *
+ * Index into __pte2cachemode_tbl are the caching attribute bits of the pte
+ * (_PAGE_PWT, _PAGE_PCD, _PAGE_PAT) at index bit positions 0, 1, 2.
+ */
+uint16_t __cachemode2pte_tbl[_PAGE_CACHE_MODE_NUM] = {
+	[_PAGE_CACHE_MODE_WB]		= 0,
+	[_PAGE_CACHE_MODE_WC]		= _PAGE_PWT,
+	[_PAGE_CACHE_MODE_UC_MINUS]	= _PAGE_PCD,
+	[_PAGE_CACHE_MODE_UC]		= _PAGE_PCD | _PAGE_PWT,
+	[_PAGE_CACHE_MODE_WT]		= _PAGE_PCD,
+	[_PAGE_CACHE_MODE_WP]		= _PAGE_PCD,
+};
+EXPORT_SYMBOL_GPL(__cachemode2pte_tbl);
+uint8_t __pte2cachemode_tbl[8] = {
+	[__pte2cm_idx(0)] = _PAGE_CACHE_MODE_WB,
+	[__pte2cm_idx(_PAGE_PWT)] = _PAGE_CACHE_MODE_WC,
+	[__pte2cm_idx(_PAGE_PCD)] = _PAGE_CACHE_MODE_UC_MINUS,
+	[__pte2cm_idx(_PAGE_PWT | _PAGE_PCD)] = _PAGE_CACHE_MODE_UC,
+	[__pte2cm_idx(_PAGE_PAT)] = _PAGE_CACHE_MODE_WB,
+	[__pte2cm_idx(_PAGE_PWT | _PAGE_PAT)] = _PAGE_CACHE_MODE_WC,
+	[__pte2cm_idx(_PAGE_PCD | _PAGE_PAT)] = _PAGE_CACHE_MODE_UC_MINUS,
+	[__pte2cm_idx(_PAGE_PWT | _PAGE_PCD | _PAGE_PAT)] = _PAGE_CACHE_MODE_UC,
+};
+EXPORT_SYMBOL_GPL(__pte2cachemode_tbl);
+
 static unsigned long __initdata pgt_buf_start;
 static unsigned long __initdata pgt_buf_end;
 static unsigned long __initdata pgt_buf_top;
@@ -295,7 +330,7 @@ static int __meminit split_mem_range(struct map_range *mr, int nr_range,
 	}
 
 	for (i = 0; i < nr_range; i++)
-		printk(KERN_DEBUG " [mem %#010lx-%#010lx] page %s\n",
+		pr_debug(" [mem %#010lx-%#010lx] page %s\n",
 				mr[i].start, mr[i].end - 1,
 			(mr[i].page_size_mask & (1<<PG_LEVEL_1G))?"1G":(
 			 (mr[i].page_size_mask & (1<<PG_LEVEL_2M))?"2M":"4k"));
@@ -343,7 +378,7 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
 	unsigned long ret = 0;
 	int nr_range, i;
 
-	pr_info("init_memory_mapping: [mem %#010lx-%#010lx]\n",
+	pr_debug("init_memory_mapping: [mem %#010lx-%#010lx]\n",
 	       start, end - 1);
 
 	memset(mr, 0, sizeof(mr));
@@ -646,14 +681,12 @@ void free_initmem(void)
 #ifdef CONFIG_BLK_DEV_INITRD
 void __init free_initrd_mem(unsigned long start, unsigned long end)
 {
-#ifdef CONFIG_MICROCODE_EARLY
 	/*
 	 * Remember, initrd memory may contain microcode or other useful things.
 	 * Before we lose initrd mem, we need to find a place to hold them
 	 * now that normal virtual memory is enabled.
 	 */
 	save_microcode_in_initrd();
-#endif
 
 	/*
 	 * end could be not aligned, and We can not align that,

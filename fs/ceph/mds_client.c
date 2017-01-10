@@ -100,6 +100,14 @@ static int parse_reply_info_in(void **p, void *end,
 	} else
 		info->inline_version = CEPH_INLINE_NONE;
 
+	if (features & CEPH_FEATURE_FS_FILE_LAYOUT_V2) {
+		ceph_decode_32_safe(p, end, info->pool_ns_len, bad);
+		ceph_decode_need(p, end, info->pool_ns_len, bad);
+		*p += info->pool_ns_len;
+	} else {
+		info->pool_ns_len = 0;
+	}
+
 	return 0;
 bad:
 	return err;
@@ -378,9 +386,7 @@ void ceph_put_mds_session(struct ceph_mds_session *s)
 	     atomic_read(&s->s_ref), atomic_read(&s->s_ref)-1);
 	if (atomic_dec_and_test(&s->s_ref)) {
 		if (s->s_auth.authorizer)
-			ceph_auth_destroy_authorizer(
-				s->s_mdsc->fsc->client->monc.auth,
-				s->s_auth.authorizer);
+			ceph_auth_destroy_authorizer(s->s_auth.authorizer);
 		kfree(s);
 	}
 }
@@ -561,51 +567,23 @@ void ceph_mdsc_release_request(struct kref *kref)
 	kfree(req);
 }
 
+DEFINE_RB_FUNCS(request, struct ceph_mds_request, r_tid, r_node)
+
 /*
  * lookup session, bump ref if found.
  *
  * called under mdsc->mutex.
  */
-static struct ceph_mds_request *__lookup_request(struct ceph_mds_client *mdsc,
-					     u64 tid)
+static struct ceph_mds_request *
+lookup_get_request(struct ceph_mds_client *mdsc, u64 tid)
 {
 	struct ceph_mds_request *req;
-	struct rb_node *n = mdsc->request_tree.rb_node;
 
-	while (n) {
-		req = rb_entry(n, struct ceph_mds_request, r_node);
-		if (tid < req->r_tid)
-			n = n->rb_left;
-		else if (tid > req->r_tid)
-			n = n->rb_right;
-		else {
-			ceph_mdsc_get_request(req);
-			return req;
-		}
-	}
-	return NULL;
-}
+	req = lookup_request(&mdsc->request_tree, tid);
+	if (req)
+		ceph_mdsc_get_request(req);
 
-static void __insert_request(struct ceph_mds_client *mdsc,
-			     struct ceph_mds_request *new)
-{
-	struct rb_node **p = &mdsc->request_tree.rb_node;
-	struct rb_node *parent = NULL;
-	struct ceph_mds_request *req = NULL;
-
-	while (*p) {
-		parent = *p;
-		req = rb_entry(parent, struct ceph_mds_request, r_node);
-		if (new->r_tid < req->r_tid)
-			p = &(*p)->rb_left;
-		else if (new->r_tid > req->r_tid)
-			p = &(*p)->rb_right;
-		else
-			BUG();
-	}
-
-	rb_link_node(&new->r_node, parent, p);
-	rb_insert_color(&new->r_node, &mdsc->request_tree);
+	return req;
 }
 
 /*
@@ -624,7 +602,7 @@ static void __register_request(struct ceph_mds_client *mdsc,
 				  req->r_num_caps);
 	dout("__register_request %p tid %lld\n", req, req->r_tid);
 	ceph_mdsc_get_request(req);
-	__insert_request(mdsc, req);
+	insert_request(&mdsc->request_tree, req);
 
 	req->r_uid = current_fsuid();
 	req->r_gid = current_fsgid();
@@ -657,8 +635,7 @@ static void __unregister_request(struct ceph_mds_client *mdsc,
 		}
 	}
 
-	rb_erase(&req->r_node, &mdsc->request_tree);
-	RB_CLEAR_NODE(&req->r_node);
+	erase_request(&mdsc->request_tree, req);
 
 	if (req->r_unsafe_dir && req->r_got_unsafe) {
 		struct ceph_inode_info *ci = ceph_inode(req->r_unsafe_dir);
@@ -1716,12 +1693,13 @@ ceph_mdsc_create_request(struct ceph_mds_client *mdsc, int op, int mode)
 	INIT_LIST_HEAD(&req->r_unsafe_target_item);
 	req->r_fmode = -1;
 	kref_init(&req->r_kref);
+	RB_CLEAR_NODE(&req->r_node);
 	INIT_LIST_HEAD(&req->r_wait);
 	init_completion(&req->r_completion);
 	init_completion(&req->r_safe_completion);
 	INIT_LIST_HEAD(&req->r_unsafe_item);
 
-	req->r_stamp = CURRENT_TIME;
+	req->r_stamp = current_fs_time(mdsc->fsc->sb);
 
 	req->r_op = op;
 	req->r_direct_mode = mode;
@@ -2298,6 +2276,14 @@ int ceph_mdsc_do_request(struct ceph_mds_client *mdsc,
 		ceph_get_cap_refs(ceph_inode(req->r_old_dentry_dir),
 				  CEPH_CAP_PIN);
 
+	/* deny access to directories with pool_ns layouts */
+	if (req->r_inode && S_ISDIR(req->r_inode->i_mode) &&
+	    ceph_inode(req->r_inode)->i_pool_ns_len)
+		return -EIO;
+	if (req->r_locked_dir &&
+	    ceph_inode(req->r_locked_dir)->i_pool_ns_len)
+		return -EIO;
+
 	/* issue */
 	mutex_lock(&mdsc->mutex);
 	__register_request(mdsc, req, dir);
@@ -2400,7 +2386,7 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 	/* get request, session */
 	tid = le64_to_cpu(msg->hdr.tid);
 	mutex_lock(&mdsc->mutex);
-	req = __lookup_request(mdsc, tid);
+	req = lookup_get_request(mdsc, tid);
 	if (!req) {
 		dout("handle_reply on unknown tid %llu\n", tid);
 		mutex_unlock(&mdsc->mutex);
@@ -2524,6 +2510,7 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 
 	/* insert trace into our cache */
 	mutex_lock(&req->r_fill_mutex);
+	current->journal_info = req;
 	err = ceph_fill_trace(mdsc->fsc->sb, req, req->r_session);
 	if (err == 0) {
 		if (result == 0 && (req->r_op == CEPH_MDS_OP_READDIR ||
@@ -2531,6 +2518,7 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 			ceph_readdir_prepopulate(req, req->r_session);
 		ceph_unreserve_caps(mdsc, &req->r_caps_reservation);
 	}
+	current->journal_info = NULL;
 	mutex_unlock(&req->r_fill_mutex);
 
 	up_read(&mdsc->snap_rwsem);
@@ -2588,7 +2576,7 @@ static void handle_forward(struct ceph_mds_client *mdsc,
 	fwd_seq = ceph_decode_32(&p);
 
 	mutex_lock(&mdsc->mutex);
-	req = __lookup_request(mdsc, tid);
+	req = lookup_get_request(mdsc, tid);
 	if (!req) {
 		dout("forward tid %llu to mds%d - req dne\n", tid, next_mds);
 		goto out;  /* dup reply? */
@@ -3752,7 +3740,6 @@ void ceph_mdsc_handle_map(struct ceph_mds_client *mdsc, struct ceph_msg *msg)
 	dout("handle_map epoch %u len %d\n", epoch, (int)maplen);
 
 	/* do we need it? */
-	ceph_monc_got_mdsmap(&mdsc->fsc->client->monc, epoch);
 	mutex_lock(&mdsc->mutex);
 	if (mdsc->mdsmap && epoch <= mdsc->mdsmap->m_epoch) {
 		dout("handle_map epoch %u <= our %u\n",
@@ -3779,6 +3766,8 @@ void ceph_mdsc_handle_map(struct ceph_mds_client *mdsc, struct ceph_msg *msg)
 	mdsc->fsc->sb->s_maxbytes = mdsc->mdsmap->m_max_file_size;
 
 	__wake_requests(mdsc, &mdsc->waiting_for_map);
+	ceph_monc_got_map(&mdsc->fsc->client->monc, CEPH_SUB_MDSMAP,
+			  mdsc->mdsmap->m_epoch);
 
 	mutex_unlock(&mdsc->mutex);
 	schedule_delayed(mdsc);
@@ -3885,7 +3874,7 @@ static struct ceph_auth_handshake *get_authorizer(struct ceph_connection *con,
 	struct ceph_auth_handshake *auth = &s->s_auth;
 
 	if (force_new && auth->authorizer) {
-		ceph_auth_destroy_authorizer(ac, auth->authorizer);
+		ceph_auth_destroy_authorizer(auth->authorizer);
 		auth->authorizer = NULL;
 	}
 	if (!auth->authorizer) {
@@ -3946,17 +3935,19 @@ static struct ceph_msg *mds_alloc_msg(struct ceph_connection *con,
 	return msg;
 }
 
-static int sign_message(struct ceph_connection *con, struct ceph_msg *msg)
+static int mds_sign_message(struct ceph_msg *msg)
 {
-       struct ceph_mds_session *s = con->private;
+       struct ceph_mds_session *s = msg->con->private;
        struct ceph_auth_handshake *auth = &s->s_auth;
+
        return ceph_auth_sign_message(auth, msg);
 }
 
-static int check_message_signature(struct ceph_connection *con, struct ceph_msg *msg)
+static int mds_check_message_signature(struct ceph_msg *msg)
 {
-       struct ceph_mds_session *s = con->private;
+       struct ceph_mds_session *s = msg->con->private;
        struct ceph_auth_handshake *auth = &s->s_auth;
+
        return ceph_auth_check_message_signature(auth, msg);
 }
 
@@ -3969,8 +3960,8 @@ static const struct ceph_connection_operations mds_con_ops = {
 	.invalidate_authorizer = invalidate_authorizer,
 	.peer_reset = peer_reset,
 	.alloc_msg = mds_alloc_msg,
-	.sign_message = sign_message,
-	.check_message_signature = check_message_signature,
+	.sign_message = mds_sign_message,
+	.check_message_signature = mds_check_message_signature,
 };
 
 /* eof */

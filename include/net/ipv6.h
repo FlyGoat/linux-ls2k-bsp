@@ -241,6 +241,7 @@ struct ip6_flowlabel {
 #define IPV6_FLOWINFO_MASK	cpu_to_be32(0x0FFFFFFF)
 #define IPV6_FLOWLABEL_MASK	cpu_to_be32(0x000FFFFF)
 #define IPV6_TCLASS_MASK (IPV6_FLOWINFO_MASK & ~IPV6_FLOWLABEL_MASK)
+#define IPV6_TCLASS_SHIFT	20
 
 struct ipv6_fl_socklist {
 	struct ipv6_fl_socklist	__rcu	*next;
@@ -395,6 +396,21 @@ static inline void ipv6_addr_prefix(struct in6_addr *pfx,
 		pfx->s6_addr[o] = addr->s6_addr[o] & (0xff00 >> b);
 }
 
+static inline void ipv6_addr_prefix_copy(struct in6_addr *addr,
+					 const struct in6_addr *pfx,
+					 int plen)
+{
+	/* caller must guarantee 0 <= plen <= 128 */
+	int o = plen >> 3,
+	    b = plen & 0x7;
+
+	memcpy(addr->s6_addr, pfx, o);
+	if (b != 0) {
+		addr->s6_addr[o] &= ~(0xff00 >> b);
+		addr->s6_addr[o] |= (pfx->s6_addr[o] & (0xff00 >> b));
+	}
+}
+
 static inline void __ipv6_addr_set_half(__be32 *addr,
 					__be32 wh, __be32 wl)
 {
@@ -503,6 +519,7 @@ struct ip6_create_arg {
 	u32 user;
 	const struct in6_addr *src;
 	const struct in6_addr *dst;
+	int iif;
 	u8 ecn;
 };
 
@@ -674,7 +691,10 @@ static inline int ipv6_addr_diff(const struct in6_addr *a1, const struct in6_add
 	return __ipv6_addr_diff(a1, a2, sizeof(struct in6_addr));
 }
 
-void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt);
+__be32 ipv6_select_ident(struct net *net,
+			 const struct in6_addr *daddr,
+			 const struct in6_addr *saddr);
+void ipv6_proxy_select_ident(struct net *net, struct sk_buff *skb);
 
 int ip6_dst_hoplimit(struct dst_entry *dst);
 
@@ -713,6 +733,16 @@ static inline __be32 ip6_flowinfo(const struct ipv6hdr *hdr)
 static inline __be32 ip6_flowlabel(const struct ipv6hdr *hdr)
 {
 	return *(__be32 *)hdr & IPV6_FLOWLABEL_MASK;
+}
+
+static inline u8 ip6_tclass(__be32 flowinfo)
+{
+	return ntohl(flowinfo & IPV6_TCLASS_MASK) >> IPV6_TCLASS_SHIFT;
+}
+
+static inline __be32 ip6_make_flowinfo(unsigned int tclass, __be32 flowlabel)
+{
+	return htonl(tclass << IPV6_TCLASS_SHIFT) | flowlabel;
 }
 
 /*
@@ -767,7 +797,8 @@ static inline struct sk_buff *ip6_finish_skb(struct sock *sk)
 			      &inet6_sk(sk)->cork);
 }
 
-int ip6_dst_lookup(struct sock *sk, struct dst_entry **dst, struct flowi6 *fl6);
+int ip6_dst_lookup(struct net *net, struct sock *sk, struct dst_entry **dst,
+		   struct flowi6 *fl6);
 struct dst_entry *ip6_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
 				      const struct in6_addr *final_dst);
 struct dst_entry *ip6_sk_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
@@ -832,6 +863,8 @@ int compat_ipv6_getsockopt(struct sock *sk, int level, int optname,
 			   char __user *optval, int __user *optlen);
 
 int ip6_datagram_connect(struct sock *sk, struct sockaddr *addr, int addr_len);
+int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr);
+void ip6_datagram_release_cb(struct sock *sk);
 
 int ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len,
 		   int *addr_len);
@@ -891,7 +924,6 @@ static inline int snmp6_unregister_dev(struct inet6_dev *idev) { return 0; }
 
 #ifdef CONFIG_SYSCTL
 extern ctl_table ipv6_route_table_template[];
-extern ctl_table ipv6_icmp_table_template[];
 
 struct ctl_table *ipv6_icmp_sysctl_init(struct net *net);
 struct ctl_table *ipv6_route_sysctl_init(struct net *net);

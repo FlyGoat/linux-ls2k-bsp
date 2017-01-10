@@ -56,6 +56,38 @@ int sg_nents(struct scatterlist *sg)
 }
 EXPORT_SYMBOL(sg_nents);
 
+/**
+ * sg_nents_for_len - return total count of entries in scatterlist
+ *                    needed to satisfy the supplied length
+ * @sg:		The scatterlist
+ * @len:	The total required length
+ *
+ * Description:
+ * Determines the number of entries in sg that are required to meet
+ * the supplied length, taking into acount chaining as well
+ *
+ * Returns:
+ *   the number of sg entries needed, negative error on failure
+ *
+ **/
+int sg_nents_for_len(struct scatterlist *sg, u64 len)
+{
+	int nents;
+	u64 total;
+
+	if (!len)
+		return 0;
+
+	for (nents = 0, total = 0; sg; sg = sg_next(sg)) {
+		nents++;
+		total += sg->length;
+		if (total >= len)
+			return nents;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL(sg_nents_for_len);
 
 /**
  * sg_last - return the last scatterlist entry in a list
@@ -502,7 +534,7 @@ static bool sg_miter_get_next_page(struct sg_mapping_iter *miter)
  *   true if @miter contains the valid mapping.  false if end of sg
  *   list is reached.
  */
-static bool sg_miter_skip(struct sg_mapping_iter *miter, off_t offset)
+bool sg_miter_skip(struct sg_mapping_iter *miter, off_t offset)
 {
 	sg_miter_stop(miter);
 
@@ -520,6 +552,7 @@ static bool sg_miter_skip(struct sg_mapping_iter *miter, off_t offset)
 
 	return true;
 }
+EXPORT_SYMBOL(sg_miter_skip);
 
 /**
  * sg_miter_next - proceed mapping iterator to the next mapping

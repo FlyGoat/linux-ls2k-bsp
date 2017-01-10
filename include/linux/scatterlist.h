@@ -221,6 +221,7 @@ static inline void *sg_virt(struct scatterlist *sg)
 }
 
 int sg_nents(struct scatterlist *sg);
+int sg_nents_for_len(struct scatterlist *sg, u64 len);
 struct scatterlist *sg_next(struct scatterlist *);
 struct scatterlist *sg_last(struct scatterlist *s, unsigned int);
 void sg_init_table(struct scatterlist *, unsigned int);
@@ -345,6 +346,7 @@ struct sg_mapping_iter {
 
 void sg_miter_start(struct sg_mapping_iter *miter, struct scatterlist *sgl,
 		    unsigned int nents, unsigned int flags);
+bool sg_miter_skip(struct sg_mapping_iter *miter, off_t offset);
 bool sg_miter_next(struct sg_mapping_iter *miter);
 void sg_miter_stop(struct sg_mapping_iter *miter);
 

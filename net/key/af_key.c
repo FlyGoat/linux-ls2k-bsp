@@ -1098,7 +1098,8 @@ static struct xfrm_state * pfkey_msg2xfrm_state(struct net *net,
 
 	x->id.proto = proto;
 	x->id.spi = sa->sadb_sa_spi;
-	x->props.replay_window = sa->sadb_sa_replay;
+	x->props.replay_window = min_t(unsigned int, sa->sadb_sa_replay,
+					(sizeof(x->replay.bitmap) * 8));
 	if (sa->sadb_sa_flags & SADB_SAFLAGS_NOECN)
 		x->props.flags |= XFRM_STATE_NOECN;
 	if (sa->sadb_sa_flags & SADB_SAFLAGS_DECAP_DSCP)
@@ -1341,6 +1342,12 @@ static int pfkey_getspi(struct sock *sk, struct sk_buff *skb, const struct sadb_
 	if (range) {
 		min_spi = range->sadb_spirange_min;
 		max_spi = range->sadb_spirange_max;
+	}
+
+	err = verify_spi_info(x->id.proto, min_spi, max_spi);
+	if (err) {
+		xfrm_state_put(x);
+		return err;
 	}
 
 	err = xfrm_alloc_spi(x, min_spi, max_spi);
@@ -3060,6 +3067,24 @@ static u32 get_acqseq(void)
 	return res;
 }
 
+static bool pfkey_is_alive(const struct km_event *c)
+{
+	struct netns_pfkey *net_pfkey = net_generic(c->net, pfkey_net_id);
+	struct sock *sk;
+	bool is_alive = false;
+
+	rcu_read_lock();
+	sk_for_each_rcu(sk, &net_pfkey->table) {
+		if (pfkey_sk(sk)->registered) {
+			is_alive = true;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return is_alive;
+}
+
 static int pfkey_send_acquire(struct xfrm_state *x, struct xfrm_tmpl *t, struct xfrm_policy *xp)
 {
 	struct sk_buff *skb;
@@ -3785,6 +3810,7 @@ static struct xfrm_mgr pfkeyv2_mgr =
 	.new_mapping	= pfkey_send_new_mapping,
 	.notify_policy	= pfkey_send_policy_notify,
 	.migrate	= pfkey_send_migrate,
+	.is_alive	= pfkey_is_alive,
 };
 
 static int __net_init pfkey_net_init(struct net *net)

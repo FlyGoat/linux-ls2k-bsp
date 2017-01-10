@@ -419,6 +419,10 @@ static void scsi_report_sense(struct scsi_device *sdev,
 			evt_type = SDEV_EVT_MODE_PARAMETER_CHANGE_REPORTED;
 			sdev_printk(KERN_WARNING, sdev,
 				    "Mode parameters changed");
+		} else if (sshdr->asc == 0x2a && sshdr->ascq == 0x06) {
+			evt_type = SDEV_EVT_ALUA_STATE_CHANGE_REPORTED;
+			sdev_printk(KERN_WARNING, sdev,
+				    "Asymmetric access state changed");
 		} else if (sshdr->asc == 0x2a && sshdr->ascq == 0x09) {
 			evt_type = SDEV_EVT_CAPACITY_CHANGE_REPORTED;
 			sdev_printk(KERN_WARNING, sdev,
@@ -864,6 +868,7 @@ static int scsi_try_bus_device_reset(struct scsi_cmnd *scmd)
 
 /**
  * scsi_try_to_abort_cmd - Ask host to abort a SCSI command
+ * @hostt:	SCSI driver host template
  * @scmd:	SCSI cmd used to send a target reset
  *
  * Return value:
@@ -1125,7 +1130,6 @@ static int scsi_eh_action(struct scsi_cmnd *scmd, int rtn)
  */
 void scsi_eh_finish_cmd(struct scsi_cmnd *scmd, struct list_head *done_q)
 {
-	scmd->device->host->host_failed--;
 	scmd->eh_eflags = 0;
 	list_move_tail(&scmd->eh_entry, done_q);
 }
@@ -1252,9 +1256,9 @@ retry_tur:
 /**
  * scsi_eh_test_devices - check if devices are responding from error recovery.
  * @cmd_list:	scsi commands in error recovery.
- * @work_q:     queue for commands which still need more error recovery
- * @done_q:     queue for commands which are finished
- * @try_stu:    boolean on if a STU command should be tried in addition to TUR.
+ * @work_q:	queue for commands which still need more error recovery
+ * @done_q:	queue for commands which are finished
+ * @try_stu:	boolean on if a STU command should be tried in addition to TUR.
  *
  * Decription:
  *    Tests if devices are in a working state.  Commands to devices now in
@@ -1386,7 +1390,7 @@ static int scsi_eh_try_stu(struct scsi_cmnd *scmd)
  /**
  * scsi_eh_stu - send START_UNIT if needed
  * @shost:	&scsi host being recovered.
- * @work_q:     &list_head for pending commands.
+ * @work_q:	&list_head for pending commands.
  * @done_q:	&list_head for processed commands.
  *
  * Notes:
@@ -1449,7 +1453,7 @@ static int scsi_eh_stu(struct Scsi_Host *shost,
 /**
  * scsi_eh_bus_device_reset - send bdr if needed
  * @shost:	scsi host being recovered.
- * @work_q:     &list_head for pending commands.
+ * @work_q:	&list_head for pending commands.
  * @done_q:	&list_head for processed commands.
  *
  * Notes:
@@ -1513,7 +1517,7 @@ static int scsi_eh_bus_device_reset(struct Scsi_Host *shost,
 /**
  * scsi_eh_target_reset - send target reset if needed
  * @shost:	scsi host being recovered.
- * @work_q:     &list_head for pending commands.
+ * @work_q:	&list_head for pending commands.
  * @done_q:	&list_head for processed commands.
  *
  * Notes:
@@ -1578,7 +1582,7 @@ static int scsi_eh_target_reset(struct Scsi_Host *shost,
 /**
  * scsi_eh_bus_reset - send a bus reset
  * @shost:	&scsi host being recovered.
- * @work_q:     &list_head for pending commands.
+ * @work_q:	&list_head for pending commands.
  * @done_q:	&list_head for processed commands.
  */
 static int scsi_eh_bus_reset(struct Scsi_Host *shost,
@@ -1649,8 +1653,9 @@ static int scsi_eh_bus_reset(struct Scsi_Host *shost,
 
 /**
  * scsi_eh_host_reset - send a host reset
- * @work_q:	list_head for processed commands.
- * @done_q:	list_head for processed commands.
+ * @shost:	host to be reset.
+ * @work_q:	&list_head for pending commands.
+ * @done_q:	&list_head for processed commands.
  */
 static int scsi_eh_host_reset(struct Scsi_Host *shost,
 			      struct list_head *work_q,
@@ -1688,8 +1693,8 @@ static int scsi_eh_host_reset(struct Scsi_Host *shost,
 
 /**
  * scsi_eh_offline_sdevs - offline scsi devices that fail to recover
- * @work_q:	list_head for processed commands.
- * @done_q:	list_head for processed commands.
+ * @work_q:	&list_head for pending commands.
+ * @done_q:	&list_head for processed commands.
  */
 static void scsi_eh_offline_sdevs(struct list_head *work_q,
 				  struct list_head *done_q)
@@ -1734,7 +1739,7 @@ int scsi_noretry_cmd(struct scsi_cmnd *scmd)
 		return (scmd->request->cmd_flags & REQ_FAILFAST_DRIVER);
 	}
 
-	switch (status_byte(scmd->result) != CHECK_CONDITION)
+	if (status_byte(scmd->result) != CHECK_CONDITION)
 		return 0;
 
 check_type:
@@ -2011,8 +2016,10 @@ static void scsi_restart_operations(struct Scsi_Host *shost)
 	 * is no point trying to lock the door of an off-line device.
 	 */
 	shost_for_each_device(sdev, shost) {
-		if (scsi_device_online(sdev) && sdev->locked)
+		if (scsi_device_online(sdev) && sdev->was_reset && sdev->locked) {
 			scsi_eh_lock_door(sdev);
+			sdev->was_reset = 0;
+		}
 	}
 
 	/*
@@ -2056,8 +2063,8 @@ static void scsi_restart_operations(struct Scsi_Host *shost)
 
 /**
  * scsi_eh_ready_devs - check device ready state and recover if not.
- * @shost: 	host to be recovered.
- * @work_q:     &list_head for pending commands.
+ * @shost:	host to be recovered.
+ * @work_q:	&list_head for pending commands.
  * @done_q:	&list_head for processed commands.
  */
 void scsi_eh_ready_devs(struct Scsi_Host *shost,
@@ -2174,8 +2181,17 @@ int scsi_error_handler(void *data)
 	 * We never actually get interrupted because kthread_run
 	 * disables signal delivery for the created thread.
 	 */
-	while (!kthread_should_stop()) {
+	while (true) {
+		/*
+		 * The sequence in kthread_stop() sets the stop flag first
+		 * then wakes the process.  To avoid missed wakeups, the task
+		 * should always be in a non running state before the stop
+		 * flag is checked
+		 */
 		set_current_state(TASK_INTERRUPTIBLE);
+		if (kthread_should_stop())
+			break;
+
 		if ((shost->host_failed == 0 && shost->host_eh_scheduled == 0) ||
 		    shost->host_failed != atomic_read(&shost->host_busy)) {
 			SCSI_LOG_ERROR_RECOVERY(1,
@@ -2211,6 +2227,9 @@ int scsi_error_handler(void *data)
 			shost->transportt->eh_strategy_handler(shost);
 		else
 			scsi_unjam_host(shost);
+
+		/* All scmds have been handled */
+		shost->host_failed = 0;
 
 		/*
 		 * Note - if the above fails completely, the action is to take

@@ -22,6 +22,7 @@
 #include <linux/device.h>
 #include <linux/pfn.h>
 #include <linux/mm.h>
+#include <linux/resource_ext.h>
 #include <asm/io.h>
 
 
@@ -232,9 +233,9 @@ static struct resource * __request_resource(struct resource *root, struct resour
 	}
 }
 
-static int __release_resource(struct resource *old)
+static int __release_resource(struct resource *old, bool release_child)
 {
-	struct resource *tmp, **p;
+	struct resource *tmp, **p, *chd;
 
 	p = &old->parent->child;
 	for (;;) {
@@ -242,7 +243,17 @@ static int __release_resource(struct resource *old)
 		if (!tmp)
 			break;
 		if (tmp == old) {
-			*p = tmp->sibling;
+			if (release_child || !(tmp->child)) {
+				*p = tmp->sibling;
+			} else {
+				for (chd = tmp->child;; chd = chd->sibling) {
+					chd->parent = tmp->parent;
+					if (!(chd->sibling))
+						break;
+				}
+				*p = tmp->child;
+				chd->sibling = tmp->sibling;
+			}
 			old->parent = NULL;
 			return 0;
 		}
@@ -324,7 +335,7 @@ int release_resource(struct resource *old)
 	int retval;
 
 	write_lock(&resource_lock);
-	retval = __release_resource(old);
+	retval = __release_resource(old, true);
 	write_unlock(&resource_lock);
 	return retval;
 }
@@ -491,41 +502,73 @@ int __weak page_is_ram(unsigned long pfn)
 }
 EXPORT_SYMBOL_GPL(page_is_ram);
 
-/*
- * Search for a resouce entry that fully contains the specified region.
- * If found, return 1 if it is RAM, 0 if not.
- * If not found, or region is not fully contained, return -1
+/**
+ * region_intersects() - determine intersection of region with known resources
+ * @start: region start address
+ * @size: size of region
+ * @name: name of resource (in iomem_resource)
+ * @flags: flags of resource (in iomem_resource)
  *
- * Used by the ioremap functions to ensure the user is not remapping RAM and is
- * a vast speed up over walking through the resource table page by page.
+ * Check if the specified region partially overlaps or fully eclipses a
+ * resource identified by @name.  Return REGION_DISJOINT if the region
+ * does not overlap @name, return REGION_MIXED if the region overlaps
+ * @type and another resource, and return REGION_INTERSECTS if the
+ * region overlaps @type and no other defined resource. Note, that
+ * REGION_INTERSECTS is also returned in the case when the specified
+ * region overlaps with undefined memory holes.
  */
-int region_is_ram(resource_size_t start, unsigned long size)
+int region_intersects(resource_size_t start, size_t size, const char *name,
+			unsigned long flags)
 {
-	struct resource *p;
 	resource_size_t end = start + size - 1;
-	int flags = IORESOURCE_MEM | IORESOURCE_BUSY;
-	const char *name = "System RAM";
-	int ret = -1;
+	int type = 0; int other = 0;
+	struct resource *p;
 
 	read_lock(&resource_lock);
 	for (p = iomem_resource.child; p ; p = p->sibling) {
-		if (end < p->start)
-			continue;
+		bool is_type = strcmp(p->name, name) == 0 && p->flags == flags;
 
-		if (p->start <= start && end <= p->end) {
-			/* resource fully contains region */
-			if ((p->flags != flags) || strcmp(p->name, name))
-				ret = 0;
-			else
-				ret = 1;
-			break;
-		}
-		if (p->end < start)
-			break;	/* not found */
+		if (start >= p->start && start <= p->end)
+			is_type ? type++ : other++;
+		if (end >= p->start && end <= p->end)
+			is_type ? type++ : other++;
+		if (p->start >= start && p->end <= end)
+			is_type ? type++ : other++;
 	}
 	read_unlock(&resource_lock);
-	return ret;
+
+	if (other == 0)
+		return type ? REGION_INTERSECTS : REGION_DISJOINT;
+
+	if (type)
+		return REGION_MIXED;
+
+	return REGION_DISJOINT;
 }
+
+/*
+ * region_intersect_ram() is used by memory remapping functions to ensure
+ * the user is not remapping RAM and is a vast speed up over walking
+ * through the resource table page by page.
+ */
+int region_intersects_ram(resource_size_t start, size_t size)
+{
+	return region_intersects(start, size, "System RAM",
+				 IORESOURCE_MEM | IORESOURCE_BUSY);
+}
+EXPORT_SYMBOL_GPL(region_intersects_ram);
+
+/*
+ * region_intersects_pmem() checks if a specified address range is
+ * persistent memory, registered as "Persistent Memory", in the
+ * iomem_resource list.
+ */
+int region_intersects_pmem(resource_size_t start, size_t size)
+{
+	return region_intersects(start, size, "Persistent Memory",
+				 IORESOURCE_MEM);
+}
+EXPORT_SYMBOL_GPL(region_intersects_pmem);
 
 void __weak arch_remove_reservations(struct resource *avail)
 {
@@ -656,7 +699,7 @@ int reallocate_resource(struct resource *root, struct resource *old,
 		old->start = new.start;
 		old->end = new.end;
 	} else {
-		__release_resource(old);
+		__release_resource(old, true);
 		*old = new;
 		conflict = __request_resource(root, old);
 		BUG_ON(conflict);
@@ -802,6 +845,9 @@ static struct resource * __insert_resource(struct resource *parent, struct resou
  * entirely fit within the range of the new resource, then the new
  * resource is inserted and the conflicting resources become children of
  * the new resource.
+ *
+ * This function is intended for producers of resources, such as FW modules
+ * and bus drivers.
  */
 struct resource *insert_resource_conflict(struct resource *parent, struct resource *new)
 {
@@ -819,6 +865,9 @@ struct resource *insert_resource_conflict(struct resource *parent, struct resour
  * @new: new resource to insert
  *
  * Returns 0 on success, -EBUSY if the resource can't be inserted.
+ *
+ * This function is intended for producers of resources, such as FW modules
+ * and bus drivers.
  */
 int insert_resource(struct resource *parent, struct resource *new)
 {
@@ -827,6 +876,7 @@ int insert_resource(struct resource *parent, struct resource *new)
 	conflict = insert_resource_conflict(parent, new);
 	return conflict ? -EBUSY : 0;
 }
+EXPORT_SYMBOL_GPL(insert_resource);
 
 /**
  * insert_resource_expand_to_fit - Insert a resource into the resource tree
@@ -861,6 +911,32 @@ void insert_resource_expand_to_fit(struct resource *root, struct resource *new)
 	}
 	write_unlock(&resource_lock);
 }
+
+/**
+ * remove_resource - Remove a resource in the resource tree
+ * @old: resource to remove
+ *
+ * Returns 0 on success, -EINVAL if the resource is not valid.
+ *
+ * This function removes a resource previously inserted by insert_resource()
+ * or insert_resource_conflict(), and moves the children (if any) up to
+ * where they were before.  insert_resource() and insert_resource_conflict()
+ * insert a new resource, and move any conflicting resources down to the
+ * children of the new resource.
+ *
+ * insert_resource(), insert_resource_conflict() and remove_resource() are
+ * intended for producers of resources, such as FW modules and bus drivers.
+ */
+int remove_resource(struct resource *old)
+{
+	int retval;
+
+	write_lock(&resource_lock);
+	retval = __release_resource(old, false);
+	write_unlock(&resource_lock);
+	return retval;
+}
+EXPORT_SYMBOL_GPL(remove_resource);
 
 static int __adjust_resource(struct resource *res, resource_size_t start,
 				resource_size_t size)
@@ -1062,13 +1138,14 @@ struct resource * __request_region(struct resource *parent,
 	res->name = name;
 	res->start = start;
 	res->end = start + n - 1;
-	res->flags = resource_type(parent);
-	res->flags |= IORESOURCE_BUSY | flags;
 
 	write_lock(&resource_lock);
 
 	for (;;) {
 		struct resource *conflict;
+
+		res->flags = resource_type(parent);
+		res->flags |= IORESOURCE_BUSY | flags;
 
 		conflict = __request_resource(parent, res);
 		if (!conflict)
@@ -1282,6 +1359,76 @@ int release_mem_region_adjustable(struct resource *parent,
 /*
  * Managed region resource
  */
+static void devm_resource_release(struct device *dev, void *ptr)
+{
+	struct resource **r = ptr;
+
+	release_resource(*r);
+}
+
+/**
+ * devm_request_resource() - request and reserve an I/O or memory resource
+ * @dev: device for which to request the resource
+ * @root: root of the resource tree from which to request the resource
+ * @new: descriptor of the resource to request
+ *
+ * This is a device-managed version of request_resource(). There is usually
+ * no need to release resources requested by this function explicitly since
+ * that will be taken care of when the device is unbound from its driver.
+ * If for some reason the resource needs to be released explicitly, because
+ * of ordering issues for example, drivers must call devm_release_resource()
+ * rather than the regular release_resource().
+ *
+ * When a conflict is detected between any existing resources and the newly
+ * requested resource, an error message will be printed.
+ *
+ * Returns 0 on success or a negative error code on failure.
+ */
+int devm_request_resource(struct device *dev, struct resource *root,
+			  struct resource *new)
+{
+	struct resource *conflict, **ptr;
+
+	ptr = devres_alloc(devm_resource_release, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	*ptr = new;
+
+	conflict = request_resource_conflict(root, new);
+	if (conflict) {
+		dev_err(dev, "resource collision: %pR conflicts with %s %pR\n",
+			new, conflict->name, conflict);
+		devres_free(ptr);
+		return -EBUSY;
+	}
+
+	devres_add(dev, ptr);
+	return 0;
+}
+EXPORT_SYMBOL(devm_request_resource);
+
+static int devm_resource_match(struct device *dev, void *res, void *data)
+{
+	struct resource **ptr = res;
+
+	return *ptr == data;
+}
+
+/**
+ * devm_release_resource() - release a previously requested resource
+ * @dev: device for which to release the resource
+ * @new: descriptor of the resource to release
+ *
+ * Releases a resource previously requested using devm_request_resource().
+ */
+void devm_release_resource(struct device *dev, struct resource *new)
+{
+	WARN_ON(devres_release(dev, devm_resource_release, devm_resource_match,
+			       new));
+}
+EXPORT_SYMBOL(devm_release_resource);
+
 struct region_devres {
 	struct resource *parent;
 	resource_size_t start;
@@ -1459,6 +1606,30 @@ int iomem_is_exclusive(u64 addr)
 
 	return err;
 }
+
+struct resource_entry *resource_list_create_entry(struct resource *res,
+						  size_t extra_size)
+{
+	struct resource_entry *entry;
+
+	entry = kzalloc(sizeof(*entry) + extra_size, GFP_KERNEL);
+	if (entry) {
+		INIT_LIST_HEAD(&entry->node);
+		entry->res = res ? res : &entry->__res;
+	}
+
+	return entry;
+}
+EXPORT_SYMBOL(resource_list_create_entry);
+
+void resource_list_free(struct list_head *head)
+{
+	struct resource_entry *entry, *tmp;
+
+	list_for_each_entry_safe(entry, tmp, head, node)
+		resource_list_destroy_entry(entry);
+}
+EXPORT_SYMBOL(resource_list_free);
 
 static int __init strict_iomem(char *str)
 {

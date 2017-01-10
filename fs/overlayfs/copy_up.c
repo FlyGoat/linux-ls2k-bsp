@@ -29,11 +29,11 @@ module_param_named(check_copy_up, ovl_check_copy_up, uint,
 MODULE_PARM_DESC(ovl_check_copy_up,
 		 "Warn on copy-up when causing process also has a R/O fd open");
 
-static int ovl_check_fd(const void *data, struct file *f, unsigned fd)
+static int ovl_check_fd(const void *data, struct file *f, unsigned int fd)
 {
 	const struct dentry *dentry = data;
 
-	if (f->f_path.dentry == dentry)
+	if (f->f_inode == d_inode(dentry))
 		pr_warn_ratelimited("overlayfs: Warning: Copying up %pD, but open R/O on fd %u which will cease to be coherent [pid=%d %s]\n",
 				    f, fd, current->pid, current->comm);
 	return 0;
@@ -124,11 +124,11 @@ static int ovl_copy_up_data(struct path *old, struct path *new, loff_t len)
 	if (len == 0)
 		return 0;
 
-	old_file = ovl_path_open(old, O_RDONLY);
+	old_file = ovl_path_open(old, O_LARGEFILE | O_RDONLY);
 	if (IS_ERR(old_file))
 		return PTR_ERR(old_file);
 
-	new_file = ovl_path_open(new, O_WRONLY);
+	new_file = ovl_path_open(new, O_LARGEFILE | O_WRONLY);
 	if (IS_ERR(new_file)) {
 		error = PTR_ERR(new_file);
 		goto out_fput;
@@ -238,8 +238,7 @@ int ovl_set_attr(struct dentry *upperdentry, struct kstat *stat)
 
 static int ovl_copy_up_locked(struct dentry *workdir, struct dentry *upperdir,
 			      struct dentry *dentry, struct path *lowerpath,
-			      struct kstat *stat, struct iattr *attr,
-			      const char *link)
+			      struct kstat *stat, const char *link)
 {
 	struct inode *wdir = workdir->d_inode;
 	struct inode *udir = upperdir->d_inode;
@@ -283,8 +282,6 @@ static int ovl_copy_up_locked(struct dentry *workdir, struct dentry *upperdir,
 
 	mutex_lock(&newdentry->d_inode->i_mutex);
 	err = ovl_set_attr(newdentry, stat);
-	if (!err && attr)
-		err = notify_change(newdentry, attr, NULL);
 	mutex_unlock(&newdentry->d_inode->i_mutex);
 	if (err)
 		goto out_cleanup;
@@ -294,6 +291,7 @@ static int ovl_copy_up_locked(struct dentry *workdir, struct dentry *upperdir,
 		goto out_cleanup;
 
 	ovl_dentry_update(dentry, newdentry);
+	ovl_inode_update(d_inode(dentry), d_inode(newdentry));
 	newdentry = NULL;
 
 	/*
@@ -310,7 +308,7 @@ out:
 
 out_cleanup:
 	ovl_cleanup(wdir, newdentry);
-	goto out;
+	goto out2;
 }
 
 /*
@@ -329,8 +327,7 @@ out_cleanup:
  * that point the file will have already been copied up anyway.
  */
 int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
-		    struct path *lowerpath, struct kstat *stat,
-		    struct iattr *attr)
+		    struct path *lowerpath, struct kstat *stat)
 {
 	struct dentry *workdir = ovl_workdir(dentry);
 	int err;
@@ -339,7 +336,6 @@ int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 	struct dentry *upperdir;
 	struct dentry *upperdentry;
 	const struct cred *old_cred;
-	struct cred *override_cred;
 	char *link = NULL;
 
 	if (WARN_ON(!workdir))
@@ -360,28 +356,7 @@ int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 			return PTR_ERR(link);
 	}
 
-	err = -ENOMEM;
-	override_cred = prepare_creds();
-	if (!override_cred)
-		goto out_free_link;
-
-	override_cred->fsuid = stat->uid;
-	override_cred->fsgid = stat->gid;
-	/*
-	 * CAP_SYS_ADMIN for copying up extended attributes
-	 * CAP_DAC_OVERRIDE for create
-	 * CAP_FOWNER for chmod, timestamp update
-	 * CAP_FSETID for chmod
-	 * CAP_CHOWN for chown
-	 * CAP_MKNOD for mknod
-	 */
-	cap_raise(override_cred->cap_effective, CAP_SYS_ADMIN);
-	cap_raise(override_cred->cap_effective, CAP_DAC_OVERRIDE);
-	cap_raise(override_cred->cap_effective, CAP_FOWNER);
-	cap_raise(override_cred->cap_effective, CAP_FSETID);
-	cap_raise(override_cred->cap_effective, CAP_CHOWN);
-	cap_raise(override_cred->cap_effective, CAP_MKNOD);
-	old_cred = override_creds(override_cred);
+	old_cred = ovl_override_creds(dentry->d_sb);
 
 	err = -EIO;
 	if (lock_rename(workdir, upperdir) != NULL) {
@@ -390,30 +365,21 @@ int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 	}
 	upperdentry = ovl_dentry_upper(dentry);
 	if (upperdentry) {
-		unlock_rename(workdir, upperdir);
+		/* Raced with another copy-up?  Nothing to do, then... */
 		err = 0;
-		/* Raced with another copy-up?  Do the setattr here */
-		if (attr) {
-			mutex_lock(&upperdentry->d_inode->i_mutex);
-			err = notify_change(upperdentry, attr, NULL);
-			mutex_unlock(&upperdentry->d_inode->i_mutex);
-		}
-		goto out_put_cred;
+		goto out_unlock;
 	}
 
 	err = ovl_copy_up_locked(workdir, upperdir, dentry, lowerpath,
-				 stat, attr, link);
+				 stat, link);
 	if (!err) {
 		/* Restore timestamps on parent (best effort) */
 		ovl_set_timestamps(upperdir, &pstat);
 	}
 out_unlock:
 	unlock_rename(workdir, upperdir);
-out_put_cred:
 	revert_creds(old_cred);
-	put_cred(override_cred);
 
-out_free_link:
 	if (link)
 		free_page((unsigned long) link);
 
@@ -451,7 +417,7 @@ int ovl_copy_up(struct dentry *dentry)
 		ovl_path_lower(next, &lowerpath);
 		err = vfs_getattr(&lowerpath, &stat);
 		if (!err)
-			err = ovl_copy_up_one(parent, next, &lowerpath, &stat, NULL);
+			err = ovl_copy_up_one(parent, next, &lowerpath, &stat);
 
 		dput(parent);
 		dput(next);

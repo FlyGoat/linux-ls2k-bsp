@@ -52,6 +52,10 @@
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/if_ether.h>
+#ifndef __GENKSYMS__
+#include <linux/of_net.h>
+#include <linux/pci.h>
+#endif
 #include <net/dst.h>
 #include <net/arp.h>
 #include <net/sock.h>
@@ -217,12 +221,13 @@ __be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev)
 	 * variants has been configured on the receiving interface,
 	 * and if so, set skb->protocol without looking at the packet.
 	 */
-	if (netdev_uses_dsa_tags(dev))
+	if (unlikely(netdev_uses_dsa_tags(dev)))
 		return htons(ETH_P_DSA);
-	if (netdev_uses_trailer_tags(dev))
+
+	if (unlikely(netdev_uses_trailer_tags(dev)))
 		return htons(ETH_P_TRAILER);
 
-	if (ntohs(eth->h_proto) >= ETH_P_802_3_MIN)
+	if (likely(eth_proto_is_802_3(eth->h_proto)))
 		return eth->h_proto;
 
 	/*
@@ -231,7 +236,7 @@ __be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev)
 	 *      layer. We look for FFFF which isn't a used 802.2 SSAP/DSAP. This
 	 *      won't work for fault tolerant netware but does for the rest.
 	 */
-	if (skb->len >= 2 && *(unsigned short *)(skb->data) == 0xFFFF)
+	if (unlikely(skb->len >= 2 && *(unsigned short *)(skb->data) == 0xFFFF))
 		return htons(ETH_P_802_3);
 
 	/*
@@ -545,3 +550,32 @@ static int __init eth_offload_init(void)
 }
 
 fs_initcall(eth_offload_init);
+
+unsigned char * __weak arch_get_platform_mac_address(void)
+{
+	return NULL;
+}
+
+int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr)
+{
+	const unsigned char *addr;
+	struct device_node *dp;
+
+	if (dev_is_pci(dev))
+		dp = pci_device_to_OF_node(to_pci_dev(dev));
+	else
+		dp = dev->of_node;
+
+	addr = NULL;
+	if (dp)
+		addr = of_get_mac_address(dp);
+	if (!addr)
+		addr = arch_get_platform_mac_address();
+
+	if (!addr)
+		return -ENODEV;
+
+	ether_addr_copy(mac_addr, addr);
+	return 0;
+}
+EXPORT_SYMBOL(eth_platform_get_mac_address);

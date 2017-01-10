@@ -31,17 +31,27 @@ EXPORT_SYMBOL(contig_page_data);
 unsigned long max_low_pfn;
 unsigned long min_low_pfn;
 unsigned long max_pfn;
+unsigned long long max_possible_pfn;
 
 static void * __init __alloc_memory_core_early(int nid, u64 size, u64 align,
 					u64 goal, u64 limit)
 {
 	void *ptr;
 	u64 addr;
+	ulong flags = choose_memblock_flags();
 
 	if (limit > memblock.current_limit)
 		limit = memblock.current_limit;
 
-	addr = memblock_find_in_range_node(goal, limit, size, align, nid);
+again:
+	addr = memblock_find_in_range_node(size, align, goal, limit, nid,
+					   flags);
+	if (!addr && (flags & MEMBLOCK_MIRROR)) {
+		flags &= ~MEMBLOCK_MIRROR;
+		pr_warn("Could not allocate %pap bytes of mirrored memory\n",
+			&size);
+		goto again;
+	}
 	if (!addr)
 		return NULL;
 
@@ -75,34 +85,25 @@ void __init free_bootmem_late(unsigned long addr, unsigned long size)
 	end = PFN_DOWN(addr + size);
 
 	for (; cursor < end; cursor++) {
-		__free_pages_bootmem(pfn_to_page(cursor), 0);
+		__free_pages_bootmem(pfn_to_page(cursor), cursor, 0);
 		totalram_pages++;
 	}
 }
 
 static void __init __free_pages_memory(unsigned long start, unsigned long end)
 {
-	unsigned long i, start_aligned, end_aligned;
-	int order = ilog2(BITS_PER_LONG);
+	int order;
 
-	start_aligned = (start + (BITS_PER_LONG - 1)) & ~(BITS_PER_LONG - 1);
-	end_aligned = end & ~(BITS_PER_LONG - 1);
+	while (start < end) {
+		order = min(MAX_ORDER - 1UL, __ffs(start));
 
-	if (end_aligned <= start_aligned) {
-		for (i = start; i < end; i++)
-			__free_pages_bootmem(pfn_to_page(i), 0);
+		while (start + (1UL << order) > end)
+			order--;
 
-		return;
+		__free_pages_bootmem(pfn_to_page(start), start, order);
+
+		start += (1UL << order);
 	}
-
-	for (i = start; i < start_aligned; i++)
-		__free_pages_bootmem(pfn_to_page(i), 0);
-
-	for (i = start_aligned; i < end_aligned; i += BITS_PER_LONG)
-		__free_pages_bootmem(pfn_to_page(i), order);
-
-	for (i = end_aligned; i < end; i++)
-		__free_pages_bootmem(pfn_to_page(i), 0);
 }
 
 static unsigned long __init __free_memory_core(phys_addr_t start,
@@ -126,7 +127,13 @@ static unsigned long __init free_low_memory_core_early(void)
 	phys_addr_t start, end, size;
 	u64 i;
 
-	for_each_free_mem_range(i, MAX_NUMNODES, &start, &end, NULL)
+	memblock_clear_hotplug(0, -1);
+
+	for_each_reserved_mem_region(i, &start, &end)
+		reserve_bootmem_region(start, end);
+
+	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
+				NULL)
 		count += __free_memory_core(start, end);
 
 	/* free range that is used for reserved array if we allocate it */
@@ -170,7 +177,7 @@ unsigned long __init free_all_bootmem(void)
 	reset_all_zones_managed_pages();
 
 	/*
-	 * We need to use MAX_NUMNODES instead of NODE_DATA(0)->node_id
+	 * We need to use NUMA_NO_NODE instead of NODE_DATA(0)->node_id
 	 *  because in some case like Node0 doesn't have RAM installed
 	 *  low ram will be on Node1
 	 */
@@ -221,7 +228,7 @@ static void * __init ___alloc_bootmem_nopanic(unsigned long size,
 
 restart:
 
-	ptr = __alloc_memory_core_early(MAX_NUMNODES, size, align, goal, limit);
+	ptr = __alloc_memory_core_early(NUMA_NO_NODE, size, align, goal, limit);
 
 	if (ptr)
 		return ptr;
@@ -305,7 +312,7 @@ again:
 	if (ptr)
 		return ptr;
 
-	ptr = __alloc_memory_core_early(MAX_NUMNODES, size, align,
+	ptr = __alloc_memory_core_early(NUMA_NO_NODE, size, align,
 					goal, limit);
 	if (ptr)
 		return ptr;

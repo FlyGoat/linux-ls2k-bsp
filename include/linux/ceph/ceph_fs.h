@@ -143,6 +143,9 @@ struct ceph_dir_layout {
 #define CEPH_MSG_POOLOP_REPLY           48
 #define CEPH_MSG_POOLOP                 49
 
+/* mon commands */
+#define CEPH_MSG_MON_COMMAND            50
+#define CEPH_MSG_MON_COMMAND_ACK        51
 
 /* osd */
 #define CEPH_MSG_OSD_MAP                41
@@ -153,8 +156,9 @@ struct ceph_dir_layout {
 
 /* watch-notify operations */
 enum {
-  WATCH_NOTIFY				= 1, /* notifying watcher */
-  WATCH_NOTIFY_COMPLETE			= 2, /* notifier notified when done */
+	CEPH_WATCH_EVENT_NOTIFY		  = 1, /* notifying watcher */
+	CEPH_WATCH_EVENT_NOTIFY_COMPLETE  = 2, /* notifier notified when done */
+	CEPH_WATCH_EVENT_DISCONNECT       = 3, /* we were disconnected */
 };
 
 
@@ -180,6 +184,14 @@ struct ceph_mon_statfs_reply {
 	struct ceph_statfs st;
 } __attribute__ ((packed));
 
+struct ceph_mon_command {
+	struct ceph_mon_request_header monhdr;
+	struct ceph_fsid fsid;
+	__le32 num_strs;         /* always 1 */
+	__le32 str_len;
+	char str[];
+} __attribute__ ((packed));
+
 struct ceph_osd_getmap {
 	struct ceph_mon_request_header monhdr;
 	struct ceph_fsid fsid;
@@ -198,14 +210,16 @@ struct ceph_client_mount {
 #define CEPH_SUBSCRIBE_ONETIME    1  /* i want only 1 update after have */
 
 struct ceph_mon_subscribe_item {
-	__le64 have_version;    __le64 have;
-	__u8 onetime;
+	__le64 start;
+	__u8 flags;
 } __attribute__ ((packed));
 
 struct ceph_mon_subscribe_ack {
 	__le32 duration;         /* seconds */
 	struct ceph_fsid fsid;
 } __attribute__ ((packed));
+
+#define CEPH_FS_CLUSTER_ID_NONE  -1
 
 /*
  * mdsmap flags
@@ -376,7 +390,8 @@ union ceph_mds_request_args {
 		__le32 stripe_count;         /* ... */
 		__le32 object_size;
 		__le32 file_replication;
-		__le32 unused;               /* used to be preferred osd */
+               __le32 mask;                 /* CEPH_CAP_* */
+               __le32 old_size;
 	} __attribute__ ((packed)) open;
 	struct {
 		__le32 flags;

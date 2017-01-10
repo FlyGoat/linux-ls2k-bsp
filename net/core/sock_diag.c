@@ -13,7 +13,7 @@ static const struct sock_diag_handler *sock_diag_handlers[AF_MAX];
 static int (*inet_rcv_compat)(struct sk_buff *skb, struct nlmsghdr *nlh);
 static DEFINE_MUTEX(sock_diag_table_mutex);
 
-int sock_diag_check_cookie(void *sk, __u32 *cookie)
+int sock_diag_check_cookie(void *sk, const __u32 *cookie)
 {
 	if ((cookie[0] != INET_DIAG_NOCOOKIE ||
 	     cookie[1] != INET_DIAG_NOCOOKIE) &&
@@ -44,6 +44,7 @@ int sock_diag_put_meminfo(struct sock *sk, struct sk_buff *skb, int attrtype)
 	mem[SK_MEMINFO_WMEM_QUEUED] = sk->sk_wmem_queued;
 	mem[SK_MEMINFO_OPTMEM] = atomic_read(&sk->sk_omem_alloc);
 	mem[SK_MEMINFO_BACKLOG] = sk->sk_backlog.len;
+	mem[SK_MEMINFO_DROPS] = atomic_read(&sk->sk_drops);
 
 	return nla_put(skb, attrtype, sizeof(mem), &mem);
 }

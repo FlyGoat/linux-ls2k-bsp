@@ -162,6 +162,27 @@ config VXLAN
 	  To compile this driver as a module, choose M here: the module
 	  will be called vxlan.
 
+config GENEVE
+       tristate "Generic Network Virtualization Encapsulation"
+       depends on INET && NET_UDP_TUNNEL
+       select NET_IP_TUNNEL
+       ---help---
+	  This allows one to create geneve virtual interfaces that provide
+	  Layer 2 Networks over Layer 3 Networks. GENEVE is often used
+	  to tunnel virtual network infrastructure in virtualized environments.
+	  For more information see:
+	    http://tools.ietf.org/html/draft-gross-geneve-02
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called geneve.
+
+config MACSEC
+	tristate "IEEE 802.1AE MAC-level encryption (MACsec)"
+	select CRYPTO_AES
+	select CRYPTO_GCM
+	---help---
+	   MACsec is an encryption standard for Ethernet.
+
 config NETCONSOLE
 	tristate "Network console logging support"
 	---help---
@@ -372,6 +393,13 @@ config VMXNET3
 	  This driver supports VMware's vmxnet3 virtual ethernet NIC.
 	  To compile this driver as a module, choose M here: the
 	  module will be called vmxnet3.
+
+config FUJITSU_ES
+	tristate "FUJITSU Extended Socket Network Device driver"
+	depends on ACPI
+	help
+	  This driver provides support for Extended Socket network device
+          on Extended Partitioning of FUJITSU PRIMEQUEST 2000 E2 series.
 
 source "drivers/net/hyperv/Kconfig"
 

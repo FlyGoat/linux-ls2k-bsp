@@ -494,16 +494,22 @@ static int proc_pid_stack(struct seq_file *m, struct pid_namespace *ns,
 }
 #endif
 
-#ifdef CONFIG_SCHEDSTATS
+#ifdef CONFIG_SCHED_INFO
 /*
  * Provides /proc/PID/schedstat
  */
-static int proc_pid_schedstat(struct task_struct *task, char *buffer)
+static int proc_pid_schedstat(struct seq_file *m, struct pid_namespace *ns,
+			      struct pid *pid, struct task_struct *task)
 {
-	return sprintf(buffer, "%llu %llu %lu\n",
-			(unsigned long long)task->se.sum_exec_runtime,
-			(unsigned long long)task->sched_info.run_delay,
-			task->sched_info.pcount);
+	if (unlikely(!sched_info_on()))
+		seq_printf(m, "0 0 0\n");
+	else
+		seq_printf(m, "%llu %llu %lu\n",
+		   (unsigned long long)task->se.sum_exec_runtime,
+		   (unsigned long long)task->sched_info.run_delay,
+		   task->sched_info.pcount);
+
+	return 0;
 }
 #endif
 
@@ -603,7 +609,7 @@ static int proc_oom_score(struct task_struct *task, char *buffer)
 	unsigned long totalpages = totalram_pages + total_swap_pages;
 	unsigned long points = 0;
 
-	read_lock(&tasklist_lock);
+	tasklist_read_lock();
 	if (pid_alive(task))
 		points = oom_badness(task, NULL, NULL, totalpages) *
 						1000 / totalpages;
@@ -1601,18 +1607,13 @@ static const struct file_operations proc_pid_set_comm_operations = {
 static int proc_exe_link(struct dentry *dentry, struct path *exe_path)
 {
 	struct task_struct *task;
-	struct mm_struct *mm;
 	struct file *exe_file;
 
 	task = get_proc_task(dentry->d_inode);
 	if (!task)
 		return -ENOENT;
-	mm = get_task_mm(task);
+	exe_file = get_task_exe_file(task);
 	put_task_struct(task);
-	if (!mm)
-		return -ENOENT;
-	exe_file = get_mm_exe_file(mm);
-	mmput(mm);
 	if (exe_file) {
 		*exe_path = exe_file->f_path;
 		path_get(&exe_file->f_path);
@@ -2903,8 +2904,8 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_STACKTRACE
 	ONE("stack",      S_IRUGO, proc_pid_stack),
 #endif
-#ifdef CONFIG_SCHEDSTATS
-	INF("schedstat",  S_IRUGO, proc_pid_schedstat),
+#ifdef CONFIG_SCHED_INFO
+	ONE("schedstat",  S_IRUGO, proc_pid_schedstat),
 #endif
 #ifdef CONFIG_LATENCYTOP
 	REG("latency",  S_IRUGO, proc_lstats_operations),
@@ -3260,8 +3261,8 @@ static const struct pid_entry tid_base_stuff[] = {
 #ifdef CONFIG_STACKTRACE
 	ONE("stack",      S_IRUGO, proc_pid_stack),
 #endif
-#ifdef CONFIG_SCHEDSTATS
-	INF("schedstat", S_IRUGO, proc_pid_schedstat),
+#ifdef CONFIG_SCHED_INFO
+	ONE("schedstat", S_IRUGO, proc_pid_schedstat),
 #endif
 #ifdef CONFIG_LATENCYTOP
 	REG("latency",  S_IRUGO, proc_lstats_operations),

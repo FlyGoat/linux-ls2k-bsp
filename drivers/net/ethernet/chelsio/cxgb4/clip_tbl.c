@@ -35,10 +35,10 @@ static inline unsigned int ipv6_clip_hash(struct clip_tbl *d, const u32 *key)
 }
 
 static unsigned int clip_addr_hash(struct clip_tbl *ctbl, const u32 *addr,
-				   int addr_len)
+				   u8 v6)
 {
-	return addr_len == 4 ? ipv4_clip_hash(ctbl, addr) :
-				ipv6_clip_hash(ctbl, addr);
+	return v6 ? ipv6_clip_hash(ctbl, addr) :
+			ipv4_clip_hash(ctbl, addr);
 }
 
 static int clip6_get_mbox(const struct net_device *dev,
@@ -78,23 +78,22 @@ int cxgb4_clip_get(const struct net_device *dev, const u32 *lip, u8 v6)
 	struct clip_entry *ce, *cte;
 	u32 *addr = (u32 *)lip;
 	int hash;
-	int addr_len;
-	int ret = 0;
+	int ret = -1;
 
 	if (!ctbl)
 		return 0;
 
-	if (v6)
-		addr_len = 16;
-	else
-		addr_len = 4;
-
-	hash = clip_addr_hash(ctbl, addr, addr_len);
+	hash = clip_addr_hash(ctbl, addr, v6);
 
 	read_lock_bh(&ctbl->lock);
 	list_for_each_entry(cte, &ctbl->hash_list[hash], list) {
-		if (addr_len == cte->addr_len &&
-		    memcmp(lip, cte->addr, cte->addr_len) == 0) {
+		if (cte->addr6.sin6_family == AF_INET6 && v6)
+			ret = memcmp(lip, cte->addr6.sin6_addr.s6_addr,
+				     sizeof(struct in6_addr));
+		else if (cte->addr.sin_family == AF_INET && !v6)
+			ret = memcmp(lip, (char *)(&cte->addr.sin_addr),
+				     sizeof(struct in_addr));
+		if (!ret) {
 			ce = cte;
 			read_unlock_bh(&ctbl->lock);
 			goto found;
@@ -111,18 +110,31 @@ int cxgb4_clip_get(const struct net_device *dev, const u32 *lip, u8 v6)
 		spin_lock_init(&ce->lock);
 		atomic_set(&ce->refcnt, 0);
 		atomic_dec(&ctbl->nfree);
-		ce->addr_len = addr_len;
-		memcpy(ce->addr, lip, addr_len);
 		list_add_tail(&ce->list, &ctbl->hash_list[hash]);
 		if (v6) {
+			ce->addr6.sin6_family = AF_INET6;
+			memcpy(ce->addr6.sin6_addr.s6_addr,
+			       lip, sizeof(struct in6_addr));
 			ret = clip6_get_mbox(dev, (const struct in6_addr *)lip);
 			if (ret) {
 				write_unlock_bh(&ctbl->lock);
+				dev_err(adap->pdev_dev,
+					"CLIP FW cmd failed with error %d, "
+					"Connections using %pI6c wont be "
+					"offloaded",
+					ret, ce->addr6.sin6_addr.s6_addr);
 				return ret;
 			}
+		} else {
+			ce->addr.sin_family = AF_INET;
+			memcpy((char *)(&ce->addr.sin_addr), lip,
+			       sizeof(struct in_addr));
 		}
 	} else {
 		write_unlock_bh(&ctbl->lock);
+		dev_info(adap->pdev_dev, "CLIP table overflow, "
+			 "Connections using %pI6c wont be offloaded",
+			 (void *)lip);
 		return -ENOMEM;
 	}
 	write_unlock_bh(&ctbl->lock);
@@ -140,19 +152,19 @@ void cxgb4_clip_release(const struct net_device *dev, const u32 *lip, u8 v6)
 	struct clip_entry *ce, *cte;
 	u32 *addr = (u32 *)lip;
 	int hash;
-	int addr_len;
+	int ret = -1;
 
-	if (v6)
-		addr_len = 16;
-	else
-		addr_len = 4;
-
-	hash = clip_addr_hash(ctbl, addr, addr_len);
+	hash = clip_addr_hash(ctbl, addr, v6);
 
 	read_lock_bh(&ctbl->lock);
 	list_for_each_entry(cte, &ctbl->hash_list[hash], list) {
-		if (addr_len == cte->addr_len &&
-		    memcmp(lip, cte->addr, cte->addr_len) == 0) {
+		if (cte->addr6.sin6_family == AF_INET6 && v6)
+			ret = memcmp(lip, cte->addr6.sin6_addr.s6_addr,
+				     sizeof(struct in6_addr));
+		else if (cte->addr.sin_family == AF_INET && !v6)
+			ret = memcmp(lip, (char *)(&cte->addr.sin_addr),
+				     sizeof(struct in_addr));
+		if (!ret) {
 			ce = cte;
 			read_unlock_bh(&ctbl->lock);
 			goto found;
@@ -249,10 +261,7 @@ int clip_tbl_show(struct seq_file *seq, void *v)
 	for (i = 0 ; i < ctbl->clipt_size;  ++i) {
 		list_for_each_entry(ce, &ctbl->hash_list[i], list) {
 			ip[0] = '\0';
-			if (ce->addr_len == 16)
-				sprintf(ip, "%pI6c", ce->addr);
-			else
-				sprintf(ip, "%pI4c", ce->addr);
+			sprintf(ip, "%pISc", &ce->addr);
 			seq_printf(seq, "%-25s   %u\n", ip,
 				   atomic_read(&ce->refcnt));
 		}
@@ -294,6 +303,10 @@ struct clip_tbl *t4_init_clip_tbl(unsigned int clipt_start,
 		INIT_LIST_HEAD(&ctbl->hash_list[i]);
 
 	cl_list = t4_alloc_mem(clipt_size*sizeof(struct clip_entry));
+	if (!cl_list) {
+		t4_free_mem(ctbl);
+		return NULL;
+	}
 	ctbl->cl_list = (void *)cl_list;
 
 	for (i = 0; i < clipt_size; i++) {

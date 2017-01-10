@@ -419,6 +419,7 @@ __generic_file_splice_read(struct file *in, loff_t *ppos,
 			 */
 			if (!page->mapping) {
 				unlock_page(page);
+retry_lookup:
 				page = find_or_create_page(mapping, index,
 						mapping_gfp_mask(mapping));
 
@@ -443,13 +444,10 @@ __generic_file_splice_read(struct file *in, loff_t *ppos,
 			error = mapping->a_ops->readpage(in, page);
 			if (unlikely(error)) {
 				/*
-				 * We really should re-lookup the page here,
-				 * but it complicates things a lot. Instead
-				 * lets just do what we already stored, and
-				 * we'll get it the next time we are called.
+				 * Re-lookup the page
 				 */
 				if (error == AOP_TRUNCATED_PAGE)
-					error = 0;
+					goto retry_lookup;
 
 				break;
 			}
@@ -527,6 +525,9 @@ ssize_t generic_file_splice_read(struct file *in, loff_t *ppos,
 {
 	loff_t isize, left;
 	int ret;
+
+	if (IS_DAX(in->f_mapping->host))
+		return default_file_splice_read(in, ppos, pipe, len, flags);
 
 	isize = i_size_read(in->f_mapping->host);
 	if (unlikely(*ppos >= isize))
@@ -1043,7 +1044,7 @@ static ssize_t generic_file_splice_write_actor(struct pipe_inode_info *pipe,
 	ssize_t ret;
 
 	mutex_lock_nested(&inode->i_mutex, I_MUTEX_CHILD);
-	ret = file_remove_suid(out);
+	ret = file_remove_privs(out);
 	if (!ret) {
 		file_update_time(out);
 		ret = splice_from_pipe_feed(pipe, sd, pipe_to_file);
@@ -1052,6 +1053,34 @@ static ssize_t generic_file_splice_write_actor(struct pipe_inode_info *pipe,
 
 	return ret;
 }
+
+static int write_pipe_buf(struct pipe_inode_info *pipe, struct pipe_buffer *buf,
+			  struct splice_desc *sd)
+{
+	int ret;
+	void *data;
+	loff_t tmp = sd->pos;
+
+	data = buf->ops->map(pipe, buf, 0);
+	ret = __kernel_write(sd->u.file, data + buf->offset, sd->len, &tmp);
+	buf->ops->unmap(pipe, buf, data);
+
+	return ret;
+}
+
+ssize_t default_file_splice_write(struct pipe_inode_info *pipe,
+					 struct file *out, loff_t *ppos,
+					 size_t len, unsigned int flags)
+{
+	ssize_t ret;
+
+	ret = splice_from_pipe(pipe, out, ppos, len, flags, write_pipe_buf);
+	if (ret > 0)
+		*ppos += ret;
+
+	return ret;
+}
+EXPORT_SYMBOL(default_file_splice_write);
 
 /**
  * generic_file_splice_write - splice data from a pipe to a file
@@ -1070,37 +1099,13 @@ ssize_t
 generic_file_splice_write(struct pipe_inode_info *pipe, struct file *out,
 			  loff_t *ppos, size_t len, unsigned int flags)
 {
+	if (IS_DAX(out->f_mapping->host))
+		return default_file_splice_write(pipe, out, ppos, len, flags);
+
 	return splice_write_to_file(pipe, out, ppos, len, flags,
 				    generic_file_splice_write_actor);
 }
 EXPORT_SYMBOL(generic_file_splice_write);
-
-static int write_pipe_buf(struct pipe_inode_info *pipe, struct pipe_buffer *buf,
-			  struct splice_desc *sd)
-{
-	int ret;
-	void *data;
-	loff_t tmp = sd->pos;
-
-	data = buf->ops->map(pipe, buf, 0);
-	ret = __kernel_write(sd->u.file, data + buf->offset, sd->len, &tmp);
-	buf->ops->unmap(pipe, buf, data);
-
-	return ret;
-}
-
-static ssize_t default_file_splice_write(struct pipe_inode_info *pipe,
-					 struct file *out, loff_t *ppos,
-					 size_t len, unsigned int flags)
-{
-	ssize_t ret;
-
-	ret = splice_from_pipe(pipe, out, ppos, len, flags, write_pipe_buf);
-	if (ret > 0)
-		*ppos += ret;
-
-	return ret;
-}
 
 /**
  * generic_splice_sendpage - splice data from a pipe to a socket
@@ -1153,10 +1158,7 @@ static long do_splice_from(struct pipe_inode_info *pipe, struct file *out,
 	else
 		splice_write = default_file_splice_write;
 
-	file_start_write(out);
-	ret = splice_write(pipe, out, ppos, len, flags);
-	file_end_write(out);
-	return ret;
+	return splice_write(pipe, out, ppos, len, flags);
 }
 
 /*
@@ -1401,7 +1403,9 @@ static long do_splice(struct file *in, loff_t __user *off_in,
 			offset = out->f_pos;
 		}
 
+		file_start_write(out);
 		ret = do_splice_from(ipipe, out, &offset, len, flags);
+		file_end_write(out);
 
 		if (!off_out)
 			out->f_pos = offset;

@@ -2410,11 +2410,20 @@ M:	Michael Neuling <mikey@neuling.org>
 L:	linuxppc-dev@lists.ozlabs.org
 S:	Supported
 F:	drivers/misc/cxl/
-F:	include/misc/cxl.h
+F:	include/misc/cxl*
 F:	include/uapi/misc/cxl.h
 F:	Documentation/powerpc/cxl.txt
 F:	Documentation/powerpc/cxl.txt
 F:	Documentation/ABI/testing/sysfs-class-cxl
+
+CXLFLASH (IBM Coherent Accelerator Processor Interface CAPI Flash) SCSI DRIVER
+M:	Manoj N. Kumar <manoj@linux.vnet.ibm.com>
+M:	Matthew R. Ochs <mrochs@linux.vnet.ibm.com>
+L:	linux-scsi@vger.kernel.org
+S:	Supported
+F:	drivers/scsi/cxlflash/
+F:	include/uapi/scsi/cxlflash_ioctls.h
+F:	Documentation/powerpc/cxlflash.txt
 
 STMMAC ETHERNET DRIVER
 M:	Giuseppe Cavallaro <peppe.cavallaro@st.com>
@@ -2555,6 +2564,13 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/balbi/usb.git
 S:	Maintained
 F:	drivers/usb/dwc3/
 
+DEVICE COREDUMP (DEV_COREDUMP)
+M:	Johannes Berg <johannes@sipsolutions.net>
+L:	linux-kernel@vger.kernel.org
+S:	Maintained
+F:	drivers/base/devcoredump.c
+F:	include/linux/devcoredump.h
+
 DEVICE FREQUENCY (DEVFREQ)
 M:	MyungJoo Ham <myungjoo.ham@samsung.com>
 M:	Kyungmin Park <kyungmin.park@samsung.com>
@@ -2581,11 +2597,25 @@ F:	drivers/md/persistent-data/
 F:	include/linux/device-mapper.h
 F:	include/linux/dm-*.h
 
+DEVLINK
+M:	Jiri Pirko <jiri@mellanox.com>
+L:	netdev@vger.kernel.org
+S:	Supported
+F:	net/core/devlink.c
+F:	include/net/devlink.h
+F:	include/uapi/linux/devlink.h
+
 DIOLAN U2C-12 I2C DRIVER
 M:	Guenter Roeck <linux@roeck-us.net>
 L:	linux-i2c@vger.kernel.org
 S:	Maintained
 F:	drivers/i2c/busses/i2c-diolan-u2c.c
+
+DIRECT ACCESS (DAX)
+M:	Matthew Wilcox <willy@linux.intel.com>
+L:	linux-fsdevel@vger.kernel.org
+S:	Supported
+F:	fs/dax.c
 
 DIRECTORY NOTIFICATION (DNOTIFY)
 M:	Eric Paris <eparis@parisplace.org>
@@ -3769,9 +3799,9 @@ F:	Documentation/blockdev/cpqarray.txt
 F:	drivers/block/cpqarray.*
 
 HEWLETT-PACKARD SMART ARRAY RAID DRIVER (hpsa)
-M:	Don Brace <don.brace@pmcs.com>
+M:	Don Brace <don.brace@microsemi.com>
 L:	iss_storagedev@hp.com
-L:	storagedev@pmcs.com
+L:	esc.storagedev@microsemi.com
 L:	linux-scsi@vger.kernel.org
 S:	Supported
 F:	Documentation/scsi/hpsa.txt
@@ -3789,6 +3819,13 @@ F:	Documentation/blockdev/cciss.txt
 F:	drivers/block/cciss*
 F:	include/linux/cciss_ioctl.h
 F:	include/uapi/linux/cciss_ioctl.h
+
+HFI1 DRIVER
+M:	Mike Marciniszyn <mike.marciniszyn@intel.com>
+M:	Dennis Dalessandro <dennis.dalessandro@intel.com>
+L:	linux-rdma@vger.kernel.org
+S:	Supported
+F:	drivers/infiniband/hw/hfi1
 
 HFS FILESYSTEM
 L:	linux-fsdevel@vger.kernel.org
@@ -4056,8 +4093,22 @@ L:	netdev@vger.kernel.org
 S:	Supported
 F:	drivers/net/ethernet/ibm/ibmveth.*
 
-IBM Power Virtual SCSI/FC Device Drivers
-M:	Robert Jennings <rcj@linux.vnet.ibm.com>
+IBM Power SRIOV Virtual NIC Device Driver
+M:	Thomas Falcon <tlfalcon@linux.vnet.ibm.com>
+M:	John Allen <jallen@linux.vnet.ibm.com>
+L:	netdev@vger.kernel.org
+S:	Supported
+F:	drivers/net/ethernet/ibm/ibmvnic.*
+
+IBM Power Virtual SCSI Device Drivers
+M:	Tyrel Datwyler <tyreld@linux.vnet.ibm.com>
+L:	linux-scsi@vger.kernel.org
+S:	Supported
+F:	drivers/scsi/ibmvscsi/ibmvscsi*
+F:	drivers/scsi/ibmvscsi/viosrp.h
+
+IBM Power Virtual FC Device Drivers
+M:	Tyrel Datwyler <tyreld@linux.vnet.ibm.com>
 L:	linux-scsi@vger.kernel.org
 S:	Supported
 F:	drivers/scsi/ibmvscsi/
@@ -4320,6 +4371,16 @@ F:	Documentation/networking/ixgbevf.txt
 F:	Documentation/networking/i40e.txt
 F:	Documentation/networking/i40evf.txt
 F:	drivers/net/ethernet/intel/
+
+INTEL RDMA RNIC DRIVER
+M:     Faisal Latif <faisal.latif@intel.com>
+R:     Chien Tin Tung <chien.tin.tung@intel.com>
+R:     Mustafa Ismail <mustafa.ismail@intel.com>
+R:     Shiraz Saleem <shiraz.saleem@intel.com>
+R:     Tatyana Nikolova <tatyana.e.nikolova@intel.com>
+L:     linux-rdma@vger.kernel.org
+S:     Supported
+F:     drivers/infiniband/hw/i40iw/
 
 INTEL PRO/WIRELESS 2100, 2200BG, 2915ABG NETWORK CONNECTION SUPPORT
 M:	Stanislav Yakovlev <stas.yakovlev@gmail.com>
@@ -4932,6 +4993,41 @@ F:	drivers/lguest/
 F:	include/linux/lguest*.h
 F:	tools/lguest/
 
+LIBNVDIMM: NON-VOLATILE MEMORY DEVICE SUBSYSTEM
+M:	Dan Williams <dan.j.williams@intel.com>
+L:	linux-nvdimm@lists.01.org
+Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
+S:	Supported
+F:	drivers/nvdimm/*
+F:	include/linux/nd.h
+F:	include/linux/libnvdimm.h
+F:	include/uapi/linux/ndctl.h
+
+LIBNVDIMM BLK: MMIO-APERTURE DRIVER
+M:	Ross Zwisler <ross.zwisler@linux.intel.com>
+L:	linux-nvdimm@lists.01.org
+Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
+S:	Supported
+F:	drivers/nvdimm/blk.c
+F:	drivers/nvdimm/region_devs.c
+F:	drivers/acpi/nfit*
+
+LIBNVDIMM BTT: BLOCK TRANSLATION TABLE
+M:	Vishal Verma <vishal.l.verma@intel.com>
+L:	linux-nvdimm@lists.01.org
+Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
+S:	Supported
+F:	drivers/nvdimm/btt*
+
+LIBNVDIMM PMEM: PERSISTENT MEMORY DRIVER
+M:	Ross Zwisler <ross.zwisler@linux.intel.com>
+L:	linux-nvdimm@lists.01.org
+Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
+S:	Supported
+F:	drivers/nvdimm/pmem.c
+F:	include/linux/pmem.h
+F:	arch/*/include/asm/pmem.h
+
 LINUX FOR IBM pSERIES (RS/6000)
 M:	Paul Mackerras <paulus@au.ibm.com>
 W:	http://www.ibm.com/linux/ltc/projects/ppc
@@ -5110,6 +5206,18 @@ S:	Supported
 F:	drivers/message/fusion/
 F:	drivers/scsi/mpt2sas/
 F:	drivers/scsi/mpt3sas/
+
+MICROSEMI SMART ARRAY SMARTPQI DRIVER (smartpqi)
+M:	Don Brace <don.brace@microsemi.com>
+L:	esc.storagedev@microsemi.com
+L:	linux-scsi@vger.kernel.org
+S:	Supported
+F:	drivers/scsi/smartpqi/smartpqi*.[ch]
+F:	drivers/scsi/smartpqi/Kconfig
+F:	drivers/scsi/smartpqi/Makefile
+F:	include/linux/cciss*.h
+F:	include/uapi/linux/cciss*.h
+F:	Documentation/scsi/smartpqi.txt
 
 LSILOGIC/SYMBIOS/NCR 53C8XX and 53C1010 PCI-SCSI drivers
 M:	Matthew Wilcox <matthew@wil.cx>
@@ -5782,6 +5890,7 @@ F:	include/linux/platform_data/pn544.h
 
 NFS, SUNRPC, AND LOCKD CLIENTS
 M:	Trond Myklebust <trond.myklebust@primarydata.com>
+M:	Anna Schumaker <anna.schumaker@netapp.com>
 L:	linux-nfs@vger.kernel.org
 W:	http://client.linux-nfs.org
 T:	git git://git.linux-nfs.org/projects/trondmy/linux-nfs.git
@@ -5849,8 +5958,13 @@ M:	Matthew Wilcox <willy@linux.intel.com>
 L:	linux-nvme@lists.infradead.org
 T:	git git://git.infradead.org/users/willy/linux-nvme.git
 S:	Supported
-F:	drivers/block/nvme*
+F:	drivers/nvme/host/
 F:	include/linux/nvme.h
+
+OBJTOOL
+M:	Josh Poimboeuf <jpoimboe@redhat.com>
+S:	Supported
+F:	tools/objtool/
 
 OMAP SUPPORT
 M:	Tony Lindgren <tony@atomide.com>
@@ -6104,9 +6218,10 @@ F:	fs/exofs/
 
 OVERLAY FILESYSTEM
 M:	Miklos Szeredi <miklos@szeredi.hu>
-L:	linux-fsdevel@vger.kernel.org
+L:	linux-unionfs@vger.kernel.org
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mszeredi/vfs.git
 S:	Supported
-F:	fs/overlayfs/*
+F:	fs/overlayfs/
 F:	Documentation/filesystems/overlayfs.txt
 
 P54 WIRELESS DRIVER
@@ -6259,6 +6374,12 @@ L:	linux-pci@vger.kernel.org
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
 F:	drivers/pci/host/*imx6*
+
+PCI DRIVER FOR INTEL VOLUME MANAGEMENT DEVICE (VMD)
+M:	Keith Busch <keith.busch@intel.com>
+L:	linux-pci@vger.kernel.org
+S:	Supported
+F:	arch/x86/pci/vmd.c
 
 PCI DRIVER FOR MVEBU (Marvell Armada 370 and Armada XP SOC support)
 M:	Thomas Petazzoni <thomas.petazzoni@free-electrons.com>
@@ -6730,6 +6851,16 @@ L:	netdev@vger.kernel.org
 S:	Supported
 F:	drivers/net/ethernet/qlogic/qlge/
 
+QLOGIC QL4xxx ETHERNET DRIVER
+M:	Yuval Mintz <Yuval.Mintz@qlogic.com>
+M:	Ariel Elior <Ariel.Elior@qlogic.com>
+M:	everest-linux-l2@qlogic.com
+L:	netdev@vger.kernel.org
+S:	Supported
+F:	drivers/net/ethernet/qlogic/qed/
+F:	include/linux/qed/
+F:	drivers/net/ethernet/qlogic/qede/
+
 QNX4 FILESYSTEM
 M:	Anders Larsen <al@alarsen.net>
 W:	http://www.alarsen.net/linux/qnx4fs/
@@ -6858,6 +6989,12 @@ M:	Venkat Venkatsubra <venkat.x.venkatsubra@oracle.com>
 L:	rds-devel@oss.oracle.com (moderated for non-subscribers)
 S:	Supported
 F:	net/rds/
+
+RDMAVT - RDMA verbs software
+M:	Dennis Dalessandro <dennis.dalessandro@intel.com>
+L:	linux-rdma@vger.kernel.org
+S:	Supported
+F:	drivers/infiniband/sw/rdmavt
 
 READ-COPY UPDATE (RCU)
 M:	Dipankar Sarma <dipankar@in.ibm.com>
@@ -7342,9 +7479,11 @@ F:	include/linux/ata.h
 F:	include/linux/libata.h
 
 SERVER ENGINES 10Gbps iSCSI - BladeEngine 2 DRIVER
-M:	Jayamohan Kallickal <jayamohan.kallickal@emulex.com>
+M:	Jayamohan Kallickal <jayamohan.kallickal@avagotech.com>
+M:	Minh Tran <minh.tran@avagotech.com>
+M:	John Soni Jose <sony.john-n@avagotech.com>
 L:	linux-scsi@vger.kernel.org
-W:	http://www.emulex.com
+W:	http://www.avagotech.com
 S:	Supported
 F:	drivers/scsi/be2iscsi/
 
@@ -8882,6 +9021,13 @@ S:	Maintained
 F:	Documentation/video4linux/zr364xx.txt
 F:	drivers/media/usb/zr364xx/
 
+ULPI BUS
+M:	Heikki Krogerus <heikki.krogerus@linux.intel.com>
+L:	linux-usb@vger.kernel.org
+S:	Maintained
+F:	drivers/usb/common/ulpi.c
+F:	include/linux/ulpi/
+
 USER-MODE LINUX (UML)
 M:	Jeff Dike <jdike@addtoit.com>
 M:	Richard Weinberger <richard@nod.at>
@@ -9002,6 +9148,13 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/via/via-velocity.*
 
+VIRT LIB
+M:	Alex Williamson <alex.williamson@redhat.com>
+M:	Paolo Bonzini <pbonzini@redhat.com>
+L:	kvm@vger.kernel.org
+S:	Supported
+F:	virt/lib/
+
 VIVI VIRTUAL VIDEO DRIVER
 M:	Hans Verkuil <hverkuil@xs4all.nl>
 L:	linux-media@vger.kernel.org
@@ -9036,6 +9189,14 @@ F:	Documentation/vme_api.txt
 F:	drivers/staging/vme/
 F:	drivers/vme/
 F:	include/linux/vme*
+
+VMWARE VMMOUSE SUBDRIVER
+M:	"VMware Graphics" <linux-graphics-maintainer@vmware.com>
+M:	"VMware, Inc." <pv-drivers@vmware.com>
+L:	linux-input@vger.kernel.org
+S:	Maintained
+F:	drivers/input/mouse/vmmouse.c
+F:	drivers/input/mouse/vmmouse.h
 
 VMWARE VMXNET3 ETHERNET DRIVER
 M:	Shreyas Bhatewara <sbhatewara@vmware.com>

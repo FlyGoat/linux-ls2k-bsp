@@ -82,6 +82,12 @@ physid_mask_t phys_cpu_present_map;
 unsigned int disabled_cpu_apicid = BAD_APICID;
 
 /*
+ * This variable controls which CPUs receive external NMIs.  By default,
+ * external NMIs are delivered only to the BSP.
+ */
+static int apic_extnmi = APIC_EXTNMI_BSP;
+
+/*
  * Map cpu index to physical APIC ID
  */
 DEFINE_EARLY_PER_CPU_READ_MOSTLY(u16, x86_cpu_to_apicid, BAD_APICID);
@@ -484,7 +490,7 @@ static int lapic_next_deadline(unsigned long delta,
 {
 	u64 tsc;
 
-	rdtscll(tsc);
+	tsc = rdtsc();
 	wrmsrl(MSR_IA32_TSC_DEADLINE, tsc + (((u64) delta) * TSC_DIVISOR));
 	return 0;
 }
@@ -619,7 +625,7 @@ static void __init lapic_cal_handler(struct clock_event_device *dev)
 	unsigned long pm = acpi_pm_read_early();
 
 	if (cpu_has_tsc)
-		rdtscll(tsc);
+		tsc = rdtsc();
 
 	switch (lapic_cal_loops++) {
 	case 0:
@@ -1238,6 +1244,8 @@ void __init init_bsp_APIC(void)
 	value = APIC_DM_NMI;
 	if (!lapic_is_integrated())		/* 82489DX */
 		value |= APIC_LVT_LEVEL_TRIGGER;
+	if (apic_extnmi == APIC_EXTNMI_NONE)
+		value |= APIC_LVT_MASKED;
 	apic_write(APIC_LVT1, value);
 }
 
@@ -1297,7 +1305,7 @@ void setup_local_APIC(void)
 	long long max_loops = cpu_khz;
 
 	if (cpu_has_tsc)
-		rdtscll(tsc);
+		tsc = rdtsc();
 
 	if (disable_apic) {
 		disable_ioapic_support();
@@ -1392,7 +1400,7 @@ void setup_local_APIC(void)
 		}
 		if (queued) {
 			if (cpu_has_tsc) {
-				rdtscll(ntsc);
+				ntsc = rdtsc();
 				max_loops = (cpu_khz << 10) - (ntsc - tsc);
 			} else
 				max_loops--;
@@ -1466,9 +1474,11 @@ void setup_local_APIC(void)
 	apic_write(APIC_LVT0, value);
 
 	/*
-	 * only the BP should see the LINT1 NMI signal, obviously.
+	 * Only the BSP sees the LINT1 NMI signal by default. This can be
+	 * modified by apic_extnmi= boot option.
 	 */
-	if (!cpu)
+	if ((!cpu && apic_extnmi != APIC_EXTNMI_NONE) ||
+	    apic_extnmi == APIC_EXTNMI_ALL)
 		value = APIC_DM_NMI;
 	else
 		value = APIC_DM_NMI | APIC_LVT_MASKED;
@@ -1567,6 +1577,7 @@ void enable_x2apic(void)
 	rdmsrl(MSR_IA32_APICBASE, msr);
 	if (x2apic_disabled) {
 		__disable_x2apic(msr);
+		x2apic_mode = 0;
 		return;
 	}
 
@@ -1580,36 +1591,66 @@ void enable_x2apic(void)
 }
 #endif /* CONFIG_X86_X2APIC */
 
-int __init enable_IR(void)
+static int __init try_to_enable_IR(void)
 {
-#ifdef CONFIG_IRQ_REMAP
-	if (!irq_remapping_supported()) {
-		pr_debug("intr-remapping not supported\n");
-		return -1;
-	}
-
-	if (!x2apic_preenabled && skip_ioapic_setup) {
+#ifdef CONFIG_X86_IO_APIC
+	if (!x2apic_enabled() && skip_ioapic_setup) {
 		pr_info("Skipped enabling intr-remap because of skipping "
 			"io-apic setup\n");
 		return -1;
 	}
-
-	return irq_remapping_enable();
 #endif
-	return -1;
+	return irq_remapping_enable();
+}
+
+static __init void try_to_enable_x2apic(int ir_stat)
+{
+#ifdef CONFIG_X86_X2APIC
+	if (!x2apic_supported())
+		return;
+
+	if (ir_stat != IRQ_REMAP_X2APIC_MODE) {
+		/* IR is required if there is APIC ID > 255 even when running
+		 * under KVM
+		 */
+		if (max_physical_apicid > 255 ||
+		    !hypervisor_x2apic_available()) {
+			pr_info("IRQ remapping doesn't support X2APIC mode, disable x2apic.\n");
+			if (x2apic_preenabled)
+				disable_x2apic();
+			return;
+		}
+
+		/*
+		 * without IR all CPUs can be addressed by IOAPIC/MSI
+		 * only in physical mode
+		 */
+		x2apic_force_phys();
+	}
+
+	if (!x2apic_mode) {
+		x2apic_mode = 1;
+		enable_x2apic();
+		pr_info("Enabled x2apic\n");
+	}
+#endif
 }
 
 void __init enable_IR_x2apic(void)
 {
 	unsigned long flags;
-	int ret, x2apic_enabled = 0;
-	int hardware_init_ret;
+	int ret, ir_stat;
 
-	/* Make sure irq_remap_ops are initialized */
-	setup_irq_remapping_ops();
+	if (!IS_ENABLED(CONFIG_X86_X2APIC)) {
+		u64 msr;
 
-	hardware_init_ret = irq_remapping_prepare();
-	if (hardware_init_ret && !x2apic_supported())
+		rdmsrl(MSR_IA32_APICBASE, msr);
+		if (msr & X2APIC_ENABLE)
+			panic("BIOS has enabled x2apic but kernel doesn't support x2apic, please disable x2apic in BIOS.\n");
+	}
+
+	ir_stat = irq_remapping_prepare();
+	if (ir_stat < 0 && !x2apic_supported())
 		return;
 
 	ret = save_ioapic_entries();
@@ -1624,47 +1665,13 @@ void __init enable_IR_x2apic(void)
 
 	if (x2apic_preenabled && nox2apic)
 		disable_x2apic();
+	/* If irq_remapping_prepare() succeded, try to enable it */
+	if (ir_stat >= 0)
+		ir_stat = try_to_enable_IR();
+	/* ir_stat contains the remap mode or an error code */
+	try_to_enable_x2apic(ir_stat);
 
-	if (hardware_init_ret)
-		ret = -1;
-	else
-		ret = enable_IR();
-
-	if (!x2apic_supported())
-		goto skip_x2apic;
-
-	if (ret < 0) {
-		/* IR is required if there is APIC ID > 255 even when running
-		 * under KVM
-		 */
-		if (max_physical_apicid > 255 ||
-		    !hypervisor_x2apic_available()) {
-			if (x2apic_preenabled)
-				disable_x2apic();
-			goto skip_x2apic;
-		}
-		/*
-		 * without IR all CPUs can be addressed by IOAPIC/MSI
-		 * only in physical mode
-		 */
-		x2apic_force_phys();
-	}
-
-	if (ret == IRQ_REMAP_XAPIC_MODE) {
-		pr_info("x2apic not enabled, IRQ remapping is in xapic mode\n");
-		goto skip_x2apic;
-	}
-
-	x2apic_enabled = 1;
-
-	if (x2apic_supported() && !x2apic_mode) {
-		x2apic_mode = 1;
-		enable_x2apic();
-		pr_info("Enabled x2apic\n");
-	}
-
-skip_x2apic:
-	if (ret < 0) /* IR enabling failed */
+	if (ir_stat < 0)
 		restore_ioapic_entries();
 	legacy_pic->restore_mask();
 	local_irq_restore(flags);
@@ -2200,6 +2207,20 @@ void generic_processor_info(int apicid, int version)
 		cpu = cpumask_next_zero(-1, cpu_present_mask);
 
 	/*
+	 * This can happen on physical hotplug. The sanity check at boot time
+	 * is done from native_smp_prepare_cpus() after num_possible_cpus() is
+	 * established.
+	 */
+	if (topology_update_package_map(apicid, cpu) < 0) {
+		int thiscpu = max + disabled_cpus;
+
+		pr_warning("ACPI: Package limit reached. Processor %d/0x%x ignored.\n",
+			   thiscpu, apicid);
+		disabled_cpus++;
+		return;
+	}
+
+	/*
 	 * Validate version
 	 */
 	if (version == 0x0) {
@@ -2643,3 +2664,23 @@ static int __init apic_set_disabled_cpu_apicid(char *arg)
 	return 0;
 }
 early_param("disable_cpu_apicid", apic_set_disabled_cpu_apicid);
+
+static int __init apic_set_extnmi(char *arg)
+{
+	if (!arg)
+		return -EINVAL;
+
+	if (!strncmp("all", arg, 3))
+		apic_extnmi = APIC_EXTNMI_ALL;
+	else if (!strncmp("none", arg, 4))
+		apic_extnmi = APIC_EXTNMI_NONE;
+	else if (!strncmp("bsp", arg, 3))
+		apic_extnmi = APIC_EXTNMI_BSP;
+	else {
+		pr_warn("Unknown external NMI delivery mode `%s' ignored\n", arg);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+early_param("apic_extnmi", apic_set_extnmi);

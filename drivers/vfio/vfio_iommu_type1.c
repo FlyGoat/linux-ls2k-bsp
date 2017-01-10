@@ -769,14 +769,14 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	list_add(&group->next, &domain->group_list);
 
 	if (!allow_unsafe_interrupts &&
-	    !iommu_domain_has_cap(domain->domain, IOMMU_CAP_INTR_REMAP)) {
+	    !iommu_capable(bus, IOMMU_CAP_INTR_REMAP)) {
 		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
 		       __func__);
 		ret = -EPERM;
 		goto out_detach;
 	}
 
-	if (iommu_domain_has_cap(domain->domain, IOMMU_CAP_CACHE_COHERENCY))
+	if (iommu_capable(bus, IOMMU_CAP_CACHE_COHERENCY))
 		domain->prot |= IOMMU_CACHE;
 
 	/*
@@ -962,11 +962,12 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
 		if (info.argsz < minsz)
 			return -EINVAL;
 
-		info.flags = 0;
+		info.flags = VFIO_IOMMU_INFO_PGSIZES;
 
 		info.iova_pgsizes = vfio_pgsize_bitmap(iommu);
 
-		return copy_to_user((void __user *)arg, &info, minsz);
+		return copy_to_user((void __user *)arg, &info, minsz) ?
+			-EFAULT : 0;
 
 	} else if (cmd == VFIO_IOMMU_MAP_DMA) {
 		struct vfio_iommu_type1_dma_map map;
@@ -999,7 +1000,8 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
 		if (ret)
 			return ret;
 
-		return copy_to_user((void __user *)arg, &unmap, minsz);
+		return copy_to_user((void __user *)arg, &unmap, minsz) ?
+			-EFAULT : 0;
 	}
 
 	return -ENOTTY;

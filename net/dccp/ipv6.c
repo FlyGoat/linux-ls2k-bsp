@@ -408,6 +408,7 @@ static int dccp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
 	ireq = inet_rsk(req);
 	ireq->ir_v6_rmt_addr = ipv6_hdr(skb)->saddr;
 	ireq->ir_v6_loc_addr = ipv6_hdr(skb)->daddr;
+	ireq->ireq_family = AF_INET6;
 
 	if (ipv6_opt_accepted(sk, skb) ||
 	    np->rxopt.bits.rxinfo || np->rxopt.bits.rxoinfo ||
@@ -536,7 +537,7 @@ static struct sock *dccp_v6_request_recv_sock(struct sock *sk,
 	 * comment in that function for the gory details. -acme
 	 */
 
-	__ip6_dst_store(newsk, dst, NULL, NULL);
+	ip6_dst_store(newsk, dst, NULL, NULL);
 	newsk->sk_route_caps = dst->dev->features & ~(NETIF_F_IP_CSUM |
 						      NETIF_F_TSO);
 	newdp6 = (struct dccp6_sock *)newsk;
@@ -863,7 +864,6 @@ static int dccp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 			flowlabel = fl6_sock_lookup(sk, fl6.flowlabel);
 			if (flowlabel == NULL)
 				return -EINVAL;
-			usin->sin6_addr = flowlabel->dst;
 			fl6_sock_release(flowlabel);
 		}
 	}
@@ -960,7 +960,7 @@ static int dccp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	np->saddr = *saddr;
 	inet->inet_rcv_saddr = LOOPBACK4_IPV6;
 
-	__ip6_dst_store(sk, dst, NULL, NULL);
+	ip6_dst_store(sk, dst, NULL, NULL);
 
 	icsk->icsk_ext_hdr_len = 0;
 	if (opt)

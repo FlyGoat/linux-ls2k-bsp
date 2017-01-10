@@ -37,6 +37,32 @@ enum {
 	XFS_LOWSP_MAX,
 };
 
+/*
+ * Error Configuration
+ *
+ * Error classes define the subsystem the configuration belongs to.
+ * Error numbers define the errors that are configurable.
+ */
+enum {
+	XFS_ERR_METADATA,
+	XFS_ERR_CLASS_MAX,
+};
+enum {
+	XFS_ERR_DEFAULT,
+	XFS_ERR_EIO,
+	XFS_ERR_ENOSPC,
+	XFS_ERR_ENODEV,
+	XFS_ERR_ERRNO_MAX,
+};
+
+#define XFS_ERR_RETRY_FOREVER	-1
+
+struct xfs_error_cfg {
+	struct xfs_kobj	kobj;
+	int		max_retries;
+	unsigned long	retry_timeout;	/* in jiffies, 0 = no timeout */
+};
+
 typedef struct xfs_mount {
 	struct super_block	*m_super;
 	xfs_tid_t		m_tid;		/* next unused tid for fs */
@@ -101,6 +127,8 @@ typedef struct xfs_mount {
 	__uint64_t		m_flags;	/* global mount flags */
 	int			m_ialloc_inos;	/* inodes in inode allocation */
 	int			m_ialloc_blks;	/* blocks in inode allocation */
+	int			m_ialloc_min_blks;/* min blocks in sparse inode
+						   * allocation */
 	int			m_inoalign_mask;/* mask sb_inoalignmt if used */
 	uint			m_qflags;	/* quota status flags */
 	struct xfs_trans_resv	m_resv;		/* precomputed res values */
@@ -125,6 +153,10 @@ typedef struct xfs_mount {
 	int64_t			m_low_space[XFS_LOWSP_MAX];
 						/* low free space thresholds */
 	struct xfs_kobj		m_kobj;
+	struct xfs_kobj		m_error_kobj;
+	struct xfs_kobj		m_error_meta_kobj;
+	struct xfs_error_cfg	m_error_cfg[XFS_ERR_CLASS_MAX][XFS_ERR_ERRNO_MAX];
+	struct xstats		m_stats;	/* per-fs stats */
 
 	struct workqueue_struct *m_buf_workqueue;
 	struct workqueue_struct	*m_data_workqueue;
@@ -144,6 +176,7 @@ typedef struct xfs_mount {
 	 * to various other kinds of pain inflicted on the pNFS server.
 	 */
 	__uint32_t		m_generation;
+	bool			m_fail_unmount;
 } xfs_mount_t;
 
 /*
@@ -152,6 +185,7 @@ typedef struct xfs_mount {
 #define XFS_MOUNT_WSYNC		(1ULL << 0)	/* for nfs - all metadata ops
 						   must be synchronous except
 						   for space allocations */
+#define XFS_MOUNT_UNMOUNTING	(1ULL << 1)	/* filesystem is unmounting */
 #define XFS_MOUNT_WAS_CLEAN	(1ULL << 3)
 #define XFS_MOUNT_FS_SHUTDOWN	(1ULL << 4)	/* atomic stop of all filesystem
 						   operations, typically for
@@ -178,6 +212,8 @@ typedef struct xfs_mount {
 #define XFS_MOUNT_FILESTREAMS	(1ULL << 24)	/* enable the filestreams
 						   allocator */
 #define XFS_MOUNT_NOATTR2	(1ULL << 25)	/* disable use of attr2 format */
+
+#define XFS_MOUNT_DAX		(1ULL << 62)	/* TEST ONLY! */
 
 
 /*
@@ -308,6 +344,7 @@ typedef struct xfs_perag {
 	int		pagb_count;	/* pagb slots in use */
 } xfs_perag_t;
 
+extern void	xfs_uuid_table_free(void);
 extern int	xfs_log_sbcount(xfs_mount_t *);
 extern __uint64_t xfs_default_resblks(xfs_mount_t *mp);
 extern int	xfs_mountfs(xfs_mount_t *mp);
@@ -331,5 +368,11 @@ extern int	xfs_sb_validate_fsb_count(struct xfs_sb *, __uint64_t);
 extern int	xfs_dev_is_read_only(struct xfs_mount *, char *);
 
 extern void	xfs_set_low_space_thresholds(struct xfs_mount *);
+
+struct xfs_error_cfg * xfs_error_get_cfg(struct xfs_mount *mp,
+		int error_class, int error);
+
+int	xfs_zero_extent(struct xfs_inode *ip, xfs_fsblock_t start_fsb,
+			xfs_off_t count_fsb);
 
 #endif	/* __XFS_MOUNT_H__ */

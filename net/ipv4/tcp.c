@@ -399,6 +399,7 @@ void tcp_init_sock(struct sock *sk)
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
 	tp->snd_cwnd_clamp = ~0;
 	tp->mss_cache = TCP_MSS_DEFAULT;
+	u64_stats_init(&tp->syncp);
 
 	tp->reordering = sysctl_tcp_reordering;
 	tcp_enable_early_retrans(tp);
@@ -800,9 +801,20 @@ struct sk_buff *sk_stream_alloc_skb(struct sock *sk, int size, gfp_t gfp)
 	/* The TCP header must be at least 32-bit aligned.  */
 	size = ALIGN(size, 4);
 
+	if (unlikely(tcp_under_memory_pressure(sk)))
+		sk_mem_reclaim_partial(sk);
+
 	skb = alloc_skb_fclone(size + sk->sk_prot->max_header, gfp);
-	if (skb) {
-		if (sk_wmem_schedule(sk, skb->truesize)) {
+	if (likely(skb)) {
+		bool mem_schedule;
+
+		if (skb_queue_len(&sk->sk_write_queue) == 0) {
+			mem_schedule = true;
+			sk_forced_mem_schedule(sk, skb->truesize);
+		} else {
+			mem_schedule = sk_wmem_schedule(sk, skb->truesize);
+		}
+		if (likely(mem_schedule)) {
 			skb_reserve(skb, sk->sk_prot->max_header);
 			/*
 			 * Make sure that we have exactly size bytes
@@ -982,7 +994,7 @@ int tcp_sendpage(struct sock *sk, struct page *page, int offset,
 	ssize_t res;
 
 	if (!(sk->sk_route_caps & NETIF_F_SG) ||
-	    !(sk->sk_route_caps & NETIF_F_ALL_CSUM))
+	    !(sk->sk_route_caps & NETIF_F_CSUM_MASK))
 		return sock_no_sendpage(sk->sk_socket, page, offset, size,
 					flags);
 
@@ -1157,7 +1169,7 @@ new_segment:
 				/*
 				 * Check whether we can use HW checksum.
 				 */
-				if (sk->sk_route_caps & NETIF_F_ALL_CSUM)
+				if (sk->sk_route_caps & NETIF_F_CSUM_MASK)
 					skb->ip_summed = CHECKSUM_PARTIAL;
 
 				skb_entail(sk, skb);
@@ -2603,11 +2615,12 @@ EXPORT_SYMBOL(compat_tcp_setsockopt);
 #endif
 
 /* Return information about state of tcp endpoint in API format. */
-void tcp_get_info(const struct sock *sk, struct tcp_info *info)
+void tcp_get_info(struct sock *sk, struct tcp_info *info)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	u32 now = tcp_time_stamp;
+	unsigned int start;
 	u32 rate;
 
 	memset(info, 0, sizeof(*info));
@@ -2674,6 +2687,14 @@ void tcp_get_info(const struct sock *sk, struct tcp_info *info)
 
 	rate = READ_ONCE(sk->sk_max_pacing_rate);
 	info->tcpi_max_pacing_rate = rate != ~0U ? rate : ~0ULL;
+
+	do {
+		start = u64_stats_fetch_begin_irq(&tp->syncp);
+		info->tcpi_bytes_acked = tp->bytes_acked;
+		info->tcpi_bytes_received = tp->bytes_received;
+	} while (u64_stats_fetch_retry_irq(&tp->syncp, start));
+	info->tcpi_segs_out = tp->segs_out;
+	info->tcpi_segs_in = tp->segs_in;
 }
 EXPORT_SYMBOL_GPL(tcp_get_info);
 

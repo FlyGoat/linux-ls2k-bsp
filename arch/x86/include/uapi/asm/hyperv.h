@@ -27,6 +27,8 @@
 #define HV_X64_MSR_VP_RUNTIME_AVAILABLE		(1 << 0)
 /* Partition Reference Counter (HV_X64_MSR_TIME_REF_COUNT) available*/
 #define HV_X64_MSR_TIME_REF_COUNT_AVAILABLE	(1 << 1)
+/* Partition reference TSC MSR is available */
+#define HV_X64_MSR_REFERENCE_TSC_AVAILABLE              (1 << 9)
 
 /* A partition's reference time stamp counter (TSC) page */
 #define HV_X64_MSR_REFERENCE_TSC		0x40000021
@@ -187,6 +189,17 @@
 #define HV_X64_MSR_SINT14			0x4000009E
 #define HV_X64_MSR_SINT15			0x4000009F
 
+/*
+ * Synthetic Timer MSRs. Four timers per vcpu.
+ */
+#define HV_X64_MSR_STIMER0_CONFIG		0x400000B0
+#define HV_X64_MSR_STIMER0_COUNT		0x400000B1
+#define HV_X64_MSR_STIMER1_CONFIG		0x400000B2
+#define HV_X64_MSR_STIMER1_COUNT		0x400000B3
+#define HV_X64_MSR_STIMER2_CONFIG		0x400000B4
+#define HV_X64_MSR_STIMER2_COUNT		0x400000B5
+#define HV_X64_MSR_STIMER3_CONFIG		0x400000B6
+#define HV_X64_MSR_STIMER3_COUNT		0x400000B7
 
 #define HV_X64_MSR_HYPERCALL_ENABLE		0x00000001
 #define HV_X64_MSR_HYPERCALL_PAGE_ADDRESS_SHIFT	12
@@ -224,5 +237,17 @@ typedef struct _HV_REFERENCE_TSC_PAGE {
 	__u64 tsc_scale;
 	__s64 tsc_offset;
 } HV_REFERENCE_TSC_PAGE, *PHV_REFERENCE_TSC_PAGE;
+
+/* Define the number of synthetic interrupt sources. */
+#define HV_SYNIC_SINT_COUNT		(16)
+/* Define the expected SynIC version. */
+#define HV_SYNIC_VERSION_1		(0x1)
+
+#define HV_SYNIC_CONTROL_ENABLE		(1ULL << 0)
+#define HV_SYNIC_SIMP_ENABLE		(1ULL << 0)
+#define HV_SYNIC_SIEFP_ENABLE		(1ULL << 0)
+#define HV_SYNIC_SINT_MASKED		(1ULL << 16)
+#define HV_SYNIC_SINT_AUTO_EOI		(1ULL << 17)
+#define HV_SYNIC_SINT_VECTOR_MASK	(0xFF)
 
 #endif

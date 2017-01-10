@@ -1,6 +1,7 @@
 #ifndef __SHMEM_FS_H
 #define __SHMEM_FS_H
 
+#include <linux/file.h>
 #include <linux/swap.h>
 #include <linux/mempolicy.h>
 #include <linux/pagemap.h>
@@ -11,6 +12,7 @@
 
 struct shmem_inode_info {
 	spinlock_t		lock;
+	unsigned int		seals;		/* shmem seals */
 	unsigned long		flags;
 	unsigned long		alloced;	/* data pages alloced to file */
 	union {
@@ -58,11 +60,30 @@ extern struct page *shmem_read_mapping_page_gfp(struct address_space *mapping,
 extern void shmem_truncate_range(struct inode *inode, loff_t start, loff_t end);
 extern int shmem_unuse(swp_entry_t entry, struct page *page);
 
+extern unsigned long shmem_swap_usage(struct vm_area_struct *vma);
+extern unsigned long shmem_partial_swap_usage(struct address_space *mapping,
+						pgoff_t start, pgoff_t end);
+
 static inline struct page *shmem_read_mapping_page(
 				struct address_space *mapping, pgoff_t index)
 {
 	return shmem_read_mapping_page_gfp(mapping, index,
 					mapping_gfp_mask(mapping));
 }
+
+#ifdef CONFIG_TMPFS
+
+extern int shmem_add_seals(struct file *file, unsigned int seals);
+extern int shmem_get_seals(struct file *file);
+extern long shmem_fcntl(struct file *file, unsigned int cmd, unsigned long arg);
+
+#else
+
+static inline long shmem_fcntl(struct file *f, unsigned int c, unsigned long a)
+{
+	return -EINVAL;
+}
+
+#endif
 
 #endif

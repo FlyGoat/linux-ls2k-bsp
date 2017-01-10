@@ -28,6 +28,9 @@
 #include <asm/unaligned.h>
 
 #ifdef __KERNEL__
+struct device;
+int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr);
+unsigned char *arch_get_platform_get_mac_address(void);
 u32 eth_get_headlen(void *data, unsigned int max_len);
 __be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev);
 extern const struct header_ops eth_header_ops;
@@ -148,6 +151,24 @@ static inline bool is_valid_ether_addr(const u8 *addr)
 }
 
 /**
+ * eth_proto_is_802_3 - Determine if a given Ethertype/length is a protocol
+ * @proto: Ethertype/length value to be tested
+ *
+ * Check that the value from the Ethertype/length field is a valid Ethertype.
+ *
+ * Return true if the valid is an 802.3 supported Ethertype.
+ */
+static inline bool eth_proto_is_802_3(__be16 proto)
+{
+#ifndef __BIG_ENDIAN
+	/* if CPU is little endian mask off bits representing LSB */
+	proto &= htons(0xFF00);
+#endif
+	/* cast both to u16 and compare since LSB can be ignored */
+	return (__force u16)proto >= (__force u16)htons(ETH_P_802_3_MIN);
+}
+
+/**
  * eth_random_addr - Generate software assigned random Ethernet address
  * @addr: Pointer to a six-byte array containing the Ethernet address
  *
@@ -220,6 +241,21 @@ static inline void ether_addr_copy(u8 *dst, const u8 *src)
 	a[1] = b[1];
 	a[2] = b[2];
 #endif
+}
+
+/*
+ * eth_hw_addr_inherit - Copy dev_addr from another net_device
+ * @dst: pointer to net_device to copy dev_addr to
+ * @src: pointer to net_device to copy dev_addr from
+ *
+ * Copy the Ethernet address from one net_device to another along with
+ * the address attributes (addr_assign_type).
+ */
+static inline void eth_hw_addr_inherit(struct net_device *dst,
+				       struct net_device *src)
+{
+	dst->addr_assign_type = src->addr_assign_type;
+	memcpy(dst->dev_addr, src->dev_addr, ETH_ALEN);
 }
 
 /**

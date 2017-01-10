@@ -17,6 +17,7 @@
  *
  */
 
+#include <linux/delay.h>
 #define VIRTIO_PCI_NO_LEGACY
 #include "virtio_pci_common.h"
 
@@ -271,9 +272,13 @@ static void vp_reset(struct virtio_device *vdev)
 	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
 	/* 0 status means a reset. */
 	vp_iowrite8(0, &vp_dev->common->device_status);
-	/* Flush out the status write, and flush in device writes,
-	 * including MSI-X interrupts, if any. */
-	vp_ioread8(&vp_dev->common->device_status);
+	/* After writing 0 to device_status, the driver MUST wait for a read of
+	 * device_status to return 0 before reinitializing the device.
+	 * This will flush out the status write, and flush in device writes,
+	 * including MSI-X interrupts, if any.
+	 */
+	while (vp_ioread8(&vp_dev->common->device_status))
+		msleep(1);
 	/* Flush pending VQ/configuration callbacks. */
 	vp_synchronize_vectors(vdev);
 }
@@ -360,7 +365,7 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 	}
 
 	/* activate the queue */
-	vp_iowrite16(num, &cfg->queue_size);
+	vp_iowrite16(info->num, &cfg->queue_size);
 	vp_iowrite64_twopart(virt_to_phys(info->queue),
 			     &cfg->queue_desc_lo, &cfg->queue_desc_hi);
 	vp_iowrite64_twopart(virt_to_phys(virtqueue_get_avail(vq)),

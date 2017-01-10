@@ -637,6 +637,10 @@ static void prb_retire_rx_blk_timer_expired(unsigned long data)
 
 	if (pkc->last_kactive_blk_num == pkc->kactive_blk_num) {
 		if (!frozen) {
+			if (!BLOCK_NUM_PKTS(pbd)) {
+				/* An empty block. Just refresh the timer. */
+				goto refresh_timer;
+			}
 			prb_retire_current_block(pkc, po, TP_STATUS_BLK_TMO);
 			if (!prb_dispatch_next_block(pkc, po))
 				goto refresh_timer;
@@ -724,6 +728,7 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 
 	struct tpacket3_hdr *last_pkt;
 	struct tpacket_hdr_v1 *h1 = &pbd1->hdr.bh1;
+	struct sock *sk = &po->sk;
 
 	if (po->stats.stats3.tp_drops)
 		status |= TP_STATUS_LOSING;
@@ -736,7 +741,11 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 		h1->ts_last_pkt.ts_sec = last_pkt->tp_sec;
 		h1->ts_last_pkt.ts_nsec	= last_pkt->tp_nsec;
 	} else {
-		/* Ok, we tmo'd - so get the current time */
+		/* Ok, we tmo'd - so get the current time.
+		 *
+		 * It shouldn't really happen as we don't close empty
+		 * blocks. See prb_retire_rx_blk_timer_expired().
+		 */
 		struct timespec ts;
 		getnstimeofday(&ts);
 		h1->ts_last_pkt.ts_sec = ts.tv_sec;
@@ -747,6 +756,8 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 
 	/* Flush the block */
 	prb_flush_block(pkc1, pbd1, status);
+
+	sk->sk_data_ready(sk, 0);
 
 	pkc1->kactive_blk_num = GET_NEXT_PRB_BLK_NUM(pkc1);
 }
@@ -1966,12 +1977,12 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 		smp_wmb();
 	}
 #endif
-	if (po->tp_version <= TPACKET_V2)
+	if (po->tp_version <= TPACKET_V2) {
 		__packet_set_status(po, h.raw, status);
-	else
+		sk->sk_data_ready(sk, 0);
+	} else {
 		prb_clear_blk_fill_status(&po->rx_ring);
-
-	sk->sk_data_ready(sk, 0);
+	}
 
 drop_n_restore:
 	if (skb_head != skb->data && skb_shared(skb)) {
@@ -2564,22 +2575,40 @@ static int packet_release(struct socket *sock)
  *	Attach a packet hook.
  */
 
-static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
+static int packet_do_bind(struct sock *sk, const char *name, int ifindex,
+			  __be16 proto)
 {
 	struct packet_sock *po = pkt_sk(sk);
-	const struct net_device *dev_curr;
+	struct net_device *dev_curr;
 	__be16 proto_curr;
 	bool need_rehook;
+	struct net_device *dev = NULL;
+	int ret = 0;
+	bool unlisted = false;
 
-	if (po->fanout) {
-		if (dev)
-			dev_put(dev);
-
+	if (po->fanout)
 		return -EINVAL;
-	}
 
 	lock_sock(sk);
 	spin_lock(&po->bind_lock);
+	rcu_read_lock();
+
+	if (name) {
+		dev = dev_get_by_name_rcu(sock_net(sk), name);
+		if (!dev) {
+			ret = -ENODEV;
+			goto out_unlock;
+		}
+	} else if (ifindex) {
+		dev = dev_get_by_index_rcu(sock_net(sk), ifindex);
+		if (!dev) {
+			ret = -ENODEV;
+			goto out_unlock;
+		}
+	}
+
+	if (dev)
+		dev_hold(dev);
 
 	proto_curr = po->prot_hook.type;
 	dev_curr = po->prot_hook.dev;
@@ -2587,24 +2616,37 @@ static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
 	need_rehook = proto_curr != proto || dev_curr != dev;
 
 	if (need_rehook) {
-		unregister_prot_hook(sk, true);
+		if (po->running) {
+			rcu_read_unlock();
+			__unregister_prot_hook(sk, true);
+			rcu_read_lock();
+			dev_curr = po->prot_hook.dev;
+			if (dev)
+				unlisted = !dev_get_by_index_rcu(sock_net(sk),
+								 dev->ifindex);
+		}
 
 		po->num = proto;
 		po->prot_hook.type = proto;
 
-		if (po->prot_hook.dev)
-			dev_put(po->prot_hook.dev);
-
-		po->prot_hook.dev = dev;
-
-		po->ifindex = dev ? dev->ifindex : 0;
-		packet_cached_dev_assign(po, dev);
+		if (unlikely(unlisted)) {
+			dev_put(dev);
+			po->prot_hook.dev = NULL;
+			po->ifindex = -1;
+			packet_cached_dev_reset(po);
+		} else {
+			po->prot_hook.dev = dev;
+			po->ifindex = dev ? dev->ifindex : 0;
+			packet_cached_dev_assign(po, dev);
+		}
 	}
+	if (dev_curr)
+		dev_put(dev_curr);
 
 	if (proto == 0 || !need_rehook)
 		goto out_unlock;
 
-	if (!dev || (dev->flags & IFF_UP)) {
+	if (!unlisted && (!dev || (dev->flags & IFF_UP))) {
 		register_prot_hook(sk);
 	} else {
 		sk->sk_err = ENETDOWN;
@@ -2613,9 +2655,10 @@ static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
 	}
 
 out_unlock:
+	rcu_read_unlock();
 	spin_unlock(&po->bind_lock);
 	release_sock(sk);
-	return 0;
+	return ret;
 }
 
 /*
@@ -2627,8 +2670,6 @@ static int packet_bind_spkt(struct socket *sock, struct sockaddr *uaddr,
 {
 	struct sock *sk = sock->sk;
 	char name[15];
-	struct net_device *dev;
-	int err = -ENODEV;
 
 	/*
 	 *	Check legality
@@ -2638,19 +2679,13 @@ static int packet_bind_spkt(struct socket *sock, struct sockaddr *uaddr,
 		return -EINVAL;
 	strlcpy(name, uaddr->sa_data, sizeof(name));
 
-	dev = dev_get_by_name(sock_net(sk), name);
-	if (dev)
-		err = packet_do_bind(sk, dev, pkt_sk(sk)->num);
-	return err;
+	return packet_do_bind(sk, name, 0, pkt_sk(sk)->num);
 }
 
 static int packet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
 	struct sockaddr_ll *sll = (struct sockaddr_ll *)uaddr;
 	struct sock *sk = sock->sk;
-	struct net_device *dev = NULL;
-	int err;
-
 
 	/*
 	 *	Check legality
@@ -2661,16 +2696,8 @@ static int packet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len
 	if (sll->sll_family != AF_PACKET)
 		return -EINVAL;
 
-	if (sll->sll_ifindex) {
-		err = -ENODEV;
-		dev = dev_get_by_index(sock_net(sk), sll->sll_ifindex);
-		if (dev == NULL)
-			goto out;
-	}
-	err = packet_do_bind(sk, dev, sll->sll_protocol ? : pkt_sk(sk)->num);
-
-out:
-	return err;
+	return packet_do_bind(sk, NULL, sll->sll_ifindex,
+			      sll->sll_protocol ? : pkt_sk(sk)->num);
 }
 
 static struct proto packet_proto = {
@@ -3452,10 +3479,11 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
 }
 
 
-static int packet_notifier(struct notifier_block *this, unsigned long msg, void *data)
+static int packet_notifier(struct notifier_block *this,
+			   unsigned long msg, void *ptr)
 {
 	struct sock *sk;
-	struct net_device *dev = data;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct net *net = dev_net(dev);
 
 	rcu_read_lock();
@@ -4043,7 +4071,7 @@ static struct pernet_operations packet_net_ops = {
 
 static void __exit packet_exit(void)
 {
-	unregister_netdevice_notifier(&packet_netdev_notifier);
+	unregister_netdevice_notifier_rh(&packet_netdev_notifier);
 	unregister_pernet_subsys(&packet_net_ops);
 	sock_unregister(PF_PACKET);
 	proto_unregister(&packet_proto);
@@ -4058,7 +4086,7 @@ static int __init packet_init(void)
 
 	sock_register(&packet_family_ops);
 	register_pernet_subsys(&packet_net_ops);
-	register_netdevice_notifier(&packet_netdev_notifier);
+	register_netdevice_notifier_rh(&packet_netdev_notifier);
 out:
 	return rc;
 }

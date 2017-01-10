@@ -50,7 +50,7 @@ struct scsi_host_sg_pool {
 	mempool_t	*pool;
 };
 
-#define SP(x) { x, "sgpool-" __stringify(x) }
+#define SP(x) { .size = x, "sgpool-" __stringify(x) }
 #if (SCSI_MAX_SG_SEGMENTS < 32)
 #error SCSI_MAX_SG_SEGMENTS is too small (must be 32 or greater)
 #endif
@@ -648,16 +648,18 @@ static void scsi_mq_free_sgtables(struct scsi_cmnd *cmd)
 static void scsi_mq_uninit_cmd(struct scsi_cmnd *cmd)
 {
 	struct scsi_device *sdev = cmd->device;
+	struct Scsi_Host *shost = sdev->host;
 	unsigned long flags;
-
-	BUG_ON(list_empty(&cmd->list));
 
 	scsi_mq_free_sgtables(cmd);
 	scsi_uninit_cmd(cmd);
 
-	spin_lock_irqsave(&sdev->list_lock, flags);
-	list_del_init(&cmd->list);
-	spin_unlock_irqrestore(&sdev->list_lock, flags);
+	if (shost->use_cmd_list) {
+		BUG_ON(list_empty(&cmd->list));
+		spin_lock_irqsave(&sdev->list_lock, flags);
+		list_del_init(&cmd->list);
+		spin_unlock_irqrestore(&sdev->list_lock, flags);
+	}
 }
 
 /*
@@ -737,12 +739,13 @@ static bool scsi_end_request(struct request *req, int error,
 	} else {
 		unsigned long flags;
 
+		if (bidi_bytes)
+			scsi_release_bidi_buffers(cmd);
+
 		spin_lock_irqsave(q->queue_lock, flags);
 		blk_finish_request(req, error);
 		spin_unlock_irqrestore(q->queue_lock, flags);
 
-		if (bidi_bytes)
-			scsi_release_bidi_buffers(cmd);
 		scsi_release_buffers(cmd);
 		scsi_next_command(cmd);
 	}
@@ -878,6 +881,14 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 				BUG();
 			return;
 		}
+	} else if (blk_rq_bytes(req) == 0 && result && !sense_deferred) {
+		/*
+		 * Certain non BLOCK_PC requests are commands that don't
+		 * actually transfer anything (FLUSH), so cannot use
+		 * good_bytes != blk_rq_bytes(req) as the signal for an error.
+		 * This sets the error explicitly for the problem case.
+		 */
+		error = __scsi_error_from_host_byte(cmd, result);
 	}
 
 	/* no bidi support for !REQ_TYPE_BLOCK_PC yet */
@@ -1838,13 +1849,11 @@ static int scsi_mq_prep_fn(struct request *req)
 	INIT_DELAYED_WORK(&cmd->abort_work, scmd_eh_abort_handler);
 	cmd->jiffies_at_alloc = jiffies;
 
-	/*
-	 * XXX: cmd_list lookups are only used by two drivers, try to get
-	 * rid of this list in common code.
-	 */
-	spin_lock_irq(&sdev->list_lock);
-	list_add_tail(&cmd->list, &sdev->cmd_list);
-	spin_unlock_irq(&sdev->list_lock);
+	if (shost->use_cmd_list) {
+		spin_lock_irq(&sdev->list_lock);
+		list_add_tail(&cmd->list, &sdev->cmd_list);
+		spin_unlock_irq(&sdev->list_lock);
+	}
 
 	sg = (void *)cmd + sizeof(struct scsi_cmnd) + shost->hostt->cmd_size;
 	cmd->sdb.table.sgl = sg;
@@ -1879,7 +1888,7 @@ static int scsi_mq_prep_fn(struct request *req)
 static void scsi_mq_done(struct scsi_cmnd *cmd)
 {
 	trace_scsi_dispatch_cmd_done(cmd);
-	blk_mq_complete_request(cmd->request);
+	blk_mq_complete_request(cmd->request, cmd->request->errors);
 }
 
 static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -2120,7 +2129,7 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 		return -ENOMEM;
 
 	shost->tag_set->ops = &scsi_mq_ops;
-	shost->tag_set->nr_hw_queues = 1;
+	shost->tag_set->nr_hw_queues = shost->nr_hw_queues ? : 1;
 	shost->tag_set->queue_depth = shost->can_queue;
 	shost->tag_set->cmd_size = cmd_size;
 	shost->tag_set->numa_node = NUMA_NO_NODE;
@@ -2347,7 +2356,7 @@ scsi_mode_sense(struct scsi_device *sdev, int dbd, int modepage,
 	unsigned char cmd[12];
 	int use_10_for_ms;
 	int header_length;
-	int result;
+	int result, retry_count = retries;
 	struct scsi_sense_hdr my_sshdr;
 
 	memset(data, 0, sizeof(*data));
@@ -2426,6 +2435,11 @@ scsi_mode_sense(struct scsi_device *sdev, int dbd, int modepage,
 			data->block_descriptor_length = buffer[3];
 		}
 		data->header_length = header_length;
+	} else if ((status_byte(result) == CHECK_CONDITION) &&
+		   scsi_sense_valid(sshdr) &&
+		   sshdr->sense_key == UNIT_ATTENTION && retry_count) {
+		retry_count--;
+		goto retry;
 	}
 
 	return result;
@@ -2631,6 +2645,9 @@ static void scsi_evt_emit(struct scsi_device *sdev, struct scsi_event *evt)
 	case SDEV_EVT_LUN_CHANGE_REPORTED:
 		envp[idx++] = "SDEV_UA=REPORTED_LUNS_DATA_HAS_CHANGED";
 		break;
+	case SDEV_EVT_ALUA_STATE_CHANGE_REPORTED:
+		envp[idx++] = "SDEV_UA=ASYMMETRIC_ACCESS_STATE_CHANGED";
+		break;
 	default:
 		/* do nothing */
 		break;
@@ -2734,6 +2751,7 @@ struct scsi_event *sdev_evt_alloc(enum scsi_device_event evt_type,
 	case SDEV_EVT_SOFT_THRESHOLD_REACHED_REPORTED:
 	case SDEV_EVT_MODE_PARAMETER_CHANGE_REPORTED:
 	case SDEV_EVT_LUN_CHANGE_REPORTED:
+	case SDEV_EVT_ALUA_STATE_CHANGE_REPORTED:
 	default:
 		/* do nothing */
 		break;

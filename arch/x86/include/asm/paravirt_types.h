@@ -42,6 +42,7 @@
 #include <asm/desc_defs.h>
 #include <asm/kmap_types.h>
 #include <asm/pgtable_types.h>
+#include <linux/rh_kabi.h>
 
 struct page;
 struct thread_struct;
@@ -156,9 +157,14 @@ struct pv_cpu_ops {
 	u64 (*read_msr)(unsigned int msr, int *err);
 	int (*write_msr)(unsigned int msr, unsigned low, unsigned high);
 
+	/*
+	 * The member read_tsc() can't be deprecated because it is used
+	 * by get_cycles() indirectly.
+	 */
+
 	u64 (*read_tsc)(void);
 	u64 (*read_pmc)(int counter);
-	unsigned long long (*read_tscp)(unsigned int *aux);
+	RH_KABI_DEPRECATE_FN(unsigned long long, read_tscp, unsigned int *aux)
 
 	/*
 	 * Atomically enable interrupts and return to userspace.  This
@@ -486,8 +492,9 @@ int paravirt_disable_iospace(void);
  * makes sure the incoming and outgoing types are always correct.
  */
 #ifdef CONFIG_X86_32
-#define PVOP_VCALL_ARGS				\
-	unsigned long __eax = __eax, __edx = __edx, __ecx = __ecx
+#define PVOP_VCALL_ARGS							\
+	unsigned long __eax = __eax, __edx = __edx, __ecx = __ecx;	\
+	register void *__sp asm("esp")
 #define PVOP_CALL_ARGS			PVOP_VCALL_ARGS
 
 #define PVOP_CALL_ARG1(x)		"a" ((unsigned long)(x))
@@ -505,9 +512,10 @@ int paravirt_disable_iospace(void);
 #define VEXTRA_CLOBBERS
 #else  /* CONFIG_X86_64 */
 /* [re]ax isn't an arg, but the return val */
-#define PVOP_VCALL_ARGS					\
-	unsigned long __edi = __edi, __esi = __esi,	\
-		__edx = __edx, __ecx = __ecx, __eax = __eax
+#define PVOP_VCALL_ARGS						\
+	unsigned long __edi = __edi, __esi = __esi,		\
+		__edx = __edx, __ecx = __ecx, __eax = __eax;	\
+	register void *__sp asm("rsp")
 #define PVOP_CALL_ARGS		PVOP_VCALL_ARGS
 
 #define PVOP_CALL_ARG1(x)		"D" ((unsigned long)(x))
@@ -546,7 +554,7 @@ int paravirt_disable_iospace(void);
 			asm volatile(pre				\
 				     paravirt_alt(PARAVIRT_CALL)	\
 				     post				\
-				     : call_clbr			\
+				     : call_clbr, "+r" (__sp)		\
 				     : paravirt_type(op),		\
 				       paravirt_clobber(clbr),		\
 				       ##__VA_ARGS__			\
@@ -556,7 +564,7 @@ int paravirt_disable_iospace(void);
 			asm volatile(pre				\
 				     paravirt_alt(PARAVIRT_CALL)	\
 				     post				\
-				     : call_clbr			\
+				     : call_clbr, "+r" (__sp)		\
 				     : paravirt_type(op),		\
 				       paravirt_clobber(clbr),		\
 				       ##__VA_ARGS__			\
@@ -583,7 +591,7 @@ int paravirt_disable_iospace(void);
 		asm volatile(pre					\
 			     paravirt_alt(PARAVIRT_CALL)		\
 			     post					\
-			     : call_clbr				\
+			     : call_clbr, "+r" (__sp)			\
 			     : paravirt_type(op),			\
 			       paravirt_clobber(clbr),			\
 			       ##__VA_ARGS__				\

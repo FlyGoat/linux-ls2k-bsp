@@ -309,21 +309,39 @@ EXPORT_SYMBOL_GPL(tty_ldisc_deref);
 
 
 static inline int __lockfunc
-tty_ldisc_lock(struct tty_struct *tty, unsigned long timeout)
+__tty_ldisc_lock(struct tty_struct *tty, unsigned long timeout)
 {
 	return ldsem_down_write(&tty->ldisc_sem, timeout);
 }
 
 static inline int __lockfunc
-tty_ldisc_lock_nested(struct tty_struct *tty, unsigned long timeout)
+__tty_ldisc_lock_nested(struct tty_struct *tty, unsigned long timeout)
 {
 	return ldsem_down_write_nested(&tty->ldisc_sem,
 				       LDISC_SEM_OTHER, timeout);
 }
 
-static inline void tty_ldisc_unlock(struct tty_struct *tty)
+static inline void __tty_ldisc_unlock(struct tty_struct *tty)
 {
 	return ldsem_up_write(&tty->ldisc_sem);
+}
+
+static int __lockfunc
+tty_ldisc_lock(struct tty_struct *tty, unsigned long timeout)
+{
+	int ret;
+
+	ret = __tty_ldisc_lock(tty, timeout);
+	if (!ret)
+		return -EBUSY;
+	set_bit(TTY_LDISC_HALTED, &tty->flags);
+	return 0;
+}
+
+static void tty_ldisc_unlock(struct tty_struct *tty)
+{
+	clear_bit(TTY_LDISC_HALTED, &tty->flags);
+	__tty_ldisc_unlock(tty);
 }
 
 static int __lockfunc
@@ -333,24 +351,24 @@ tty_ldisc_lock_pair_timeout(struct tty_struct *tty, struct tty_struct *tty2,
 	int ret;
 
 	if (tty < tty2) {
-		ret = tty_ldisc_lock(tty, timeout);
+		ret = __tty_ldisc_lock(tty, timeout);
 		if (ret) {
-			ret = tty_ldisc_lock_nested(tty2, timeout);
+			ret = __tty_ldisc_lock_nested(tty2, timeout);
 			if (!ret)
-				tty_ldisc_unlock(tty);
+				__tty_ldisc_unlock(tty);
 		}
 	} else {
 		/* if this is possible, it has lots of implications */
 		WARN_ON_ONCE(tty == tty2);
 		if (tty2 && tty != tty2) {
-			ret = tty_ldisc_lock(tty2, timeout);
+			ret = __tty_ldisc_lock(tty2, timeout);
 			if (ret) {
-				ret = tty_ldisc_lock_nested(tty, timeout);
+				ret = __tty_ldisc_lock_nested(tty, timeout);
 				if (!ret)
-					tty_ldisc_unlock(tty2);
+					__tty_ldisc_unlock(tty2);
 			}
 		} else
-			ret = tty_ldisc_lock(tty, timeout);
+			ret = __tty_ldisc_lock(tty, timeout);
 	}
 
 	if (!ret)
@@ -371,19 +389,9 @@ tty_ldisc_lock_pair(struct tty_struct *tty, struct tty_struct *tty2)
 static void __lockfunc tty_ldisc_unlock_pair(struct tty_struct *tty,
 					     struct tty_struct *tty2)
 {
-	tty_ldisc_unlock(tty);
+	__tty_ldisc_unlock(tty);
 	if (tty2)
-		tty_ldisc_unlock(tty2);
-}
-
-static void __lockfunc tty_ldisc_enable_pair(struct tty_struct *tty,
-					     struct tty_struct *tty2)
-{
-	clear_bit(TTY_LDISC_HALTED, &tty->flags);
-	if (tty2)
-		clear_bit(TTY_LDISC_HALTED, &tty2->flags);
-
-	tty_ldisc_unlock_pair(tty, tty2);
+		__tty_ldisc_unlock(tty2);
 }
 
 /**
@@ -518,14 +526,13 @@ int tty_set_ldisc(struct tty_struct *tty, int ldisc)
 {
 	int retval;
 	struct tty_ldisc *old_ldisc, *new_ldisc;
-	struct tty_struct *o_tty = tty->link;
 
 	new_ldisc = tty_ldisc_get(tty, ldisc);
 	if (IS_ERR(new_ldisc))
 		return PTR_ERR(new_ldisc);
 
 	tty_lock(tty);
-	retval = tty_ldisc_lock_pair_timeout(tty, o_tty, 5 * HZ);
+	retval = tty_ldisc_lock(tty, 5 * HZ);
 	if (retval) {
 		tty_ldisc_put(new_ldisc);
 		tty_unlock(tty);
@@ -537,7 +544,7 @@ int tty_set_ldisc(struct tty_struct *tty, int ldisc)
 	 */
 
 	if (tty->ldisc->ops->num == ldisc) {
-		tty_ldisc_enable_pair(tty, o_tty);
+		tty_ldisc_unlock(tty);
 		tty_ldisc_put(new_ldisc);
 		tty_unlock(tty);
 		return 0;
@@ -548,11 +555,10 @@ int tty_set_ldisc(struct tty_struct *tty, int ldisc)
 
 	old_ldisc = tty->ldisc;
 
-	if (test_bit(TTY_HUPPING, &tty->flags) ||
-	    test_bit(TTY_HUPPED, &tty->flags)) {
+	if (test_bit(TTY_HUPPED, &tty->flags)) {
 		/* We were raced by the hangup method. It will have stomped
 		   the ldisc data and closed the ldisc down */
-		tty_ldisc_enable_pair(tty, o_tty);
+		tty_ldisc_unlock(tty);
 		tty_ldisc_put(new_ldisc);
 		tty_unlock(tty);
 		return -EIO;
@@ -584,13 +590,11 @@ int tty_set_ldisc(struct tty_struct *tty, int ldisc)
 	/*
 	 *	Allow ldisc referencing to occur again
 	 */
-	tty_ldisc_enable_pair(tty, o_tty);
+	tty_ldisc_unlock(tty);
 
 	/* Restart the work queue in case no characters kick it off. Safe if
 	   already running */
 	schedule_work(&tty->port->buf.work);
-	if (o_tty)
-		schedule_work(&o_tty->port->buf.work);
 
 	tty_unlock(tty);
 	return retval;
@@ -685,7 +689,7 @@ void tty_ldisc_hangup(struct tty_struct *tty)
 	 *
 	 * Avoid racing set_ldisc or tty_ldisc_release
 	 */
-	tty_ldisc_lock_pair(tty, tty->link);
+	tty_ldisc_lock(tty, MAX_SCHEDULE_TIMEOUT);
 
 	if (tty->ldisc) {
 
@@ -707,7 +711,7 @@ void tty_ldisc_hangup(struct tty_struct *tty)
 			WARN_ON(tty_ldisc_open(tty, tty->ldisc));
 		}
 	}
-	tty_ldisc_enable_pair(tty, tty->link);
+	tty_ldisc_unlock(tty);
 	if (reset)
 		tty_reset_termios(tty);
 
@@ -759,18 +763,17 @@ static void tty_ldisc_kill(struct tty_struct *tty)
 
 /**
  *	tty_ldisc_release		-	release line discipline
- *	@tty: tty being shut down
- *	@o_tty: pair tty for pty/tty pairs
+ *	@tty: tty being shut down (or one end of pty pair)
  *
- *	Called during the final close of a tty/pty pair in order to shut down
- *	the line discpline layer. On exit the ldisc assigned is N_TTY and the
- *	ldisc has not been opened.
- *
- *	Holding ldisc_sem write lock serializes tty->ldisc changes.
+ *	Called during the final close of a tty or a pty pair in order to shut
+ *	down the line discpline layer. On exit, each ldisc assigned is N_TTY and
+ *	each ldisc has not been opened.
  */
 
-void tty_ldisc_release(struct tty_struct *tty, struct tty_struct *o_tty)
+void tty_ldisc_release(struct tty_struct *tty)
 {
+	struct tty_struct *o_tty = tty->link;
+
 	/*
 	 * Shutdown this line discipline. As this is the final close,
 	 * it does not race with the set_ldisc code path.

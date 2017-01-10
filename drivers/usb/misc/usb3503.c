@@ -249,10 +249,10 @@ static int usb3503_probe(struct usb3503 *hub)
 			}
 		}
 
-		hub->gpio_intn	= of_get_named_gpio(np, "connect-gpios", 0);
+		hub->gpio_intn	= of_get_named_gpio(np, "intn-gpios", 0);
 		if (hub->gpio_intn == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		hub->gpio_connect = of_get_named_gpio(np, "intn-gpios", 0);
+		hub->gpio_connect = of_get_named_gpio(np, "connect-gpios", 0);
 		if (hub->gpio_connect == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
 		hub->gpio_reset = of_get_named_gpio(np, "reset-gpios", 0);
@@ -410,7 +410,7 @@ static int __init usb3503_init(void)
 {
 	int err;
 
-	err = i2c_register_driver(THIS_MODULE, &usb3503_i2c_driver);
+	err = i2c_add_driver(&usb3503_i2c_driver);
 	if (err != 0)
 		pr_err("usb3503: Failed to register I2C driver: %d\n", err);
 

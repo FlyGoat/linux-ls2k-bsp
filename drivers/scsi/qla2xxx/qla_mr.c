@@ -862,7 +862,7 @@ qlafx00_config_queues(struct scsi_qla_host *vha)
 	dma_addr_t bar2_hdl = pci_resource_start(ha->pdev, 2);
 
 	req->length = ha->req_que_len;
-	req->ring = (void *)ha->iobase + ha->req_que_off;
+	req->ring = (void __force *)ha->iobase + ha->req_que_off;
 	req->dma = bar2_hdl + ha->req_que_off;
 	if ((!req->ring) || (req->length == 0)) {
 		ql_log_pci(ql_log_info, ha->pdev, 0x012f,
@@ -877,7 +877,7 @@ qlafx00_config_queues(struct scsi_qla_host *vha)
 	    ha->req_que_off, (u64)req->dma);
 
 	rsp->length = ha->rsp_que_len;
-	rsp->ring = (void *)ha->iobase + ha->rsp_que_off;
+	rsp->ring = (void __force *)ha->iobase + ha->rsp_que_off;
 	rsp->dma = bar2_hdl + ha->rsp_que_off;
 	if ((!rsp->ring) || (rsp->length == 0)) {
 		ql_log_pci(ql_log_info, ha->pdev, 0x0131,
@@ -1317,10 +1317,10 @@ int
 qlafx00_configure_devices(scsi_qla_host_t *vha)
 {
 	int  rval;
-	unsigned long flags, save_flags;
+	unsigned long flags;
 	rval = QLA_SUCCESS;
 
-	save_flags = flags = vha->dpc_flags;
+	flags = vha->dpc_flags;
 
 	ql_dbg(ql_dbg_disc, vha, 0x2090,
 	    "Configure devices -- dpc flags =0x%lx\n", flags);
@@ -1425,7 +1425,7 @@ qlafx00_init_response_q_entries(struct rsp_que *rsp)
 	pkt = rsp->ring_ptr;
 	for (cnt = 0; cnt < rsp->length; cnt++) {
 		pkt->signature = RESPONSE_PROCESSED;
-		WRT_REG_DWORD((void __iomem *)&pkt->signature,
+		WRT_REG_DWORD((void __force __iomem *)&pkt->signature,
 		    RESPONSE_PROCESSED);
 		pkt++;
 	}
@@ -2280,7 +2280,6 @@ qlafx00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
 	struct sts_entry_fx00 *sts;
 	__le16		comp_status;
 	__le16		scsi_status;
-	uint16_t	ox_id;
 	__le16		lscsi_status;
 	int32_t		resid;
 	uint32_t	sense_len, par_sense_len, rsp_info_len, resid_len,
@@ -2345,7 +2344,6 @@ qlafx00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
 
 	fcport = sp->fcport;
 
-	ox_id = 0;
 	sense_len = par_sense_len = rsp_info_len = resid_len =
 		fw_resid_len = 0;
 	if (scsi_status & cpu_to_le16((uint16_t)SS_SENSE_LEN_VALID))
@@ -2529,12 +2527,12 @@ check_scsi_status:
 		ql_dbg(ql_dbg_io, fcport->vha, 0x3058,
 		    "FCP command status: 0x%x-0x%x (0x%x) nexus=%ld:%d:%d "
 		    "tgt_id: 0x%x lscsi_status: 0x%x cdb=%10phN len=0x%x "
-		    "rsp_info=0x%x resid=0x%x fw_resid=0x%x sense_len=0x%x, "
+		    "rsp_info=%p resid=0x%x fw_resid=0x%x sense_len=0x%x, "
 		    "par_sense_len=0x%x, rsp_info_len=0x%x\n",
 		    comp_status, scsi_status, res, vha->host_no,
 		    cp->device->id, cp->device->lun, fcport->tgt_id,
 		    lscsi_status, cp->cmnd, scsi_bufflen(cp),
-		    rsp_info_len, resid_len, fw_resid_len, sense_len,
+		    rsp_info, resid_len, fw_resid_len, sense_len,
 		    par_sense_len, rsp_info_len);
 
 	if (rsp->status_srb == NULL)
@@ -2927,8 +2925,9 @@ qlafx00_intr_handler(int irq, void *dev_id)
 	vha = pci_get_drvdata(ha->pdev);
 	for (iter = 50; iter--; clr_intr = 0) {
 		stat = QLAFX00_RD_INTR_REG(ha);
-		intr_stat = stat & QLAFX00_HST_INT_STS_BITS;
-		if (!intr_stat)
+		if (qla2x00_check_reg32_for_disconnect(vha, stat))
+			break;
+		if ((stat & QLAFX00_HST_INT_STS_BITS) == 0)
 			break;
 
 		if (stat & QLAFX00_INTR_MB_CMPLT) {
@@ -3008,7 +3007,7 @@ qlafx00_build_scsi_iocbs(srb_t *sp, struct cmd_type_7_fx00 *cmd_pkt,
 
 	/* No data transfer */
 	if (!scsi_bufflen(cmd) || cmd->sc_data_direction == DMA_NONE) {
-		lcmd_pkt->byte_count = __constant_cpu_to_le32(0);
+		lcmd_pkt->byte_count = cpu_to_le32(0);
 		return;
 	}
 
@@ -3070,7 +3069,7 @@ qlafx00_build_scsi_iocbs(srb_t *sp, struct cmd_type_7_fx00 *cmd_pkt,
 int
 qlafx00_start_scsi(srb_t *sp)
 {
-	int		ret, nseg;
+	int		nseg;
 	unsigned long   flags;
 	uint32_t        index;
 	uint32_t	handle;
@@ -3088,8 +3087,6 @@ qlafx00_start_scsi(srb_t *sp)
 	char		tag[2];
 
 	/* Setup device pointers. */
-	ret = 0;
-
 	rsp = ha->rsp_q_map[0];
 	req = vha->req;
 

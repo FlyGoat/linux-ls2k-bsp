@@ -296,9 +296,9 @@ static void trace_packet(const struct sk_buff *skb,
 		    &chainname, &comment, &rulenum) != 0)
 			break;
 
-	nf_log_packet(net, AF_INET6, hook, skb, in, out, &trace_loginfo,
-		      "TRACE: %s:%s:%s:%u ",
-		      tablename, chainname, comment, rulenum);
+	nf_log_trace(net, AF_INET6, hook, skb, in, out, &trace_loginfo,
+		     "TRACE: %s:%s:%s:%u ",
+		     tablename, chainname, comment, rulenum);
 }
 #endif
 
@@ -436,8 +436,8 @@ ip6t_do_table(struct sk_buff *skb,
 
 	*stackptr = origptr;
 
- 	xt_write_recseq_end(addend);
- 	local_bh_enable();
+	xt_write_recseq_end(addend);
+	local_bh_enable();
 
 #ifdef DEBUG_ALLOW_ALL
 	return NF_ACCEPT;

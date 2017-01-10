@@ -225,6 +225,18 @@ extern void rcu_idle_exit(void);
 extern void rcu_irq_enter(void);
 extern void rcu_irq_exit(void);
 
+#ifdef CONFIG_RCU_STALL_COMMON
+void rcu_sysrq_start(void);
+void rcu_sysrq_end(void);
+#else /* #ifdef CONFIG_RCU_STALL_COMMON */
+static inline void rcu_sysrq_start(void)
+{
+}
+static inline void rcu_sysrq_end(void)
+{
+}
+#endif /* #else #ifdef CONFIG_RCU_STALL_COMMON */
+
 #ifdef CONFIG_RCU_USER_QS
 extern void rcu_user_enter(void);
 extern void rcu_user_exit(void);
@@ -240,6 +252,14 @@ static inline void rcu_user_hooks_switch(struct task_struct *prev,
 #endif /* CONFIG_RCU_USER_QS */
 
 extern void exit_rcu(void);
+
+#ifdef CONFIG_RCU_NOCB_CPU
+void rcu_init_nohz(void);
+#else /* #ifdef CONFIG_RCU_NOCB_CPU */
+static inline void rcu_init_nohz(void)
+{
+}
+#endif /* #else #ifdef CONFIG_RCU_NOCB_CPU */
 
 /**
  * RCU_NONIDLE - Indicate idle-loop code that needs RCU readers

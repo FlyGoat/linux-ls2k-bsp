@@ -90,6 +90,7 @@ static int create_strip_zones(struct mddev *mddev, struct r0conf **private_conf)
 	struct r0conf *conf = kzalloc(sizeof(*conf), GFP_KERNEL);
 	unsigned short blksize = 512;
 
+	*private_conf = ERR_PTR(-ENOMEM);
 	if (!conf)
 		return -ENOMEM;
 	rdev_for_each(rdev1, mddev) {
@@ -498,8 +499,6 @@ static int raid0_run(struct mddev *mddev)
 	dump_zones(mddev);
 
 	ret = md_integrity_register(mddev);
-	if (ret)
-		raid0_free(mddev, conf);
 
 	return ret;
 }
@@ -643,13 +642,13 @@ static void *raid0_takeover_raid10(struct mddev *mddev)
 	 *  - all mirrors must be already degraded
 	 */
 	if (mddev->layout != ((1 << 8) + 2)) {
-		printk(KERN_ERR "md/raid0:%s:: Raid0 cannot takover layout: 0x%x\n",
+		printk(KERN_ERR "md/raid0:%s:: Raid0 cannot takeover layout: 0x%x\n",
 		       mdname(mddev),
 		       mddev->layout);
 		return ERR_PTR(-EINVAL);
 	}
 	if (mddev->raid_disks & 1) {
-		printk(KERN_ERR "md/raid0:%s: Raid0 cannot takover Raid10 with odd disk number.\n",
+		printk(KERN_ERR "md/raid0:%s: Raid0 cannot takeover Raid10 with odd disk number.\n",
 		       mdname(mddev));
 		return ERR_PTR(-EINVAL);
 	}

@@ -740,7 +740,7 @@ static void ibm_unconfigure_device(struct pci_func *func)
  */
 static u8 bus_structure_fixup(u8 busno)
 {
-	struct pci_bus *bus;
+	struct pci_bus *bus, *b;
 	struct pci_dev *dev;
 	u16 l;
 
@@ -767,7 +767,11 @@ static u8 bus_structure_fixup(u8 busno)
 					(l != 0x0000) && (l != 0xffff)) {
 			debug("%s - Inside bus_structure_fixup()\n",
 							__func__);
-			pci_scan_bus(busno, ibmphp_pci_bus->ops, NULL);
+			b = pci_scan_bus(busno, ibmphp_pci_bus->ops, NULL);
+			if (!b)
+				continue;
+
+			pci_bus_add_devices(b);
 			break;
 		}
 	}
@@ -1023,7 +1027,8 @@ static int enable_slot(struct hotplug_slot *hs)
 	debug("ENABLING SLOT........\n");
 	slot_cur = hs->private;
 
-	if ((rc = validate(slot_cur, ENABLE))) {
+	rc = validate(slot_cur, ENABLE);
+	if (rc) {
 		err("validate function failed\n");
 		goto error_nopower;
 	}
@@ -1199,9 +1204,8 @@ int ibmphp_do_disable_slot(struct slot *slot_cur)
 
 	debug("DISABLING SLOT...\n");
 
-	if ((slot_cur == NULL) || (slot_cur->ctrl == NULL)) {
+	if ((slot_cur == NULL) || (slot_cur->ctrl == NULL))
 		return -ENODEV;
-	}
 
 	flag = slot_cur->flag;
 	slot_cur->flag = 1;
@@ -1336,17 +1340,20 @@ static int __init ibmphp_init(void)
 	for (i = 0; i < 16; i++)
 		irqs[i] = 0;
 
-	if ((rc = ibmphp_access_ebda()))
+	rc = ibmphp_access_ebda();
+	if (rc)
 		goto error;
 	debug("after ibmphp_access_ebda()\n");
 
-	if ((rc = ibmphp_rsrc_init()))
+	rc = ibmphp_rsrc_init();
+	if (rc)
 		goto error;
 	debug("AFTER Resource & EBDA INITIALIZATIONS\n");
 
 	max_slots = get_max_slots();
 
-	if ((rc = ibmphp_register_pci()))
+	rc = ibmphp_register_pci();
+	if (rc)
 		goto error;
 
 	if (init_ops()) {
@@ -1355,9 +1362,9 @@ static int __init ibmphp_init(void)
 	}
 
 	ibmphp_print_test();
-	if ((rc = ibmphp_hpc_start_poll_thread())) {
+	rc = ibmphp_hpc_start_poll_thread();
+	if (rc)
 		goto error;
-	}
 
 exit:
 	return rc;

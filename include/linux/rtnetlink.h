@@ -17,6 +17,11 @@ extern int rtnl_put_cacheinfo(struct sk_buff *skb, struct dst_entry *dst,
 			      u32 id, long expires, u32 error);
 
 void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change, gfp_t flags);
+struct sk_buff *rtmsg_ifinfo_build_skb(int type, struct net_device *dev,
+				       unsigned change, gfp_t flags);
+void rtmsg_ifinfo_send(struct sk_buff *skb, struct net_device *dev,
+		       gfp_t flags);
+
 
 /* RTNL is used as a global lock for all changes to network configuration  */
 extern void rtnl_lock(void);
@@ -28,7 +33,12 @@ extern wait_queue_head_t netdev_unregistering_wq;
 extern struct mutex net_mutex;
 
 #ifdef CONFIG_PROVE_LOCKING
-extern int lockdep_rtnl_is_held(void);
+extern bool lockdep_rtnl_is_held(void);
+#else
+static inline bool lockdep_rtnl_is_held(void)
+{
+	return true;
+}
 #endif /* #ifdef CONFIG_PROVE_LOCKING */
 
 /**
@@ -73,18 +83,21 @@ extern void __rtnl_unlock(void);
 extern int ndo_dflt_fdb_dump(struct sk_buff *skb,
 			     struct netlink_callback *cb,
 			     struct net_device *dev,
+			     struct net_device *filter_dev,
 			     int idx);
 extern int ndo_dflt_fdb_add(struct ndmsg *ndm,
 			    struct nlattr *tb[],
 			    struct net_device *dev,
 			    const unsigned char *addr,
-			     u16 flags);
+			    u16 vid,
+			    u16 flags);
 extern int ndo_dflt_fdb_del(struct ndmsg *ndm,
 			    struct nlattr *tb[],
 			    struct net_device *dev,
-			    const unsigned char *addr);
+			    const unsigned char *addr,
+			    u16 vid);
 
 extern int ndo_dflt_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				   struct net_device *dev, u16 mode,
-				   u32 flags, u32 mask);
+				   u32 flags, u32 mask, int nlflags);
 #endif	/* __LINUX_RTNETLINK_H */

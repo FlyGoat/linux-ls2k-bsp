@@ -143,7 +143,7 @@ static void tick_sched_handle(struct tick_sched *ts, struct pt_regs *regs)
 	 * when we go busy again does not account too much ticks.
 	 */
 	if (ts->tick_stopped) {
-		touch_softlockup_watchdog();
+		touch_softlockup_watchdog_sched();
 		if (is_idle_task(current))
 			ts->idle_jiffies++;
 	}
@@ -381,20 +381,14 @@ void __init tick_nohz_init(void)
 /*
  * NO HZ enabled ?
  */
-static int tick_nohz_enabled __read_mostly  = 1;
+static bool tick_nohz_enabled __read_mostly  = true;
 int tick_nohz_active  __read_mostly;
 /*
  * Enable / Disable tickless mode
  */
 static int __init setup_tick_nohz(char *str)
 {
-	if (!strcmp(str, "off"))
-		tick_nohz_enabled = 0;
-	else if (!strcmp(str, "on"))
-		tick_nohz_enabled = 1;
-	else
-		return 0;
-	return 1;
+	return (strtobool(str, &tick_nohz_enabled) == 0);
 }
 
 __setup("nohz=", setup_tick_nohz);
@@ -419,7 +413,7 @@ static void tick_nohz_update_jiffies(ktime_t now)
 	tick_do_update_jiffies64(now);
 	local_irq_restore(flags);
 
-	touch_softlockup_watchdog();
+	touch_softlockup_watchdog_sched();
 }
 
 /*
@@ -850,7 +844,7 @@ static void tick_nohz_restart_sched_tick(struct tick_sched *ts, ktime_t now)
 	update_cpu_load_nohz();
 
 	calc_load_exit_idle();
-	touch_softlockup_watchdog();
+	touch_softlockup_watchdog_sched();
 	/*
 	 * Cancel the scheduled timer and restore the tick
 	 */
@@ -946,11 +940,9 @@ static void tick_nohz_switch_to_nohz(void)
 	if (!tick_nohz_enabled)
 		return;
 
-	local_irq_disable();
-	if (tick_switch_to_oneshot(tick_nohz_handler)) {
-		local_irq_enable();
+	if (tick_switch_to_oneshot(tick_nohz_handler))
 		return;
-	}
+
 	tick_nohz_active = 1;
 	ts->nohz_mode = NOHZ_MODE_LOWRES;
 
@@ -965,7 +957,6 @@ static void tick_nohz_switch_to_nohz(void)
 	hrtimer_forward_now(&ts->sched_timer, tick_period);
 	hrtimer_set_expires(&ts->sched_timer, next);
 	tick_program_event(next, 1);
-	local_irq_enable();
 }
 
 /*
@@ -1150,7 +1141,7 @@ void tick_oneshot_notify(void)
  * Called cyclic from the hrtimer softirq (driven by the timer
  * softirq) allow_nohz signals, that we can switch into low-res nohz
  * mode, because high resolution timers are disabled (either compile
- * or runtime).
+ * or runtime). Called with interrupts disabled.
  */
 int tick_check_oneshot_change(int allow_nohz)
 {

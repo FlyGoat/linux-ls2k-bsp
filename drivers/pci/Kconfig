@@ -1,6 +1,10 @@
 #
 # PCI configuration
 #
+config PCI_BUS_ADDR_T_64BIT
+	def_bool y if (ARCH_DMA_ADDR_T_64BIT || 64BIT)
+	depends on PCI
+
 config PCI_MSI
 	bool "Message Signaled Interrupts (MSI and MSI-X)"
 	depends on PCI
@@ -54,6 +58,13 @@ config XEN_PCIDEV_FRONTEND
         select PCI_XEN
 	select XEN_XENBUS_FRONTEND
         default y
+        help
+          The PCI device frontend driver allows the kernel to import arbitrary
+          PCI devices from a PCI backend to support PCI driver domains.
+
+config PCI_HYPERV
+        tristate "Hyper-V PCI Frontend"
+        depends on PCI && X86 && HYPERV && PCI_MSI && X86_64
         help
           The PCI device frontend driver allows the kernel to import arbitrary
           PCI devices from a PCI backend to support PCI driver domains.

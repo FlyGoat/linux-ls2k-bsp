@@ -54,12 +54,12 @@ asm (".pushsection .entry.text, \"ax\"\n"
      ".popsection");
 
 /* identity function, which can be inlined */
-u32 _paravirt_ident_32(u32 x)
+u32 notrace _paravirt_ident_32(u32 x)
 {
 	return x;
 }
 
-u64 _paravirt_ident_64(u64 x)
+u64 notrace _paravirt_ident_64(u64 x)
 {
 	return x;
 }
@@ -363,7 +363,6 @@ struct pv_cpu_ops pv_cpu_ops = {
 	.write_msr = native_write_msr_safe,
 	.read_tsc = native_read_tsc,
 	.read_pmc = native_read_pmc,
-	.read_tscp = native_read_tscp,
 	.load_tr_desc = native_load_tr_desc,
 	.set_ldt = native_set_ldt,
 	.load_gdt = native_load_gdt,

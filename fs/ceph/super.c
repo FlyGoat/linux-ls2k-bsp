@@ -118,6 +118,7 @@ static int ceph_sync_fs(struct super_block *sb, int wait)
  * mount options
  */
 enum {
+	Opt_mds_namespace,
 	Opt_wsize,
 	Opt_rsize,
 	Opt_rasize,
@@ -144,9 +145,14 @@ enum {
 	Opt_noino32,
 	Opt_poolperm,
 	Opt_nopoolperm,
+#ifdef CONFIG_CEPH_FS_POSIX_ACL
+	Opt_acl,
+#endif
+	Opt_noacl
 };
 
 static match_table_t fsopt_tokens = {
+	{Opt_mds_namespace, "mds_namespace=%d"},
 	{Opt_wsize, "wsize=%d"},
 	{Opt_rsize, "rsize=%d"},
 	{Opt_rasize, "rasize=%d"},
@@ -171,6 +177,10 @@ static match_table_t fsopt_tokens = {
 	{Opt_noino32, "noino32"},
 	{Opt_poolperm, "poolperm"},
 	{Opt_nopoolperm, "nopoolperm"},
+#ifdef CONFIG_CEPH_FS_POSIX_ACL
+	{Opt_acl, "acl"},
+#endif
+	{Opt_noacl, "noacl"},
 	{-1, NULL}
 };
 
@@ -210,6 +220,9 @@ static int parse_fsopt_token(char *c, void *private)
 		break;
 
 		/* misc */
+	case Opt_mds_namespace:
+		fsopt->mds_namespace = intval;
+		break;
 	case Opt_wsize:
 		fsopt->wsize = intval;
 		break;
@@ -269,6 +282,14 @@ static int parse_fsopt_token(char *c, void *private)
 		break;
 	case Opt_nopoolperm:
 		fsopt->flags |= CEPH_MOUNT_OPT_NOPOOLPERM;
+		break;
+#ifdef CONFIG_CEPH_FS_POSIX_ACL
+	case Opt_acl:
+		fsopt->sb_flags |= MS_POSIXACL;
+		break;
+#endif
+	case Opt_noacl:
+		fsopt->sb_flags &= ~MS_POSIXACL;
 		break;
 	default:
 		BUG_ON(token);
@@ -350,6 +371,7 @@ static int parse_mount_options(struct ceph_mount_options **pfsopt,
 	fsopt->max_readdir = CEPH_MAX_READDIR_DEFAULT;
 	fsopt->max_readdir_bytes = CEPH_MAX_READDIR_BYTES_DEFAULT;
 	fsopt->congestion_kb = default_congestion_kb();
+	fsopt->mds_namespace = CEPH_FS_CLUSTER_ID_NONE;
 
 	/*
 	 * Distinguish the server list from the path in "dev_name".
@@ -422,8 +444,8 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 
 	if (fsopt->flags & CEPH_MOUNT_OPT_DIRSTAT)
 		seq_puts(m, ",dirstat");
-	if ((fsopt->flags & CEPH_MOUNT_OPT_RBYTES) == 0)
-		seq_puts(m, ",norbytes");
+	if ((fsopt->flags & CEPH_MOUNT_OPT_RBYTES))
+		seq_puts(m, ",rbytes");
 	if (fsopt->flags & CEPH_MOUNT_OPT_NOASYNCREADDIR)
 		seq_puts(m, ",noasyncreaddir");
 	if ((fsopt->flags & CEPH_MOUNT_OPT_DCACHE) == 0)
@@ -431,6 +453,15 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 	if (fsopt->flags & CEPH_MOUNT_OPT_NOPOOLPERM)
 		seq_puts(m, ",nopoolperm");
 
+#ifdef CONFIG_CEPH_FS_POSIX_ACL
+	if (fsopt->sb_flags & MS_POSIXACL)
+		seq_puts(m, ",acl");
+	else
+		seq_puts(m, ",noacl");
+#endif
+
+	if (fsopt->mds_namespace != CEPH_FS_CLUSTER_ID_NONE)
+		seq_printf(m, ",mds_namespace=%d", fsopt->mds_namespace);
 	if (fsopt->wsize)
 		seq_printf(m, ",wsize=%d", fsopt->wsize);
 	if (fsopt->rsize != CEPH_RSIZE_DEFAULT)
@@ -453,7 +484,7 @@ static int ceph_show_options(struct seq_file *m, struct dentry *root)
 	if (fsopt->max_readdir_bytes != CEPH_MAX_READDIR_BYTES_DEFAULT)
 		seq_printf(m, ",readdir_max_bytes=%d", fsopt->max_readdir_bytes);
 	if (strcmp(fsopt->snapdir_name, CEPH_SNAPDIRNAME_DEFAULT))
-		seq_printf(m, ",snapdirname=%s", fsopt->snapdir_name);
+		seq_show_option(m, "snapdirname", fsopt->snapdir_name);
 
 	return 0;
 }
@@ -504,7 +535,8 @@ static struct ceph_fs_client *create_fs_client(struct ceph_mount_options *fsopt,
 		goto fail;
 	}
 	fsc->client->extra_mon_dispatch = extra_mon_dispatch;
-	fsc->client->monc.want_mdsmap = 1;
+	fsc->client->monc.fs_cluster_id = fsopt->mds_namespace;
+	ceph_monc_want_map(&fsc->client->monc, CEPH_SUB_MDSMAP, 0, true);
 
 	fsc->mount_options = fsopt;
 
@@ -751,22 +783,20 @@ static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 	struct dentry *root;
 	int first = 0;   /* first vfsmount for this super_block */
 
-	dout("mount start\n");
+	dout("mount start %p\n", fsc);
 	mutex_lock(&fsc->client->mount_mutex);
 
-	err = __ceph_open_session(fsc->client, started);
-	if (err < 0)
-		goto out;
+	if (!fsc->sb->s_root) {
+		err = __ceph_open_session(fsc->client, started);
+		if (err < 0)
+			goto out;
 
-	dout("mount opening root\n");
-	root = open_root_dentry(fsc, "", started);
-	if (IS_ERR(root)) {
-		err = PTR_ERR(root);
-		goto out;
-	}
-	if (fsc->sb->s_root) {
-		dput(root);
-	} else {
+		dout("mount opening root\n");
+		root = open_root_dentry(fsc, "", started);
+		if (IS_ERR(root)) {
+			err = PTR_ERR(root);
+			goto out;
+		}
 		fsc->sb->s_root = root;
 		first = 1;
 
@@ -776,6 +806,7 @@ static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 	}
 
 	if (path[0] == 0) {
+		root = fsc->sb->s_root;
 		dget(root);
 	} else {
 		dout("mount opening base mountpoint\n");
@@ -791,16 +822,14 @@ static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 	mutex_unlock(&fsc->client->mount_mutex);
 	return root;
 
-out:
-	mutex_unlock(&fsc->client->mount_mutex);
-	return ERR_PTR(err);
-
 fail:
 	if (first) {
 		dput(fsc->sb->s_root);
 		fsc->sb->s_root = NULL;
 	}
-	goto out;
+out:
+	mutex_unlock(&fsc->client->mount_mutex);
+	return ERR_PTR(err);
 }
 
 static int ceph_set_super(struct super_block *s, void *data)
@@ -813,6 +842,7 @@ static int ceph_set_super(struct super_block *s, void *data)
 	s->s_flags = fsc->mount_options->sb_flags;
 	s->s_maxbytes = 1ULL << 40;  /* temp value until we get mdsmap */
 
+	s->s_xattr = ceph_xattr_handlers;
 	s->s_fs_info = fsc;
 	fsc->sb = s;
 
@@ -900,6 +930,10 @@ static struct dentry *ceph_mount(struct file_system_type *fs_type,
 	struct ceph_options *opt = NULL;
 
 	dout("ceph_mount\n");
+
+#ifdef CONFIG_CEPH_FS_POSIX_ACL
+	flags |= MS_POSIXACL;
+#endif
 	err = parse_mount_options(&fsopt, &opt, flags, data, dev_name, &path);
 	if (err < 0) {
 		res = ERR_PTR(err);
@@ -990,19 +1024,14 @@ static int __init init_ceph(void)
 
 	ceph_flock_init();
 	ceph_xattr_init();
-	ret = ceph_snap_init();
-	if (ret)
-		goto out_xattr;
 	ret = register_filesystem(&ceph_fs_type);
 	if (ret)
-		goto out_snap;
+		goto out_xattr;
 
 	pr_info("loaded (mds proto %d)\n", CEPH_MDSC_PROTOCOL);
 
 	return 0;
 
-out_snap:
-	ceph_snap_exit();
 out_xattr:
 	ceph_xattr_exit();
 	destroy_caches();
@@ -1014,7 +1043,6 @@ static void __exit exit_ceph(void)
 {
 	dout("exit_ceph\n");
 	unregister_filesystem(&ceph_fs_type);
-	ceph_snap_exit();
 	ceph_xattr_exit();
 	destroy_caches();
 }

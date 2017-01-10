@@ -238,9 +238,6 @@ int regcache_write(struct regmap *map,
 
 	BUG_ON(!map->cache_ops);
 
-	if (!regmap_writeable(map, reg))
-		return -EIO;
-
 	if (!regmap_volatile(map, reg))
 		return map->cache_ops->write(map, reg, value);
 
@@ -556,7 +553,8 @@ static int regcache_sync_block_single(struct regmap *map, void *block,
 	for (i = start; i < end; i++) {
 		regtmp = block_base + (i * map->reg_stride);
 
-		if (!regcache_reg_present(cache_present, i))
+		if (!regcache_reg_present(cache_present, i) ||
+		    !regmap_writeable(map, regtmp))
 			continue;
 
 		val = regcache_get_val(map, block, i);
@@ -596,8 +594,7 @@ static int regcache_sync_block_raw_flush(struct regmap *map, const void **data,
 
 	map->cache_bypass = 1;
 
-	ret = _regmap_raw_write(map, base, *data, count * val_bytes,
-				false);
+	ret = _regmap_raw_write(map, base, *data, count * val_bytes);
 
 	map->cache_bypass = 0;
 
@@ -620,7 +617,8 @@ static int regcache_sync_block_raw(struct regmap *map, void *block,
 	for (i = start; i < end; i++) {
 		regtmp = block_base + (i * map->reg_stride);
 
-		if (!regcache_reg_present(cache_present, i)) {
+		if (!regcache_reg_present(cache_present, i) ||
+		    !regmap_writeable(map, regtmp)) {
 			ret = regcache_sync_block_raw_flush(map, &data,
 							    base, regtmp);
 			if (ret != 0)

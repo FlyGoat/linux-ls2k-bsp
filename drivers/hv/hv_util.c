@@ -104,7 +104,7 @@ static void shutdown_onchannelcallback(void *context)
 	struct vmbus_channel *channel = context;
 	u32 recvlen;
 	u64 requestid;
-	u8  execute_shutdown = false;
+	bool execute_shutdown = false;
 	u8  *shut_txf_buf = util_shutdown.recv_buffer;
 
 	struct shutdown_msg_data *shutdown_msg;
@@ -322,6 +322,7 @@ static int util_probe(struct hv_device *dev,
 	srv->recv_buffer = kmalloc(PAGE_SIZE * 4, GFP_KERNEL);
 	if (!srv->recv_buffer)
 		return -ENOMEM;
+	srv->channel = dev->channel;
 	if (srv->util_init) {
 		ret = srv->util_init(srv);
 		if (ret) {
@@ -340,12 +341,8 @@ static int util_probe(struct hv_device *dev,
 
 	set_channel_read_state(dev->channel, false);
 
-	ret = vmbus_open(dev->channel, 4 * PAGE_SIZE, 4 * PAGE_SIZE, NULL, 0,
-			srv->util_cb, dev->channel);
-	if (ret)
-		goto error;
-
 	hv_set_drvdata(dev, srv);
+
 	/*
 	 * Based on the host; initialize the framework and
 	 * service version numbers we will negotiate.
@@ -364,6 +361,11 @@ static int util_probe(struct hv_device *dev,
 		ts_srv_version = TS_VERSION;
 		hb_srv_version = HB_VERSION;
 	}
+
+	ret = vmbus_open(dev->channel, 4 * PAGE_SIZE, 4 * PAGE_SIZE, NULL, 0,
+			srv->util_cb, dev->channel);
+	if (ret)
+		goto error;
 
 	return 0;
 

@@ -1051,7 +1051,8 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 				put_cmsg(&msg, SOL_IPV6, IPV6_HOPLIMIT, sizeof(hlim), &hlim);
 			}
 			if (np->rxopt.bits.rxtclass) {
-				int tclass = np->rcv_tclass;
+				int tclass = (int)ip6_tclass(np->rcv_flowinfo);
+
 				put_cmsg(&msg, SOL_IPV6, IPV6_TCLASS, sizeof(tclass), &tclass);
 			}
 			if (np->rxopt.bits.rxoinfo) {
@@ -1065,6 +1066,11 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 			if (np->rxopt.bits.rxohlim) {
 				int hlim = np->mcast_hops;
 				put_cmsg(&msg, SOL_IPV6, IPV6_2292HOPLIMIT, sizeof(hlim), &hlim);
+			}
+			if (np->rxopt.bits.rxflow) {
+				__be32 flowinfo = np->rcv_flowinfo;
+
+				put_cmsg(&msg, SOL_IPV6, IPV6_FLOWINFO, sizeof(flowinfo), &flowinfo);
 			}
 		}
 		len -= msg.msg_controllen;

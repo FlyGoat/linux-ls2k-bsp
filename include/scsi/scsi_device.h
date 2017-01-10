@@ -52,6 +52,12 @@ enum scsi_device_state {
 	SDEV_CREATED_BLOCK,	/* same as above but for created devices */
 };
 
+enum scsi_scan_mode {
+	SCSI_SCAN_INITIAL = 0,
+	SCSI_SCAN_RESCAN,
+	SCSI_SCAN_MANUAL,
+};
+
 enum scsi_device_event {
 	SDEV_EVT_MEDIA_CHANGE	= 1,	/* media has changed */
 	SDEV_EVT_INQUIRY_CHANGE_REPORTED,		/* 3F 03  UA reported */
@@ -59,10 +65,14 @@ enum scsi_device_event {
 	SDEV_EVT_SOFT_THRESHOLD_REACHED_REPORTED,	/* 38 07  UA reported */
 	SDEV_EVT_MODE_PARAMETER_CHANGE_REPORTED,	/* 2A 01  UA reported */
 	SDEV_EVT_LUN_CHANGE_REPORTED,			/* 3F 0E  UA reported */
+#ifndef __GENKSYMS__
+	SDEV_EVT_ALUA_STATE_CHANGE_REPORTED,		/* 2A 06  UA reported */
 
 	SDEV_EVT_FIRST		= SDEV_EVT_MEDIA_CHANGE,
+	SDEV_EVT_LAST		= SDEV_EVT_ALUA_STATE_CHANGE_REPORTED,
+#else
 	SDEV_EVT_LAST		= SDEV_EVT_LUN_CHANGE_REPORTED,
-
+#endif
 	SDEV_EVT_MAXBITS	= SDEV_EVT_LAST + 1
 };
 
@@ -178,6 +188,7 @@ struct scsi_device {
 	unsigned vpd_reserved:1;
 	unsigned xcopy_reserved:1;
 	RH_KABI_FILL_HOLE(unsigned lun_in_cdb:1) /* Store LUN bits in CDB[1] */
+	RH_KABI_FILL_HOLE(unsigned try_vpd_pages:1)	/* attempt to read VPD pages */
 
 	atomic_t disk_events_disable_depth; /* disable depth for disk events */
 
@@ -213,16 +224,17 @@ struct scsi_device {
 
 #define SCSI_VPD_PG_LEN                255
 
-	RH_KABI_REPLACE(void *vpd_reserved1, unsigned char *vpd_pg83)
+	RH_KABI_REPLACE(void *vpd_reserved1, unsigned char __rcu *vpd_pg83)
 	RH_KABI_REPLACE(void *vpd_reserved2, int vpd_pg83_len)
-	RH_KABI_REPLACE(void *vpd_reserved3, unsigned char *vpd_pg80)
+	RH_KABI_REPLACE(void *vpd_reserved3, unsigned char __rcu *vpd_pg80)
 	RH_KABI_REPLACE(void *vpd_reserved4, int vpd_pg80_len)
 	char	vpd_reserved5;
 	char	vpd_reserved6;
 	char	vpd_reserved7;
 	char	vpd_reserved8;
 
-	spinlock_t	vpd_reserved9;
+	/* Lock on updates to inquiry and VPD attribute data */
+	RH_KABI_REPLACE(spinlock_t vpd_reserved9, spinlock_t inquiry_lock)
 
 	RH_KABI_RESERVE_P(1)
 	RH_KABI_RESERVE_P(2)
@@ -281,14 +293,15 @@ struct scsi_dh_data {
  * like scmd_printk, but the device name is passed in
  * as a string pointer
  */
-extern int sdev_prefix_printk(const char *, const struct scsi_device *,
-			      const char *, const char *, ...);
+__printf(4, 5) int
+sdev_prefix_printk(const char *, const struct scsi_device *, const char *,
+		const char *, ...);
 
 #define sdev_printk(l, sdev, fmt, a...)				\
 	sdev_prefix_printk(l, sdev, NULL, fmt, ##a)
 
-extern int scmd_printk(const char *, const struct scsi_cmnd *,
-		       const char *, ...);
+__printf(3, 4) int
+scmd_printk(const char *, const struct scsi_cmnd *, const char *, ...);
 
 #define scmd_dbg(scmd, fmt, a...)					   \
 	do {								   \
@@ -465,7 +478,8 @@ extern void scsi_device_resume(struct scsi_device *sdev);
 extern void scsi_target_quiesce(struct scsi_target *);
 extern void scsi_target_resume(struct scsi_target *);
 extern void scsi_scan_target(struct device *parent, unsigned int channel,
-			     unsigned int id, unsigned int lun, int rescan);
+			     unsigned int id, unsigned int lun,
+			     enum scsi_scan_mode rescan);
 extern void scsi_target_reap(struct scsi_target *);
 extern void scsi_target_block(struct device *);
 extern void scsi_target_unblock(struct device *, enum scsi_device_state);
@@ -475,6 +489,7 @@ extern int scsilun_to_int(struct scsi_lun *);
 extern const char *scsi_device_state_name(enum scsi_device_state);
 extern int scsi_is_sdev_device(const struct device *);
 extern int scsi_is_target_device(const struct device *);
+extern void scsi_sanitize_inquiry_string(unsigned char *s, int len);
 extern int scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
 			int data_direction, void *buffer, unsigned bufflen,
 			unsigned char *sense, int timeout, int retries,
@@ -587,6 +602,31 @@ static inline int scsi_device_protection(struct scsi_device *sdev)
 static inline int scsi_device_tpgs(struct scsi_device *sdev)
 {
 	return sdev->inquiry ? (sdev->inquiry[5] >> 4) & 0x3 : 0;
+}
+
+/**
+ * scsi_device_supports_vpd - test if a device supports VPD pages
+ * @sdev: the &struct scsi_device to test
+ *
+ * If the 'try_vpd_pages' flag is set it takes precedence.
+ * Otherwise we will assume VPD pages are supported if the
+ * SCSI level is at least SPC-3 and 'skip_vpd_pages' is not set.
+ */
+static inline int scsi_device_supports_vpd(struct scsi_device *sdev)
+{
+	/* Attempt VPD inquiry if the device blacklist explicitly calls
+	 * for it.
+	 */
+	if (sdev->try_vpd_pages)
+		return 1;
+	/*
+	 * Although VPD inquiries can go to SCSI-2 type devices,
+	 * some USB ones crash on receiving them, and the pages
+	 * we currently ask for are mandatory for SPC-2 and beyond
+	 */
+	if (sdev->scsi_level >= SCSI_SPC_2 && !sdev->skip_vpd_pages)
+		return 1;
+	return 0;
 }
 
 #define MODULE_ALIAS_SCSI_DEVICE(type) \

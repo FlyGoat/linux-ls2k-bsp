@@ -44,11 +44,8 @@ struct zpci_fmb {
 	u64 rpcit_ops;
 	u64 dma_rbytes;
 	u64 dma_wbytes;
-	/* software counters */
-	atomic64_t allocated_pages;
-	atomic64_t mapped_pages;
-	atomic64_t unmapped_pages;
-} __packed __aligned(16);
+	u64 pad[2];
+} __packed __aligned(128);
 
 struct msi_map {
 	unsigned long irq;
@@ -77,7 +74,6 @@ struct zpci_bar_struct {
 
 /* Private data per function */
 struct zpci_dev {
-	struct pci_dev	*pdev;
 	struct pci_bus	*bus;
 	struct list_head entry;		/* list of all zpci_devices, needed for hotplug, etc. */
 
@@ -116,6 +112,10 @@ struct zpci_dev {
 	/* Function measurement block */
 	struct zpci_fmb *fmb;
 	u16		fmb_update;	/* update interval */
+	/* software counters */
+	atomic64_t allocated_pages;
+	atomic64_t mapped_pages;
+	atomic64_t unmapped_pages;
 
 	enum pci_bus_speed max_bus_speed;
 
@@ -195,7 +195,7 @@ int zpci_fmb_disable_device(struct zpci_dev *);
 /* Debug */
 int zpci_debug_init(void);
 void zpci_debug_exit(void);
-void zpci_debug_init_device(struct zpci_dev *);
+void zpci_debug_init_device(struct zpci_dev *, const char *);
 void zpci_debug_exit_device(struct zpci_dev *);
 void zpci_debug_info(struct zpci_dev *, struct seq_file *);
 

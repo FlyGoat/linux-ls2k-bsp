@@ -27,7 +27,17 @@
 
 #include <linux/errno.h>
 #include <linux/ioport.h>	/* for struct resource */
+#include <linux/resource_ext.h>
 #include <linux/device.h>
+#include <linux/property.h>
+
+#ifndef CONFIG_ACPI
+/* RH kernel: build fix for s390 and powerpc */
+typedef u32 acpi_object_type;
+union acpi_object {
+	u32 dummy;
+};
+#endif
 
 #ifdef	CONFIG_ACPI
 
@@ -37,6 +47,7 @@
 
 #include <linux/list.h>
 #include <linux/mod_devicetable.h>
+#include <linux/dynamic_debug.h>
 
 #include <acpi/acpi.h>
 #include <acpi/acpi_bus.h>
@@ -49,14 +60,25 @@ static inline acpi_handle acpi_device_handle(struct acpi_device *adev)
 	return adev ? adev->handle : NULL;
 }
 
-#define ACPI_COMPANION(dev)		((dev)->acpi_node.companion)
-#define ACPI_COMPANION_SET(dev, adev)	ACPI_COMPANION(dev) = (adev)
+#define ACPI_COMPANION(dev)	to_acpi_device_node(get_rh_dev_fwnode(dev))
+#define ACPI_COMPANION_SET(dev, adev)	set_primary_fwnode(dev, (adev) ? \
+	acpi_fwnode_handle(adev) : NULL)
 #define ACPI_HANDLE(dev)		acpi_device_handle(ACPI_COMPANION(dev))
+
+static inline bool has_acpi_companion(struct device *dev)
+{
+	return is_acpi_node(get_rh_dev_fwnode(dev));
+}
 
 static inline void acpi_preset_companion(struct device *dev,
 					 struct acpi_device *parent, u64 addr)
 {
 	ACPI_COMPANION_SET(dev, acpi_find_child_device(parent, addr, NULL));
+}
+
+static inline const char *acpi_dev_name(struct acpi_device *adev)
+{
+	return dev_name(&adev->dev);
 }
 
 enum acpi_irq_model_id {
@@ -191,6 +213,8 @@ extern int ec_transaction(u8 command,
                           u8 *rdata, unsigned rdata_len);
 extern acpi_handle ec_get_handle(void);
 
+extern bool acpi_is_pnp_device(struct acpi_device *);
+
 #if defined(CONFIG_ACPI_WMI) || defined(CONFIG_ACPI_WMI_MODULE)
 
 typedef void (*wmi_notify_handler) (u32 value, void *context);
@@ -270,8 +294,13 @@ extern void acpi_dmi_osi_linux(int enable, const struct dmi_system_id *d);
 extern void acpi_osi_setup(char *str);
 
 #ifdef CONFIG_ACPI_NUMA
+int acpi_map_pxm_to_online_node(int pxm);
 int acpi_get_node(acpi_handle handle);
 #else
+static inline int acpi_map_pxm_to_online_node(int pxm)
+{
+	return 0;
+}
 static inline int acpi_get_node(acpi_handle handle)
 {
 	return 0;
@@ -286,22 +315,25 @@ extern int pnpacpi_disabled;
 bool acpi_dev_resource_memory(struct acpi_resource *ares, struct resource *res);
 bool acpi_dev_resource_io(struct acpi_resource *ares, struct resource *res);
 bool acpi_dev_resource_address_space(struct acpi_resource *ares,
-				     struct resource *res);
+				     struct resource_win *win);
 bool acpi_dev_resource_ext_address_space(struct acpi_resource *ares,
-					 struct resource *res);
+					 struct resource_win *win);
 unsigned long acpi_dev_irq_flags(u8 triggering, u8 polarity, u8 shareable);
 bool acpi_dev_resource_interrupt(struct acpi_resource *ares, int index,
 				 struct resource *res);
-
-struct resource_list_entry {
-	struct list_head node;
-	struct resource res;
-};
 
 void acpi_dev_free_resource_list(struct list_head *list);
 int acpi_dev_get_resources(struct acpi_device *adev, struct list_head *list,
 			   int (*preproc)(struct acpi_resource *, void *),
 			   void *preproc_data);
+int acpi_dev_filter_resource_type(struct acpi_resource *ares,
+				  unsigned long types);
+
+static inline int acpi_dev_filter_resource_type_cb(struct acpi_resource *ares,
+						   void *arg)
+{
+	return acpi_dev_filter_resource_type(ares, (unsigned long)arg);
+}
 
 int acpi_check_resource_conflict(const struct resource *res);
 
@@ -416,12 +448,10 @@ extern int acpi_nvs_for_each_region(int (*func)(__u64, __u64, void *),
 const struct acpi_device_id *acpi_match_device(const struct acpi_device_id *ids,
 					       const struct device *dev);
 
-static inline bool acpi_driver_match_device(struct device *dev,
-					    const struct device_driver *drv)
-{
-	return !!acpi_match_device(drv->acpi_match_table, dev);
-}
+extern bool acpi_driver_match_device(struct device *dev,
+				     const struct device_driver *drv);
 
+struct platform_device *acpi_create_platform_device(struct acpi_device *);
 #define ACPI_PTR(_ptr)	(_ptr)
 
 #else	/* !CONFIG_ACPI */
@@ -431,6 +461,48 @@ static inline bool acpi_driver_match_device(struct device *dev,
 #define ACPI_COMPANION(dev)		(NULL)
 #define ACPI_COMPANION_SET(dev, adev)	do { } while (0)
 #define ACPI_HANDLE(dev)		(NULL)
+
+struct fwnode_handle;
+
+static inline bool is_acpi_node(struct fwnode_handle *fwnode)
+{
+	return false;
+}
+
+static inline bool is_acpi_device_node(struct fwnode_handle *fwnode)
+{
+	return false;
+}
+
+static inline struct acpi_device *to_acpi_device_node(struct fwnode_handle *fwnode)
+{
+	return NULL;
+}
+
+static inline bool is_acpi_data_node(struct fwnode_handle *fwnode)
+{
+	return false;
+}
+
+static inline struct acpi_data_node *to_acpi_data_node(struct fwnode_handle *fwnode)
+{
+	return NULL;
+}
+
+static inline struct fwnode_handle *acpi_fwnode_handle(struct acpi_device *adev)
+{
+	return NULL;
+}
+
+static inline const char *acpi_dev_name(struct acpi_device *adev)
+{
+	return NULL;
+}
+
+static inline bool has_acpi_companion(struct device *dev)
+{
+	return false;
+}
 
 static inline void acpi_early_init(void) { }
 
@@ -576,6 +648,14 @@ static inline __printf(3, 4) void
 acpi_handle_printk(const char *level, void *handle, const char *fmt, ...) {}
 #endif	/* !CONFIG_ACPI */
 
+#if defined(CONFIG_ACPI) && defined(CONFIG_DYNAMIC_DEBUG)
+__printf(3, 4)
+void __acpi_handle_debug(struct _ddebug *descriptor, acpi_handle handle, const char *fmt, ...);
+#else
+#define __acpi_handle_debug(descriptor, handle, fmt, ...)		\
+	acpi_handle_printk(KERN_DEBUG, handle, fmt, ##__VA_ARGS__);
+#endif
+
 /*
  * acpi_handle_<level>: Print message with ACPI prefix and object path
  *
@@ -597,10 +677,18 @@ acpi_handle_printk(const char *level, void *handle, const char *fmt, ...) {}
 #define acpi_handle_info(handle, fmt, ...)				\
 	acpi_handle_printk(KERN_INFO, handle, fmt, ##__VA_ARGS__)
 
-/* REVISIT: Support CONFIG_DYNAMIC_DEBUG when necessary */
-#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
+#if defined(DEBUG)
 #define acpi_handle_debug(handle, fmt, ...)				\
 	acpi_handle_printk(KERN_DEBUG, handle, fmt, ##__VA_ARGS__)
+#else
+#if defined(CONFIG_DYNAMIC_DEBUG)
+#define acpi_handle_debug(handle, fmt, ...)				\
+do {									\
+	DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, fmt);			\
+	if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT))		\
+		__acpi_handle_debug(&descriptor, handle, pr_fmt(fmt),	\
+				##__VA_ARGS__);				\
+} while (0)
 #else
 #define acpi_handle_debug(handle, fmt, ...)				\
 ({									\
@@ -608,6 +696,100 @@ acpi_handle_printk(const char *level, void *handle, const char *fmt, ...) {}
 		acpi_handle_printk(KERN_DEBUG, handle, fmt, ##__VA_ARGS__); \
 	0;								\
 })
+#endif
+#endif
+
+/* Device properties */
+
+#define MAX_ACPI_REFERENCE_ARGS	8
+struct acpi_reference_args {
+	struct acpi_device *adev;
+	size_t nargs;
+	u64 args[MAX_ACPI_REFERENCE_ARGS];
+};
+
+#ifdef CONFIG_ACPI
+int acpi_dev_get_property(struct acpi_device *adev, const char *name,
+			  acpi_object_type type, const union acpi_object **obj);
+int acpi_node_get_property_reference(struct fwnode_handle *fwnode,
+				     const char *name, size_t index,
+				     struct acpi_reference_args *args);
+
+int acpi_node_prop_get(struct fwnode_handle *fwnode, const char *propname,
+		       void **valptr);
+int acpi_dev_prop_read_single(struct acpi_device *adev, const char *propname,
+			      enum dev_prop_type proptype, void *val);
+int acpi_node_prop_read(struct fwnode_handle *fwnode, const char *propname,
+		        enum dev_prop_type proptype, void *val, size_t nval);
+int acpi_dev_prop_read(struct acpi_device *adev, const char *propname,
+		       enum dev_prop_type proptype, void *val, size_t nval);
+
+struct fwnode_handle *acpi_get_next_subnode(struct device *dev,
+					    struct fwnode_handle *subnode);
+#else
+static inline int acpi_dev_get_property(struct acpi_device *adev,
+					const char *name, acpi_object_type type,
+					const union acpi_object **obj)
+{
+	return -ENXIO;
+}
+static inline int acpi_dev_get_property_array(struct acpi_device *adev,
+					      const char *name,
+					      acpi_object_type type,
+					      const union acpi_object **obj)
+{
+	return -ENXIO;
+}
+static inline int acpi_node_get_property_reference(struct fwnode_handle *fwnode,
+				const char *name, const char *cells_name,
+				size_t index, struct acpi_reference_args *args)
+{
+	return -ENXIO;
+}
+
+static inline int acpi_node_prop_get(struct fwnode_handle *fwnode,
+				     const char *propname,
+				     void **valptr)
+{
+	return -ENXIO;
+}
+
+static inline int acpi_dev_prop_get(struct acpi_device *adev,
+				    const char *propname,
+				    void **valptr)
+{
+	return -ENXIO;
+}
+
+static inline int acpi_dev_prop_read_single(struct acpi_device *adev,
+					    const char *propname,
+					    enum dev_prop_type proptype,
+					    void *val)
+{
+	return -ENXIO;
+}
+
+static inline int acpi_node_prop_read(struct fwnode_handle *fwnode,
+				      const char *propname,
+				      enum dev_prop_type proptype,
+				      void *val, size_t nval)
+{
+	return -ENXIO;
+}
+
+static inline int acpi_dev_prop_read(struct acpi_device *adev,
+				     const char *propname,
+				     enum dev_prop_type proptype,
+				     void *val, size_t nval)
+{
+	return -ENXIO;
+}
+
+static inline struct fwnode_handle *acpi_get_next_subnode(struct device *dev,
+						struct fwnode_handle *subnode)
+{
+	return NULL;
+}
 #endif
 
 #endif	/*_LINUX_ACPI_H*/

@@ -40,6 +40,7 @@ struct class;
 struct subsys_private;
 struct bus_type;
 struct device_node;
+struct fwnode_handle;
 struct iommu_ops;
 struct iommu_group;
 
@@ -331,7 +332,7 @@ struct subsys_interface {
 	struct bus_type *subsys;
 	struct list_head node;
 	int (*add_dev)(struct device *dev, struct subsys_interface *sif);
-	int (*remove_dev)(struct device *dev, struct subsys_interface *sif);
+	void (*remove_dev)(struct device *dev, struct subsys_interface *sif);
 };
 
 int subsys_interface_register(struct subsys_interface *sif);
@@ -590,13 +591,21 @@ typedef void (*dr_release_t)(struct device *dev, void *res);
 typedef int (*dr_match_t)(struct device *dev, void *res, void *match_data);
 
 #ifdef CONFIG_DEBUG_DEVRES
-extern void *__devres_alloc(dr_release_t release, size_t size, gfp_t gfp,
-			     const char *name);
+extern void *__devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp,
+				 int nid, const char *name);
 #define devres_alloc(release, size, gfp) \
-	__devres_alloc(release, size, gfp, #release)
+	__devres_alloc_node(release, size, gfp, NUMA_NO_NODE, #release)
+#define devres_alloc_node(release, size, gfp, nid) \
+	__devres_alloc_node(release, size, gfp, nid, #release)
 #else
-extern void *devres_alloc(dr_release_t release, size_t size, gfp_t gfp);
+extern void *devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp,
+			       int nid);
+static inline void *devres_alloc(dr_release_t release, size_t size, gfp_t gfp)
+{
+	return devres_alloc_node(release, size, gfp, NUMA_NO_NODE);
+}
 #endif
+
 extern void devres_for_each_res(struct device *dev, dr_release_t release,
 				dr_match_t match, void *match_data,
 				void (*fn)(struct device *, void *, void *),
@@ -623,6 +632,10 @@ extern int devres_release_group(struct device *dev, void *id);
 
 /* managed devm_k.alloc/kfree for device drivers */
 extern void *devm_kmalloc(struct device *dev, size_t size, gfp_t gfp);
+extern char *devm_kvasprintf(struct device *dev, gfp_t gfp, const char *fmt,
+			     va_list ap);
+extern char *devm_kasprintf(struct device *dev, gfp_t gfp,
+			    const char *fmt, ...);
 static inline void *devm_kzalloc(struct device *dev, size_t size, gfp_t gfp)
 {
 	return devm_kmalloc(dev, size, gfp | __GFP_ZERO);
@@ -640,6 +653,9 @@ static inline void *devm_kcalloc(struct device *dev,
 	return devm_kmalloc_array(dev, n, size, flags | __GFP_ZERO);
 }
 extern void devm_kfree(struct device *dev, void *p);
+extern char *devm_kstrdup(struct device *dev, const char *s, gfp_t gfp);
+extern void *devm_kmemdup(struct device *dev, const void *src, size_t len,
+			  gfp_t gfp);
 
 void __iomem *devm_ioremap_resource(struct device *dev, struct resource *res);
 void __iomem *devm_request_and_ioremap(struct device *dev,
@@ -648,6 +664,18 @@ void __iomem *devm_request_and_ioremap(struct device *dev,
 /* allows to add/remove a custom action to devres stack */
 int devm_add_action(struct device *dev, void (*action)(void *), void *data);
 void devm_remove_action(struct device *dev, void (*action)(void *), void *data);
+
+static inline int devm_add_action_or_reset(struct device *dev,
+					   void (*action)(void *), void *data)
+{
+	int ret;
+
+	ret = devm_add_action(dev, action, data);
+	if (ret)
+		action(data);
+
+	return ret;
+}
 
 struct device_dma_parameters {
 	/*
@@ -658,8 +686,7 @@ struct device_dma_parameters {
 	unsigned long segment_boundary_mask;
 };
 
-struct acpi_device;
-
+/* RHEL7: Do not use this struct.  It is only here for KABI purposes. */
 struct acpi_dev_node {
 #ifdef CONFIG_ACPI
 	RH_KABI_REPLACE(void	*handle,
@@ -710,7 +737,7 @@ struct acpi_dev_node {
  * @dma_mem:	Internal for coherent mem override.
  * @archdata:	For arch-specific additions.
  * @of_node:	Associated device tree node.
- * @acpi_node:	Associated ACPI device node.
+ * @fwnode:	Associated device node supplied by platform firmware.
  * @devt:	For creating the sysfs "dev".
  * @id:		device instance
  * @devres_lock: Spinlock to protect the resource of the device.
@@ -753,10 +780,6 @@ struct device {
 	struct dev_pm_info	power;
 	struct dev_pm_domain	*pm_domain;
 
-#ifdef CONFIG_PINCTRL
-	struct dev_pin_info	*pins;
-#endif
-
 #ifdef CONFIG_NUMA
 	int		numa_node;	/* NUMA node this device is close to */
 #endif
@@ -781,7 +804,12 @@ struct device {
 	struct dev_archdata	archdata;
 
 	struct device_node	*of_node; /* associated device tree node */
-	struct acpi_dev_node	acpi_node; /* associated ACPI device node */
+	/*
+	 * RHEL7: This appears safe to do.  struct acpi_dev_node was
+	 * previously safely modified with a KABI workaround so deprecating
+	 * it should also not be a problem.
+	 */
+	RH_KABI_DEPRECATE(struct acpi_dev_node, acpi_node)
 
 	dev_t			devt;	/* dev_t, creates the sysfs "dev" */
 	u32			id;	/* device instance */
@@ -810,7 +838,13 @@ struct device {
  */
 struct device_rh {
 	RH_KABI_EXTEND(struct dev_pm_info_rh power)
+#ifdef CONFIG_PINCTRL
+	RH_KABI_EXTEND(struct dev_pin_info *pins)
+#endif
+	RH_KABI_EXTEND(struct fwnode_handle *fwnode)
 };
+/* allocator for device_rh */
+extern void device_rh_alloc(struct device *dev);
 
 static inline struct device *kobj_to_dev(struct kobject *kobj)
 {
@@ -905,6 +939,11 @@ static inline void device_lock(struct device *dev)
 	mutex_lock(&dev->mutex);
 }
 
+static inline int device_lock_interruptible(struct device *dev)
+{
+	return mutex_lock_interruptible(&dev->mutex);
+}
+
 static inline int device_trylock(struct device *dev)
 {
 	return mutex_trylock(&dev->mutex);
@@ -934,6 +973,8 @@ extern int __must_check device_add(struct device *dev);
 extern void device_del(struct device *dev);
 extern int device_for_each_child(struct device *dev, void *data,
 		     int (*fn)(struct device *dev, void *data));
+extern int device_for_each_child_reverse(struct device *dev, void *data,
+		     int (*fn)(struct device *dev, void *data));
 extern struct device *device_find_child(struct device *dev, void *data,
 				int (*match)(struct device *dev, void *data));
 extern int device_rename(struct device *dev, const char *new_name);
@@ -955,6 +996,9 @@ extern void unlock_device_hotplug(void);
 extern int lock_device_hotplug_sysfs(void);
 extern int device_offline(struct device *dev);
 extern int device_online(struct device *dev);
+extern void set_primary_fwnode(struct device *dev, struct fwnode_handle *fwnode);
+extern void set_secondary_fwnode(struct device *dev, struct fwnode_handle *fwnode);
+
 /*
  * Root device objects for grouping under /sys/devices
  */
@@ -984,6 +1028,8 @@ extern void device_release_driver(struct device *dev);
 extern int  __must_check device_attach(struct device *dev);
 extern int __must_check driver_attach(struct device_driver *drv);
 extern int __must_check device_reprobe(struct device *dev);
+
+extern bool device_is_bound(struct device *dev);
 
 /*
  * Easy functions for dynamically creating devices on the fly
@@ -1134,6 +1180,41 @@ do {						     \
 })
 #endif
 
+#ifdef CONFIG_PRINTK
+#define dev_level_once(dev_level, dev, fmt, ...)			\
+do {									\
+	static bool __print_once __read_mostly;				\
+									\
+	if (!__print_once) {						\
+		__print_once = true;					\
+		dev_level(dev, fmt, ##__VA_ARGS__);			\
+	}								\
+} while (0)
+#else
+#define dev_level_once(dev_level, dev, fmt, ...)			\
+do {									\
+	if (0)								\
+		dev_level(dev, fmt, ##__VA_ARGS__);			\
+} while (0)
+#endif
+
+#define dev_emerg_once(dev, fmt, ...)					\
+	dev_level_once(dev_emerg, dev, fmt, ##__VA_ARGS__)
+#define dev_alert_once(dev, fmt, ...)					\
+	dev_level_once(dev_alert, dev, fmt, ##__VA_ARGS__)
+#define dev_crit_once(dev, fmt, ...)					\
+	dev_level_once(dev_crit, dev, fmt, ##__VA_ARGS__)
+#define dev_err_once(dev, fmt, ...)					\
+	dev_level_once(dev_err, dev, fmt, ##__VA_ARGS__)
+#define dev_warn_once(dev, fmt, ...)					\
+	dev_level_once(dev_warn, dev, fmt, ##__VA_ARGS__)
+#define dev_notice_once(dev, fmt, ...)					\
+	dev_level_once(dev_notice, dev, fmt, ##__VA_ARGS__)
+#define dev_info_once(dev, fmt, ...)					\
+	dev_level_once(dev_info, dev, fmt, ##__VA_ARGS__)
+#define dev_dbg_once(dev, fmt, ...)					\
+	dev_level_once(dev_info, dev, fmt, ##__VA_ARGS__)
+
 #define dev_level_ratelimited(dev_level, dev, fmt, ...)			\
 do {									\
 	static DEFINE_RATELIMIT_STATE(_rs,				\
@@ -1157,7 +1238,8 @@ do {									\
 	dev_level_ratelimited(dev_notice, dev, fmt, ##__VA_ARGS__)
 #define dev_info_ratelimited(dev, fmt, ...)				\
 	dev_level_ratelimited(dev_info, dev, fmt, ##__VA_ARGS__)
-#if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
+#if defined(CONFIG_DYNAMIC_DEBUG)
+/* descriptor check is first to prevent flooding with "callbacks suppressed" */
 #define dev_dbg_ratelimited(dev, fmt, ...)				\
 do {									\
 	static DEFINE_RATELIMIT_STATE(_rs,				\
@@ -1166,8 +1248,17 @@ do {									\
 	DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, fmt);			\
 	if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT) &&	\
 	    __ratelimit(&_rs))						\
-		__dynamic_pr_debug(&descriptor, pr_fmt(fmt),		\
-				   ##__VA_ARGS__);			\
+		__dynamic_dev_dbg(&descriptor, dev, fmt,		\
+				  ##__VA_ARGS__);			\
+} while (0)
+#elif defined(DEBUG)
+#define dev_dbg_ratelimited(dev, fmt, ...)				\
+do {									\
+	static DEFINE_RATELIMIT_STATE(_rs,				\
+				      DEFAULT_RATELIMIT_INTERVAL,	\
+				      DEFAULT_RATELIMIT_BURST);		\
+	if (__ratelimit(&_rs))						\
+		dev_printk(KERN_DEBUG, dev, fmt, ##__VA_ARGS__);	\
 } while (0)
 #else
 #define dev_dbg_ratelimited(dev, fmt, ...)			\

@@ -786,7 +786,6 @@ static int rawv6_sendmsg(struct kiocb *iocb, struct sock *sk,
 				flowlabel = fl6_sock_lookup(sk, fl6.flowlabel);
 				if (flowlabel == NULL)
 					return -EINVAL;
-				daddr = &flowlabel->dst;
 			}
 		}
 
@@ -860,6 +859,9 @@ static int rawv6_sendmsg(struct kiocb *iocb, struct sock *sk,
 	else if (!fl6.flowi6_oif)
 		fl6.flowi6_oif = np->ucast_oif;
 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+
+	if (inet->hdrincl)
+		fl6.flowi6_flags |= FLOWI_FLAG_KNOWN_NH;
 
 	dst = ip6_dst_lookup_flow(sk, &fl6, final_p);
 	if (IS_ERR(dst)) {

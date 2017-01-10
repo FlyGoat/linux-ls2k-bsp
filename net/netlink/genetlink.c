@@ -560,6 +560,10 @@ static int genl_family_rcv_msg(struct genl_family *family,
 	    !netlink_capable(skb, CAP_NET_ADMIN))
 		return -EPERM;
 
+	if ((ops->flags & GENL_UNS_ADMIN_PERM) &&
+	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
+		return -EPERM;
+
 	if ((nlh->nlmsg_flags & NLM_F_DUMP) == NLM_F_DUMP) {
 		int rc;
 
@@ -756,7 +760,8 @@ static int ctrl_fill_info(struct genl_family *family, u32 portid, u32 seq,
 		nla_nest_end(skb, nla_grps);
 	}
 
-	return genlmsg_end(skb, hdr);
+	genlmsg_end(skb, hdr);
+	return 0;
 
 nla_put_failure:
 	genlmsg_cancel(skb, hdr);
@@ -796,7 +801,8 @@ static int ctrl_fill_mcgrp_info(struct genl_family *family,
 	nla_nest_end(skb, nest);
 	nla_nest_end(skb, nla_grps);
 
-	return genlmsg_end(skb, hdr);
+	genlmsg_end(skb, hdr);
+	return 0;
 
 nla_put_failure:
 	genlmsg_cancel(skb, hdr);

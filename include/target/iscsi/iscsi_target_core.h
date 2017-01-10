@@ -60,6 +60,8 @@
 #define TA_CACHE_CORE_NPS		0
 /* T10 protection information disabled by default */
 #define TA_DEFAULT_T10_PI		0
+/* TPG status needs to be enabled to return sendtargets discovery endpoint info */
+#define TA_DEFAULT_TPG_ENABLED_SENDTARGETS 1
 
 #define ISCSI_IOV_DATA_BUFFER		5
 
@@ -70,6 +72,7 @@ enum iscsit_transport_type {
 	ISCSI_IWARP_TCP				= 3,
 	ISCSI_IWARP_SCTP			= 4,
 	ISCSI_INFINIBAND			= 5,
+	ISCSI_CXGBIT			= 6,
 };
 
 /* RFC-3720 7.1.4  Standard Connection State Diagram for a Target */
@@ -519,7 +522,6 @@ struct iscsi_conn {
 	u16			cid;
 	/* Remote TCP Port */
 	u16			login_port;
-	u16			local_port;
 	int			net_size;
 	int			login_family;
 	u32			auth_id;
@@ -535,9 +537,8 @@ struct iscsi_conn {
 	u32			of_marker;
 	/* Used for calculating OFMarker offset to next PDU */
 	u32			of_marker_offset;
-#define IPV6_ADDRESS_SPACE				48
-	unsigned char		login_ip[IPV6_ADDRESS_SPACE];
-	unsigned char		local_ip[IPV6_ADDRESS_SPACE];
+	struct sockaddr_storage login_sockaddr;
+	struct sockaddr_storage local_sockaddr;
 	int			conn_usage_count;
 	int			conn_waiting_on_uc;
 	atomic_t		check_immediate_queue;
@@ -578,8 +579,8 @@ struct iscsi_conn {
 	spinlock_t		response_queue_lock;
 	spinlock_t		state_lock;
 	/* libcrypto RX and TX contexts for crc32c */
-	struct hash_desc	conn_rx_hash;
-	struct hash_desc	conn_tx_hash;
+	struct ahash_request	*conn_rx_hash;
+	struct ahash_request	*conn_tx_hash;
 	/* Used for scheduling TX and RX connection kthreads */
 	cpumask_var_t		conn_cpumask;
 	unsigned int		conn_rx_reset_cpumask:1;
@@ -605,6 +606,7 @@ struct iscsi_conn {
 	int			bitmap_id;
 	int			rx_thread_active;
 	struct task_struct	*rx_thread;
+	struct completion	rx_login_comp;
 	int			tx_thread_active;
 	struct task_struct	*tx_thread;
 	/* list_head for session connection list */
@@ -772,6 +774,7 @@ struct iscsi_tpg_attrib {
 	u32			demo_mode_discovery;
 	u32			default_erl;
 	u8			t10_pi;
+	u32			tpg_enabled_sendtargets;
 	struct iscsi_portal_group *tpg;
 };
 
@@ -784,11 +787,10 @@ struct iscsi_np {
 	enum iscsi_timer_flags_table np_login_timer_flags;
 	u32			np_exports;
 	enum np_flags_table	np_flags;
-	u16			np_port;
 	spinlock_t		np_thread_lock;
 	struct completion	np_restart_comp;
 	struct socket		*np_socket;
-	struct __kernel_sockaddr_storage np_sockaddr;
+	struct sockaddr_storage np_sockaddr;
 	struct task_struct	*np_thread;
 	struct timer_list	np_login_timer;
 	void			*np_context;
@@ -900,4 +902,30 @@ static inline u32 session_get_next_ttt(struct iscsi_session *session)
 }
 
 extern struct iscsi_cmd *iscsit_find_cmd_from_itt(struct iscsi_conn *, itt_t);
+
+static inline void iscsit_thread_check_cpumask(
+	struct iscsi_conn *conn,
+	struct task_struct *p,
+	int mode)
+{
+	/*
+	 * mode == 1 signals iscsi_target_tx_thread() usage.
+	 * mode == 0 signals iscsi_target_rx_thread() usage.
+	 */
+	if (mode == 1) {
+		if (!conn->conn_tx_reset_cpumask)
+			return;
+		conn->conn_tx_reset_cpumask = 0;
+	} else {
+		if (!conn->conn_rx_reset_cpumask)
+			return;
+		conn->conn_rx_reset_cpumask = 0;
+	}
+	/*
+	 * Update the CPU mask for this single kthread so that
+	 * both TX and RX kthreads are scheduled to run on the
+	 * same CPU.
+	 */
+	set_cpus_allowed_ptr(p, conn->conn_cpumask);
+}
 #endif /* ISCSI_TARGET_CORE_H */

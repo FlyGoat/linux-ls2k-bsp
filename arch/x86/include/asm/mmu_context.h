@@ -6,6 +6,7 @@
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include <asm/paravirt.h>
+#include <asm/mpx.h>
 #ifndef CONFIG_PARAVIRT
 #include <asm-generic/mm_hooks.h>
 
@@ -126,5 +127,30 @@ do {						\
 	loadsegment(fs, 0);			\
 } while (0)
 #endif
+
+#ifdef CONFIG_X86_64
+static inline bool is_64bit_mm(struct mm_struct *mm)
+{
+	return  !config_enabled(CONFIG_IA32_EMULATION) ||
+		!(mm->context.ia32_compat == TIF_IA32);
+}
+#else
+static inline bool is_64bit_mm(struct mm_struct *mm)
+{
+	return false;
+}
+#endif
+
+static inline void arch_bprm_mm_init(struct mm_struct *mm,
+		struct vm_area_struct *vma)
+{
+	mpx_mm_init(mm);
+}
+
+static inline void arch_unmap(struct mm_struct *mm, struct vm_area_struct *vma,
+			      unsigned long start, unsigned long end)
+{
+	mpx_notify_unmap(mm, vma, start, end);
+}
 
 #endif /* _ASM_X86_MMU_CONTEXT_H */

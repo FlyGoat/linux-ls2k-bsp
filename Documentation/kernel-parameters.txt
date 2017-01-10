@@ -121,6 +121,7 @@ parameter is applicable:
 			More X86-64 boot options can be found in
 			Documentation/x86/x86_64/boot-options.txt .
 	X86	Either 32-bit or 64-bit x86 (same as X86-32+X86-64)
+	X86_UV	SGI UV support is enabled.
 	XEN	Xen support is enabled
 
 In addition, the following text indicates that the option:
@@ -376,6 +377,15 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Change the amount of debugging information output
 			when initialising the APIC and IO-APIC components.
 
+	apic_extnmi=	[APIC,X86] External NMI delivery setting
+			Format: { bsp (default) | all | none }
+			bsp:  External NMI is delivered only to CPU 0
+			all:  External NMIs are broadcast to all CPUs as a
+			      backup of CPU 0
+			none: External NMI is masked for all CPUs. This is
+			      useful so that a dump capture kernel won't be
+			      shot down by NMI
+
 	autoconf=	[IPV6]
 			See Documentation/networking/ipv6.txt.
 
@@ -414,6 +424,13 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	atkbd.softrepeat= [HW]
 			Use software keyboard repeat
+
+	bau=		[X86_UV] Enable the BAU on SGI UV.  The default
+			behavior is to disable the BAU (i.e. bau=0).
+			Format: { "0" | "1" }
+			0 - Disable the BAU.
+			1 - Enable the BAU.
+			unset - Disable the BAU.
 
 	baycom_epp=	[HW,AX25]
 			Format: <io>,<mode>
@@ -607,6 +624,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	cpuidle.off=1	[CPU_IDLE]
 			disable the cpuidle sub-system
+
+	cpu_init_udelay=N
+			[X86] Delay for N microsec between assert and de-assert
+			of APIC INIT to start processors.  This delay occurs
+			on every CPU online, such as boot, and resume from suspend.
+			Default: 10000
 
 	cpcihp_generic=	[HW,PCI] Generic port I/O CompactPCI driver
 			Format:
@@ -1011,6 +1034,11 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Format: <unsigned int> such that (rxsize & ~0x1fffc0) == 0.
 			Default: 1024
 
+	hardlockup_all_cpu_backtrace=
+			[KNL] Should the hard-lockup detector generate
+			backtraces on all cpus.
+			Format: <integer>
+
 	hashdist=	[KNL,NUMA] Large hashes allocated during boot
 			are distributed across NUMA nodes.  Defaults on
 			for 64-bit NUMA, off otherwise.
@@ -1231,6 +1259,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			By default, super page will be supported if Intel IOMMU
 			has the capability. With this option, super page will
 			not be supported.
+		ecs_off [Default Off]
+			By default, extended context tables will be supported if
+			the hardware advertises that it has support both for the
+			extended tables themselves, and also PASID support. With
+			this option set, extended tables will not be used even
+			on hardware which claims to support them.
 
 	intel_idle.max_cstate=	[KNL,HW,ACPI,X86]
 			0	disables intel_idle and fall back on acpi_idle.
@@ -1360,7 +1394,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	keepinitrd	[HW,ARM]
 
-	kernelcore=nn[KMG]	[KNL,X86,IA-64,PPC] This parameter
+	kernelcore=	[KNL,X86,IA-64,PPC]
+			Format: nn[KMGTPE] | "mirror"
+			This parameter
 			specifies the amount of memory usable by the kernel
 			for non-movable allocations.  The requested amount is
 			spread evenly throughout all nodes in the system. The
@@ -1375,6 +1411,14 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Note that allocations like PTEs-from-HighMem still
 			use the HighMem zone if it exists, and the Normal
 			zone if it does not.
+
+			Instead of specifying the amount of memory (nn[KMGTPE]),
+			you can specify "mirror" option. In case "mirror"
+			option is specified, mirrored (reliable) memory is used
+			for non-movable allocations and remaining memory is used
+			for Movable pages. nn[KMGTPE] and "mirror" are exclusive,
+			so you can NOT specify nn[KMGTPE] and "mirror" at the same
+			time.
 
 	kgdbdbgp=	[KGDB,HW] kgdb over EHCI usb debug port.
 			Format: <Controller#>[,poll interval]
@@ -1511,6 +1555,8 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			  allowed.
 
 			* [no]ncq: Turn on or off NCQ.
+
+			* [no]ncqtrim: Turn off queued DSM TRIM.
 
 			* nohrst, nosrst, norst: suppress hard, soft
                           and both resets.
@@ -1676,6 +1722,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			         or
 			         memmap=0x10000$0x18690000
 
+	memmap=nn[KMG]!ss[KMG]
+			[KNL,X86] Mark specific memory as protected.
+			Region of memory to be used, from ss to ss+nn.
+			The memory region may be marked as e820 type 12 (0xc)
+			and is NVDIMM or ADR memory.
+
 	memory_corruption_check=0/1 [X86]
 			Some BIOSes seem to corrupt the first 64k of
 			memory when doing things like suspend/resume.
@@ -1760,6 +1812,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			modules without (valid) signatures will fail to load.
 			Note that if CONFIG_MODULE_SIG_FORCE is set, that
 			is always true, so this option does nothing.
+
+	module_blacklist=  [KNL] Do not load a comma-separated list of
+			modules.  Useful for debugging problem modules.
 
 	mousedev.tap_time=
 			[MOUSE] Maximum time between finger touching and
@@ -1927,6 +1982,15 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			The default parameter value of '0' causes the kernel
 			not to attempt recovery of lost locks.
 
+	nfs4.layoutstats_timer =
+			[NFSv4.2] Change the rate at which the kernel sends
+			layoutstats to the pNFS metadata server.
+
+			Setting this to value to 0 causes the kernel to use
+			whatever value is the default set by the layout
+			driver. A non-zero value sets the minimum interval
+			in seconds between layoutstats transmissions.
+
 	nfsd.nfs4_disable_idmapping=
 			[NFSv4] When set to the default of '1', the NFSv4
 			server will return only numeric uids and gids to
@@ -1946,8 +2010,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	nmi_watchdog=	[KNL,BUGS=X86] Debugging features for SMP kernels
 			Format: [panic,][nopanic,][num]
-			Valid num: 0
+			Valid num: 0 or 1
 			0 - turn nmi_watchdog off
+			1 - turn nmi_watchdog on
 			When panic is specified, panic when an NMI watchdog
 			timeout occurs (or 'nopanic' to override the opposite
 			default).
@@ -2032,9 +2097,30 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			register save and restore. The kernel will only save
 			legacy floating-point registers on task switch.
 
+	nohugeiomap	[KNL,x86] Disable kernel huge I/O mappings.
+
 	noxsave		[BUGS=X86] Disables x86 extended register state save
 			and restore using xsave. The kernel will fallback to
 			enabling legacy floating-point and sse state.
+
+	noxsaveopt	[X86] Disables xsaveopt used in saving x86 extended
+			register states. The kernel will fall back to use
+			xsave to save the states. By using this parameter,
+			performance of saving the states is degraded because
+			xsave doesn't support modified optimization while
+			xsaveopt supports it on xsaveopt enabled systems.
+
+	noxsaves	[X86] Disables xsaves and xrstors used in saving and
+			restoring x86 extended register state in compacted
+			form of xsave area. The kernel will fall back to use
+			xsaveopt and xrstor to save and restore the states
+			in standard form of xsave area. By using this
+			parameter, xsave area per process might occupy more
+			memory on xsaves enabled systems.
+
+	nompx           [X86] Disables Intel Memory Protection Extensions.
+			See Documentation/x86/intel_mpx.txt for more
+			information about the feature.
 
 	eagerfpu=	[X86]
 			on	enable eager fpu restore
@@ -2157,7 +2243,8 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	nousb		[USB] Disable the USB subsystem
 
-	nowatchdog	[KNL] Disable the lockup detector (NMI watchdog).
+	nowatchdog	[KNL] Disable both lockup detectors, i.e.
+                        soft-lockup and NMI watchdog (hard-lockup).
 
 	nowb		[ARM]
 
@@ -2856,6 +2943,11 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	sched_debug	[KNL] Enables verbose scheduler debug messages.
 
+	schedstats=	[KNL,X86] Enable or disable scheduled statistics.
+			Allowed values are enable and disable. This feature
+			incurs a small amount of overhead in the scheduler
+			but is useful for debugging and performance tuning.
+
 	skew_tick=	[KNL] Offset the periodic timer tick per cpu to mitigate
 			xtime_lock contention on larger systems, and/or RCU lock
 			contention on all systems with CONFIG_MAXSMP set.
@@ -3245,6 +3337,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	usbcore.usbfs_snoop=
 			[USB] Set to log all usbfs traffic (default 0 = off).
 
+	usbcore.usbfs_snoop_max=
+			[USB] Maximum number of bytes to snoop in each URB
+			(default = 65536).
+
 	usbcore.blinkenlights=
 			[USB] Set to cycle leds on hubs (default 0 = off).
 
@@ -3299,6 +3395,8 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 					sector if the number is odd);
 				i = IGNORE_DEVICE (don't bind to this
 					device);
+				j = NO_REPORT_LUNS (don't use report luns
+					command, uas only);
 				l = NOT_LOCKABLE (don't try to lock and
 					unlock ejectable media);
 				m = MAX_SECTORS_64 (don't transfer more
@@ -3465,6 +3563,15 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			or other driver-specific files in the
 			Documentation/watchdog/ directory.
 
+	workqueue.watchdog_thresh=
+			If CONFIG_WQ_WATCHDOG is configured, workqueue can
+			warn stall conditions and dump internal state to
+			help debugging.  0 disables workqueue stall
+			detection; otherwise, it's the stall threshold
+			duration in seconds.  The default value is 30 and
+			it can be updated at runtime by writing to the
+			corresponding sysfs file.
+
 	workqueue.disable_numa
 			By default, all work items queued to unbound
 			workqueues are affine to the NUMA nodes they're
@@ -3473,6 +3580,21 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			whatever reason, this option can be used.  Note
 			that this also can be controlled per-workqueue for
 			workqueues visible under /sys/bus/workqueue/.
+
+	workqueue.power_efficient
+			Per-cpu workqueues are generally preferred because
+			they show better performance thanks to cache
+			locality; unfortunately, per-cpu workqueues tend to
+			be more power hungry than unbound workqueues.
+
+			Enabling this makes the per-cpu workqueues which
+			were observed to contribute significantly to power
+			consumption unbound, leading to measurably lower
+			power usage at the cost of small performance
+			overhead.
+
+			The default value of this parameter is determined by
+			the config option CONFIG_WQ_POWER_EFFICIENT_DEFAULT.
 
 	x2apic_phys	[X86-64,APIC] Use x2apic physical mode instead of
 			default x2apic cluster mode on platforms

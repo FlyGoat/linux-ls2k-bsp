@@ -48,7 +48,7 @@ static struct sctp_hmac sctp_hmac_list[SCTP_AUTH_NUM_HMACS] = {
 	},
 	{
 		.hmac_id = SCTP_AUTH_HMAC_ID_SHA1,
-		.hmac_name="hmac(sha1)",
+		.hmac_name = "hmac(sha1)",
 		.hmac_len = SCTP_SHA1_SIG_SIZE,
 	},
 	{
@@ -58,7 +58,7 @@ static struct sctp_hmac sctp_hmac_list[SCTP_AUTH_NUM_HMACS] = {
 #if defined (CONFIG_CRYPTO_SHA256) || defined (CONFIG_CRYPTO_SHA256_MODULE)
 	{
 		.hmac_id = SCTP_AUTH_HMAC_ID_SHA256,
-		.hmac_name="hmac(sha256)",
+		.hmac_name = "hmac(sha256)",
 		.hmac_len = SCTP_SHA256_SIG_SIZE,
 	}
 #endif
@@ -170,7 +170,7 @@ static int sctp_auth_compare_vectors(struct sctp_auth_bytes *vector1,
 		 * lead-zero padded.  If it is not, it
 		 * is automatically larger numerically.
 		 */
-		for (i = 0; i < abs(diff); i++ ) {
+		for (i = 0; i < abs(diff); i++) {
 			if (longer[i] != 0)
 				return diff;
 		}
@@ -233,9 +233,9 @@ static struct sctp_auth_bytes *sctp_auth_make_local_vector(
 				    gfp_t gfp)
 {
 	return sctp_auth_make_key_vector(
-				    (sctp_random_param_t*)asoc->c.auth_random,
-				    (sctp_chunks_param_t*)asoc->c.auth_chunks,
-				    (sctp_hmac_algo_param_t*)asoc->c.auth_hmacs,
+				    (sctp_random_param_t *)asoc->c.auth_random,
+				    (sctp_chunks_param_t *)asoc->c.auth_chunks,
+				    (sctp_hmac_algo_param_t *)asoc->c.auth_hmacs,
 				    gfp);
 }
 
@@ -514,8 +514,7 @@ void sctp_auth_destroy_hmacs(struct crypto_hash *auth_hmacs[])
 	if (!auth_hmacs)
 		return;
 
-	for (i = 0; i < SCTP_AUTH_NUM_HMACS; i++)
-	{
+	for (i = 0; i < SCTP_AUTH_NUM_HMACS; i++) {
 		if (auth_hmacs[i])
 			crypto_free_hash(auth_hmacs[i]);
 	}
@@ -666,15 +665,15 @@ static int __sctp_auth_cid(sctp_cid_t chunk, struct sctp_chunks_param *param)
 	 */
 	for (i = 0; !found && i < len; i++) {
 		switch (param->chunks[i]) {
-		    case SCTP_CID_INIT:
-		    case SCTP_CID_INIT_ACK:
-		    case SCTP_CID_SHUTDOWN_COMPLETE:
-		    case SCTP_CID_AUTH:
+		case SCTP_CID_INIT:
+		case SCTP_CID_INIT_ACK:
+		case SCTP_CID_SHUTDOWN_COMPLETE:
+		case SCTP_CID_AUTH:
 			break;
 
-		    default:
+		default:
 			if (param->chunks[i] == chunk)
-			    found = 1;
+				found = 1;
 			break;
 		}
 	}
@@ -821,8 +820,8 @@ int sctp_auth_ep_set_hmacs(struct sctp_endpoint *ep,
 	if (!has_sha1)
 		return -EINVAL;
 
-	memcpy(ep->auth_hmacs_list->hmac_ids, &hmacs->shmac_idents[0],
-		hmacs->shmac_num_idents * sizeof(__u16));
+	for (i = 0; i < hmacs->shmac_num_idents; i++)
+		ep->auth_hmacs_list->hmac_ids[i] = htons(hmacs->shmac_idents[i]);
 	ep->auth_hmacs_list->param_hdr.length = htons(sizeof(sctp_paramhdr_t) +
 				hmacs->shmac_num_idents * sizeof(__u16));
 	return 0;

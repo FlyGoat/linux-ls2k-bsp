@@ -18,6 +18,13 @@
 
 #include "cpu.h"
 
+/*
+ * nodes_per_socket: Stores the number of nodes per socket.
+ * Refer to Fam15h Models 00-0fh BKDG - CPUID Fn8000_001E_ECX
+ * Node Identifiers[10:8]
+ */
+static u32 nodes_per_socket = 1;
+
 static inline int rdmsrl_amd_safe(unsigned msr, unsigned long long *p)
 {
 	u32 gprs[8] = { 0 };
@@ -105,7 +112,7 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 		const int K6_BUG_LOOP = 1000000;
 		int n;
 		void (*f_vide)(void);
-		unsigned long d, d2;
+		u64 d, d2;
 
 		printk(KERN_INFO "AMD K6 stepping B detected - ");
 
@@ -116,10 +123,10 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 
 		n = K6_BUG_LOOP;
 		f_vide = vide;
-		rdtscl(d);
+		d = rdtsc();
 		while (n--)
 			f_vide();
-		rdtscl(d2);
+		d2 = rdtsc();
 		d = d2-d;
 
 		if (d > 20*K6_BUG_LOOP)
@@ -294,7 +301,7 @@ static int nearby_node(int apicid)
 #ifdef CONFIG_X86_HT
 static void amd_get_topology(struct cpuinfo_x86 *c)
 {
-	u32 nodes, cores_per_cu = 1;
+	u32 cores_per_cu = 1;
 	u8 node_id;
 	int cpu = smp_processor_id();
 
@@ -303,30 +310,30 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
 		u32 eax, ebx, ecx, edx;
 
 		cpuid(0x8000001e, &eax, &ebx, &ecx, &edx);
-		nodes = ((ecx >> 8) & 7) + 1;
+		nodes_per_socket = ((ecx >> 8) & 7) + 1;
 		node_id = ecx & 7;
 
 		/* get compute unit information */
-		smp_num_siblings = ((ebx >> 8) & 3) + 1;
+		cores_per_cu = smp_num_siblings = ((ebx >> 8) & 3) + 1;
+		c->x86_max_cores /= smp_num_siblings;
 		c->compute_unit_id = ebx & 0xff;
-		cores_per_cu += ((ebx >> 8) & 3);
 	} else if (cpu_has(c, X86_FEATURE_NODEID_MSR)) {
 		u64 value;
 
 		rdmsrl(MSR_FAM10H_NODE_ID, value);
-		nodes = ((value >> 3) & 7) + 1;
+		nodes_per_socket = ((value >> 3) & 7) + 1;
 		node_id = value & 7;
 	} else
 		return;
 
 	/* fixup multi-node processor information */
-	if (nodes > 1) {
+	if (nodes_per_socket > 1) {
 		u32 cores_per_node;
 		u32 cus_per_node;
 
 		set_cpu_cap(c, X86_FEATURE_AMD_DCM);
-		cores_per_node = c->x86_max_cores / nodes;
-		cus_per_node = cores_per_node / cores_per_cu;
+		cus_per_node = c->x86_max_cores / nodes_per_socket;
+		cores_per_node = cus_per_node * cores_per_cu;
 
 		/* store NodeID, use llc_shared_map to store sibling info */
 		per_cpu(cpu_llc_id, cpu) = node_id;
@@ -347,6 +354,7 @@ static void amd_detect_cmp(struct cpuinfo_x86 *c)
 #ifdef CONFIG_X86_HT
 	unsigned bits;
 	int cpu = smp_processor_id();
+	unsigned int socket_id, core_complex_id;
 
 	bits = c->x86_coreid_bits;
 	/* Low order bits define the core id (index of core in socket) */
@@ -356,6 +364,18 @@ static void amd_detect_cmp(struct cpuinfo_x86 *c)
 	/* use socket ID also for last level cache */
 	per_cpu(cpu_llc_id, cpu) = c->phys_proc_id;
 	amd_get_topology(c);
+
+	/*
+	 * Fix percpu cpu_llc_id here as LLC topology is different
+	 * for Fam17h systems.
+	 */
+	 if (c->x86 != 0x17 || !cpuid_edx(0x80000006))
+		return;
+
+	socket_id	= (c->apicid >> bits) - 1;
+	core_complex_id	= (c->apicid & ((1 << bits) - 1)) >> 3;
+
+	per_cpu(cpu_llc_id, cpu) = (socket_id << 3) | core_complex_id;
 #endif
 }
 
@@ -503,8 +523,16 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 			set_cpu_cap(c, X86_FEATURE_K6_MTRR);
 #endif
 #if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_PCI)
-	/* check CPU config space for extended APIC ID */
-	if (cpu_has_apic && c->x86 >= 0xf) {
+	/*
+	 * ApicID can always be treated as an 8-bit value for AMD APIC versions
+	 * >= 0x10, but even old K8s came out of reset with version 0x10. So, we
+	 * can safely set X86_FEATURE_EXTD_APICID unconditionally for families
+	 * after 16h.
+	 */
+	if (cpu_has_apic && c->x86 > 0x16) {
+		set_cpu_cap(c, X86_FEATURE_EXTD_APICID);
+	} else if (cpu_has_apic && c->x86 >= 0xf) {
+		/* check CPU config space for extended APIC ID */
 		unsigned int val;
 		val = read_pci_config(0, 24, 0, 0x68);
 		if ((val & ((1 << 17) | (1 << 18))) == ((1 << 17) | (1 << 18)))
@@ -908,4 +936,23 @@ static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum)
 			return true;
 
 	return false;
+}
+
+void set_dr_addr_mask(unsigned long mask, int dr)
+{
+	if (!cpu_has_bpext)
+		return;
+
+	switch (dr) {
+	case 0:
+		wrmsr(MSR_F16H_DR0_ADDR_MASK, mask, 0);
+		break;
+	case 1:
+	case 2:
+	case 3:
+		wrmsr(MSR_F16H_DR1_ADDR_MASK - 1 + dr, mask, 0);
+		break;
+	default:
+		break;
+	}
 }

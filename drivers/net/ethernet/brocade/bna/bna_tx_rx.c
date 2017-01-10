@@ -353,7 +353,7 @@ bna_bfi_rss_enable(struct bna_rxf *rxf)
 
 /* This function gets the multicast MAC that has already been added to CAM */
 static struct bna_mac *
-bna_rxf_mcmac_get(struct bna_rxf *rxf, u8 *mac_addr)
+bna_rxf_mcmac_get(struct bna_rxf *rxf, const u8 *mac_addr)
 {
 	struct bna_mac *mac;
 
@@ -729,7 +729,7 @@ bna_rxf_fail(struct bna_rxf *rxf)
 }
 
 enum bna_cb_status
-bna_rx_ucast_set(struct bna_rx *rx, u8 *ucmac)
+bna_rx_ucast_set(struct bna_rx *rx, const u8 *ucmac)
 {
 	struct bna_rxf *rxf = &rx->rxf;
 
@@ -751,7 +751,7 @@ bna_rx_ucast_set(struct bna_rx *rx, u8 *ucmac)
 }
 
 enum bna_cb_status
-bna_rx_mcast_add(struct bna_rx *rx, u8 *addr,
+bna_rx_mcast_add(struct bna_rx *rx, const u8 *addr,
 		 void (*cbfn)(struct bnad *, struct bna_rx *))
 {
 	struct bna_rxf *rxf = &rx->rxf;
@@ -780,12 +780,12 @@ bna_rx_mcast_add(struct bna_rx *rx, u8 *addr,
 }
 
 enum bna_cb_status
-bna_rx_ucast_listset(struct bna_rx *rx, int count, u8 *uclist)
+bna_rx_ucast_listset(struct bna_rx *rx, int count, const u8 *uclist)
 {
 	struct bna_ucam_mod *ucam_mod = &rx->bna->ucam_mod;
 	struct bna_rxf *rxf = &rx->rxf;
 	struct list_head list_head;
-	u8 *mcaddr;
+	const u8 *mcaddr;
 	struct bna_mac *mac, *del_mac;
 	int i;
 
@@ -838,12 +838,12 @@ err_return:
 }
 
 enum bna_cb_status
-bna_rx_mcast_listset(struct bna_rx *rx, int count, u8 *mclist)
+bna_rx_mcast_listset(struct bna_rx *rx, int count, const u8 *mclist)
 {
 	struct bna_mcam_mod *mcam_mod = &rx->bna->mcam_mod;
 	struct bna_rxf *rxf = &rx->rxf;
 	struct list_head list_head;
-	u8 *mcaddr;
+	const u8 *mcaddr;
 	struct bna_mac *mac, *del_mac;
 	int i;
 
@@ -933,7 +933,7 @@ bna_rx_vlan_add(struct bna_rx *rx, int vlan_id)
 {
 	struct bna_rxf *rxf = &rx->rxf;
 	int index = (vlan_id >> BFI_VLAN_WORD_SHIFT);
-	int bit = BIT((vlan_id & BFI_VLAN_WORD_MASK));
+	int bit = BIT(vlan_id & BFI_VLAN_WORD_MASK);
 	int group_id = (vlan_id >> BFI_VLAN_BLOCK_SHIFT);
 
 	rxf->vlan_filter_table[index] |= bit;
@@ -948,7 +948,7 @@ bna_rx_vlan_del(struct bna_rx *rx, int vlan_id)
 {
 	struct bna_rxf *rxf = &rx->rxf;
 	int index = (vlan_id >> BFI_VLAN_WORD_SHIFT);
-	int bit = BIT((vlan_id & BFI_VLAN_WORD_MASK));
+	int bit = BIT(vlan_id & BFI_VLAN_WORD_MASK);
 	int group_id = (vlan_id >> BFI_VLAN_BLOCK_SHIFT);
 
 	rxf->vlan_filter_table[index] &= ~bit;
@@ -987,7 +987,7 @@ bna_rxf_ucast_cfg_apply(struct bna_rxf *rxf)
 	if (!list_empty(&rxf->ucast_pending_add_q)) {
 		mac = list_first_entry(&rxf->ucast_pending_add_q,
 				       struct bna_mac, qe);
-		list_add_tail(&mac->qe, &rxf->ucast_active_q);
+		list_move_tail(&mac->qe, &rxf->ucast_active_q);
 		bna_bfi_ucast_req(rxf, mac, BFI_ENET_H2I_MAC_UCAST_ADD_REQ);
 		return 1;
 	}
@@ -2400,6 +2400,7 @@ bna_rx_create(struct bna *bna, struct bnad *bnad,
 		q0->rcb->id = 0;
 		q0->rx_packets = q0->rx_bytes = 0;
 		q0->rx_packets_with_error = q0->rxbuf_alloc_failed = 0;
+		q0->rxbuf_map_failed = 0;
 
 		bna_rxq_qpt_setup(q0, rxp, dpage_count, PAGE_SIZE,
 			&dqpt_mem[i], &dsqpt_mem[i], &dpage_mem[i]);
@@ -2428,6 +2429,7 @@ bna_rx_create(struct bna *bna, struct bnad *bnad,
 					: rx_cfg->q1_buf_size;
 			q1->rx_packets = q1->rx_bytes = 0;
 			q1->rx_packets_with_error = q1->rxbuf_alloc_failed = 0;
+			q1->rxbuf_map_failed = 0;
 
 			bna_rxq_qpt_setup(q1, rxp, hpage_count, PAGE_SIZE,
 				&hqpt_mem[i], &hsqpt_mem[i],

@@ -253,6 +253,8 @@ static void cachefiles_drop_object(struct fscache_object *_object)
 	struct cachefiles_object *object;
 	struct cachefiles_cache *cache;
 	const struct cred *saved_cred;
+	struct inode *inode;
+	blkcnt_t i_blocks = 0;
 
 	ASSERT(_object);
 
@@ -279,6 +281,9 @@ static void cachefiles_drop_object(struct fscache_object *_object)
 		    _object != cache->cache.fsdef
 		    ) {
 			_debug("- retire object OBJ%x", object->fscache.debug_id);
+			inode = d_backing_inode(object->dentry);
+			i_blocks = inode ? 0 : inode->i_blocks;
+
 			cachefiles_begin_secure(cache, &saved_cred);
 			cachefiles_delete_object(cache, object);
 			cachefiles_end_secure(cache, saved_cred);
@@ -291,15 +296,8 @@ static void cachefiles_drop_object(struct fscache_object *_object)
 	}
 
 	/* note that the object is now inactive */
-	if (test_bit(CACHEFILES_OBJECT_ACTIVE, &object->flags)) {
-		write_lock(&cache->active_lock);
-		if (!test_and_clear_bit(CACHEFILES_OBJECT_ACTIVE,
-					&object->flags))
-			BUG();
-		rb_erase(&object->active_node, &cache->active_nodes);
-		wake_up_bit(&object->flags, CACHEFILES_OBJECT_ACTIVE);
-		write_unlock(&cache->active_lock);
-	}
+	if (test_bit(CACHEFILES_OBJECT_ACTIVE, &object->flags))
+		cachefiles_mark_object_inactive(cache, object, i_blocks);
 
 	dput(object->dentry);
 	object->dentry = NULL;

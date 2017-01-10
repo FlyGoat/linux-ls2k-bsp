@@ -149,6 +149,7 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_CANDAPTER_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_BM_ATOM_NANO_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_NXTCAM_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_EV3CON_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SCS_DEVICE_0_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SCS_DEVICE_1_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SCS_DEVICE_2_PID) },
@@ -188,6 +189,8 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_IOBOARD_PID) },
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_MINI_IOBOARD_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SPROG_II) },
+	{ USB_DEVICE(FTDI_VID, FTDI_TAGSYS_LP101_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_TAGSYS_P200X_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_LENZ_LIUSB_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_XF_632_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_XF_634_PID) },
@@ -602,6 +605,10 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_NT_ORIONLXM_PID),
 		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
 	{ USB_DEVICE(FTDI_VID, FTDI_SYNAPSE_SS200_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_CUSTOMWARE_MINIPLEX_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_CUSTOMWARE_MINIPLEX2_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_CUSTOMWARE_MINIPLEX2WI_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_CUSTOMWARE_MINIPLEX3_PID) },
 	/*
 	 * ELV devices:
 	 */
@@ -798,6 +805,8 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_ELSTER_UNICOM_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_PROPOX_JTAGCABLEII_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_PROPOX_ISPCABLEIII_PID) },
+	{ USB_DEVICE(FTDI_VID, CYBER_CORTEX_AV_PID),
+		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
 	{ USB_DEVICE(OLIMEX_VID, OLIMEX_ARM_USB_OCD_PID),
 		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
 	{ USB_DEVICE(OLIMEX_VID, OLIMEX_ARM_USB_OCD_H_PID),
@@ -815,6 +824,7 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_TURTELIZER_PID),
 		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
 	{ USB_DEVICE(RATOC_VENDOR_ID, RATOC_PRODUCT_ID_USB60F) },
+	{ USB_DEVICE(RATOC_VENDOR_ID, RATOC_PRODUCT_ID_SCU18) },
 	{ USB_DEVICE(FTDI_VID, FTDI_REU_TINY_PID) },
 
 	/* Papouch devices based on FTDI chip */
@@ -977,6 +987,27 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE_INTERFACE_NUMBER(INFINEON_VID, INFINEON_TRIBOARD_PID, 1) },
 	/* GE Healthcare devices */
 	{ USB_DEVICE(GE_HEALTHCARE_VID, GE_HEALTHCARE_NEMO_TRACKER_PID) },
+	/* Active Research (Actisense) devices */
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_NDC_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_USG_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_NGT_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_NGW_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_D9AC_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_D9AD_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_D9AE_PID) },
+	{ USB_DEVICE(FTDI_VID, ACTISENSE_D9AF_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEAGAUGE_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASWITCH_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_NMEA2000_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_ETHERNET_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_WIFI_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_DISPLAY_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_LITE_PID) },
+	{ USB_DEVICE(FTDI_VID, CHETCO_SEASMART_ANALOG_PID) },
+	/* ICP DAS I-756xU devices */
+	{ USB_DEVICE(ICPDAS_VID, ICPDAS_I7560U_PID) },
+	{ USB_DEVICE(ICPDAS_VID, ICPDAS_I7561U_PID) },
+	{ USB_DEVICE(ICPDAS_VID, ICPDAS_I7563U_PID) },
 	{ }					/* Terminating entry */
 };
 
@@ -1293,11 +1324,11 @@ static __u32 get_ftdi_divisor(struct tty_struct *tty,
 		if (baud <= 3000000) {
 			__u16 product_id = le16_to_cpu(
 				port->serial->dev->descriptor.idProduct);
-			if (((FTDI_NDI_HUC_PID == product_id) ||
-			     (FTDI_NDI_SPECTRA_SCU_PID == product_id) ||
-			     (FTDI_NDI_FUTURE_2_PID == product_id) ||
-			     (FTDI_NDI_FUTURE_3_PID == product_id) ||
-			     (FTDI_NDI_AURORA_SCU_PID == product_id)) &&
+			if (((product_id == FTDI_NDI_HUC_PID)		||
+			     (product_id == FTDI_NDI_SPECTRA_SCU_PID)	||
+			     (product_id == FTDI_NDI_FUTURE_2_PID)	||
+			     (product_id == FTDI_NDI_FUTURE_3_PID)	||
+			     (product_id == FTDI_NDI_AURORA_SCU_PID))	&&
 			    (baud == 19200)) {
 				baud = 1200000;
 			}

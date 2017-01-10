@@ -15,6 +15,38 @@
 struct device_node;
 
 /*
+ * PCI controller operations
+ */
+struct pci_controller_ops {
+	void		(*dma_dev_setup)(struct pci_dev *dev);
+	void		(*dma_bus_setup)(struct pci_bus *bus);
+
+	int		(*probe_mode)(struct pci_bus *);
+
+	/* Called when pci_enable_device() is called. Returns true to
+	 * allow assignment/enabling of the device. */
+	bool		(*enable_device_hook)(struct pci_dev *);
+
+	void		(*disable_device)(struct pci_dev *);
+
+	void		(*release_device)(struct pci_dev *);
+
+	/* Called during PCI resource reassignment */
+	resource_size_t (*window_alignment)(struct pci_bus *, unsigned long type);
+	void		(*reset_secondary_bus)(struct pci_dev *dev);
+
+#ifdef CONFIG_PCI_MSI
+	int		(*setup_msi_irqs)(struct pci_dev *dev,
+					  int nvec, int type);
+	void		(*teardown_msi_irqs)(struct pci_dev *dev);
+#endif
+
+	int             (*dma_set_mask)(struct pci_dev *dev, u64 dma_mask);
+
+	void		(*shutdown)(struct pci_controller *);
+};
+
+/*
  * Structure of a PCI controller (host bridge)
  */
 struct pci_controller {
@@ -94,6 +126,7 @@ struct pci_controller {
 	void *private_data;
 #ifdef CONFIG_PPC64
 	RH_KABI_EXTEND(struct pci_dn *pci_data)
+	RH_KABI_EXTEND(struct pci_controller_ops controller_ops)
 #endif /* CONFIG_PPC64 */
 };
 
@@ -168,8 +201,6 @@ struct pci_dn {
 	struct	device_node *node;	/* back-pointer to the device_node */
 
 	int	pci_ext_config_space;	/* for pci devices */
-
-	bool	force_32bit_msi;
 
 	struct	pci_dev *pcidev;	/* back-pointer to the pci device */
 #ifdef CONFIG_EEH

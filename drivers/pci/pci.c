@@ -80,7 +80,7 @@ unsigned long pci_cardbus_mem_size = DEFAULT_CARDBUS_MEM_SIZE;
 unsigned long pci_hotplug_io_size  = DEFAULT_HOTPLUG_IO_SIZE;
 unsigned long pci_hotplug_mem_size = DEFAULT_HOTPLUG_MEM_SIZE;
 
-enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_TUNE_OFF;
+enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_DEFAULT;
 
 /*
  * The default CLS is used if arch didn't set CLS explicitly and not
@@ -125,15 +125,16 @@ EXPORT_SYMBOL_GPL(pci_bus_max_busnr);
 #ifdef CONFIG_HAS_IOMEM
 void __iomem *pci_ioremap_bar(struct pci_dev *pdev, int bar)
 {
+	struct resource *res = &pdev->resource[bar];
+
 	/*
 	 * Make sure the BAR is actually a memory resource, not an IO resource
 	 */
-	if (!(pci_resource_flags(pdev, bar) & IORESOURCE_MEM)) {
-		WARN_ON(1);
+	if (res->flags & IORESOURCE_UNSET || !(res->flags & IORESOURCE_MEM)) {
+		dev_warn(&pdev->dev, "can't ioremap BAR %d: %pR\n", bar, res);
 		return NULL;
 	}
-	return ioremap_nocache(pci_resource_start(pdev, bar),
-				     pci_resource_len(pdev, bar));
+	return ioremap_nocache(res->start, resource_size(res));
 }
 EXPORT_SYMBOL_GPL(pci_ioremap_bar);
 #endif
@@ -144,19 +145,22 @@ static int __pci_find_next_cap_ttl(struct pci_bus *bus, unsigned int devfn,
 				   u8 pos, int cap, int *ttl)
 {
 	u8 id;
+	u16 ent;
+
+	pci_bus_read_config_byte(bus, devfn, pos, &pos);
 
 	while ((*ttl)--) {
-		pci_bus_read_config_byte(bus, devfn, pos, &pos);
 		if (pos < 0x40)
 			break;
 		pos &= ~3;
-		pci_bus_read_config_byte(bus, devfn, pos + PCI_CAP_LIST_ID,
-					 &id);
+		pci_bus_read_config_word(bus, devfn, pos, &ent);
+
+		id = ent & 0xff;
 		if (id == 0xff)
 			break;
 		if (id == cap)
 			return pos;
-		pos += PCI_CAP_LIST_NEXT;
+		pos = (ent >> 8);
 	}
 	return 0;
 }
@@ -1004,13 +1008,16 @@ int pci_save_state(struct pci_dev *dev)
 	for (i = 0; i < 16; i++)
 		pci_read_config_dword(dev, i * 4, &dev->saved_config_space[i]);
 	dev->state_saved = true;
-	if ((i = pci_save_pcie_state(dev)) != 0)
+
+	i = pci_save_pcie_state(dev);
+	if (i != 0)
 		return i;
-	if ((i = pci_save_pcix_state(dev)) != 0)
+
+	i = pci_save_pcix_state(dev);
+	if (i != 0)
 		return i;
-	if ((i = pci_save_vc_state(dev)) != 0)
-		return i;
-	return 0;
+
+	return pci_save_vc_state(dev);
 }
 EXPORT_SYMBOL(pci_save_state);
 
@@ -1923,10 +1930,6 @@ int pci_prepare_to_sleep(struct pci_dev *dev)
 	if (target_state == PCI_POWER_ERROR)
 		return -EIO;
 
-	/* D3cold during system suspend/hibernate is not supported */
-	if (target_state > PCI_D3hot)
-		target_state = PCI_D3hot;
-
 	pci_enable_wake(dev, target_state, device_may_wakeup(&dev->dev));
 
 	error = pci_set_power_state(dev, target_state);
@@ -2247,7 +2250,7 @@ void pci_request_acs(void)
  * pci_std_enable_acs - enable ACS on devices using standard ACS capabilites
  * @dev: the PCI device
  */
-static int pci_std_enable_acs(struct pci_dev *dev)
+static void pci_std_enable_acs(struct pci_dev *dev)
 {
 	int pos;
 	u16 cap;
@@ -2255,7 +2258,7 @@ static int pci_std_enable_acs(struct pci_dev *dev)
 
 	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
 	if (!pos)
-		return -ENODEV;
+		return;
 
 	pci_read_config_word(dev, pos + PCI_ACS_CAP, &cap);
 	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
@@ -2273,8 +2276,6 @@ static int pci_std_enable_acs(struct pci_dev *dev)
 	ctrl |= (cap & PCI_ACS_UF);
 
 	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
-
-	return 0;
 }
 
 /**
@@ -2286,10 +2287,10 @@ void pci_enable_acs(struct pci_dev *dev)
 	if (!pci_acs_enable)
 		return;
 
-	if (!pci_std_enable_acs(dev))
+	if (!pci_dev_specific_enable_acs(dev))
 		return;
 
-	pci_dev_specific_enable_acs(dev);
+	pci_std_enable_acs(dev);
 }
 
 static bool pci_acs_flags_enabled(struct pci_dev *pdev, u16 acs_flags)
@@ -2480,6 +2481,7 @@ u8 pci_common_swizzle(struct pci_dev *dev, u8 *pinp)
 	*pinp = pin;
 	return PCI_SLOT(dev->devfn);
 }
+EXPORT_SYMBOL_GPL(pci_common_swizzle);
 
 /**
  *	pci_release_region - Release a PCI bar
@@ -2719,6 +2721,37 @@ int pci_request_regions_exclusive(struct pci_dev *pdev, const char *res_name)
 					((1 << 6) - 1), res_name);
 }
 EXPORT_SYMBOL(pci_request_regions_exclusive);
+
+/**
+ *	pci_remap_iospace - Remap the memory mapped I/O space
+ *	@res: Resource describing the I/O space
+ *	@phys_addr: physical address of range to be mapped
+ *
+ *	Remap the memory mapped I/O space described by the @res
+ *	and the CPU physical address @phys_addr into virtual address space.
+ *	Only architectures that have memory mapped IO functions defined
+ *	(and the PCI_IOBASE value defined) should call this function.
+ */
+int __weak pci_remap_iospace(const struct resource *res, phys_addr_t phys_addr)
+{
+#if defined(PCI_IOBASE) && defined(CONFIG_MMU)
+	unsigned long vaddr = (unsigned long)PCI_IOBASE + res->start;
+
+	if (!(res->flags & IORESOURCE_IO))
+		return -EINVAL;
+
+	if (res->end > IO_SPACE_LIMIT)
+		return -EINVAL;
+
+	return ioremap_page_range(vaddr, vaddr + resource_size(res), phys_addr,
+				  pgprot_device(PAGE_KERNEL));
+#else
+	/* this architecture does not have memory mapped I/O space,
+	   so this function should never be called */
+	WARN_ONCE(1, "This architecture does not support memory mapped I/O\n");
+	return -ENODEV;
+#endif
+}
 
 static void __pci_set_master(struct pci_dev *dev, bool enable)
 {
@@ -3053,39 +3086,6 @@ bool pci_check_and_unmask_intx(struct pci_dev *dev)
 }
 EXPORT_SYMBOL_GPL(pci_check_and_unmask_intx);
 
-/**
- * pci_msi_off - disables any MSI or MSI-X capabilities
- * @dev: the PCI device to operate on
- *
- * If you want to use MSI, see pci_enable_msi() and friends.
- * This is a lower-level primitive that allows us to disable
- * MSI operation at the device level.
- */
-void pci_msi_off(struct pci_dev *dev)
-{
-	int pos;
-	u16 control;
-
-	/*
-	 * This looks like it could go in msi.c, but we need it even when
-	 * CONFIG_PCI_MSI=n.  For the same reason, we can't use
-	 * dev->msi_cap or dev->msix_cap here.
-	 */
-	pos = pci_find_capability(dev, PCI_CAP_ID_MSI);
-	if (pos) {
-		pci_read_config_word(dev, pos + PCI_MSI_FLAGS, &control);
-		control &= ~PCI_MSI_FLAGS_ENABLE;
-		pci_write_config_word(dev, pos + PCI_MSI_FLAGS, control);
-	}
-	pos = pci_find_capability(dev, PCI_CAP_ID_MSIX);
-	if (pos) {
-		pci_read_config_word(dev, pos + PCI_MSIX_FLAGS, &control);
-		control &= ~PCI_MSIX_FLAGS_ENABLE;
-		pci_write_config_word(dev, pos + PCI_MSIX_FLAGS, control);
-	}
-}
-EXPORT_SYMBOL_GPL(pci_msi_off);
-
 int pci_set_dma_max_seg_size(struct pci_dev *dev, unsigned int size)
 {
 	return dma_set_max_seg_size(&dev->dev, size);
@@ -3126,12 +3126,10 @@ static int pcie_flr(struct pci_dev *dev, int probe)
 		return 0;
 
 	if (!pci_wait_for_pending_transaction(dev))
-		dev_err(&dev->dev, "transaction is not cleared; proceeding with reset anyway\n");
+		dev_err(&dev->dev, "timed out waiting for pending transaction; performing function level reset anyway\n");
 
 	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_BCR_FLR);
-
 	msleep(100);
-
 	return 0;
 }
 
@@ -3156,16 +3154,12 @@ static int pci_af_flr(struct pci_dev *dev, int probe)
 	 * is used, so we use the conrol offset rather than status and shift
 	 * the test bit to match.
 	 */
-	if (pci_wait_for_pending(dev, pos + PCI_AF_CTRL,
+	if (!pci_wait_for_pending(dev, pos + PCI_AF_CTRL,
 				 PCI_AF_STATUS_TP << 8))
-		goto clear;
+		dev_err(&dev->dev, "timed out waiting for pending transaction; performing AF function level reset anyway\n");
 
-	dev_err(&dev->dev, "transaction is not cleared; proceeding with reset anyway\n");
-
-clear:
 	pci_write_config_byte(dev, pos + PCI_AF_CTRL, PCI_AF_CTRL_FLR);
 	msleep(100);
-
 	return 0;
 }
 
@@ -4275,6 +4269,36 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 	return 0;
 }
 
+/**
+ * pci_add_dma_alias - Add a DMA devfn alias for a device
+ * @dev: the PCI device for which alias is added
+ * @devfn: alias slot and function
+ *
+ * This helper encodes 8-bit devfn as bit number in dma_alias_mask.
+ * It should be called early, preferably as PCI fixup header quirk.
+ */
+void pci_add_dma_alias(struct pci_dev *dev, u8 devfn)
+{
+	if (!dev->pci_dev_rh->dma_alias_mask)
+		dev->pci_dev_rh->dma_alias_mask = kcalloc(BITS_TO_LONGS(U8_MAX),
+							  sizeof(long), GFP_KERNEL);
+	if (!dev->pci_dev_rh->dma_alias_mask) {
+		dev_warn(&dev->dev, "Unable to allocate DMA alias mask\n");
+		return;
+	}
+	set_bit(devfn, dev->pci_dev_rh->dma_alias_mask);
+	dev_info(&dev->dev, "Enabling fixed DMA alias to %02x.%d\n",
+		 PCI_SLOT(devfn), PCI_FUNC(devfn));
+}
+
+bool pci_devs_are_dma_aliases(struct pci_dev *dev1, struct pci_dev *dev2)
+{
+	return (dev1->pci_dev_rh->dma_alias_mask &&
+		test_bit(dev2->devfn, dev1->pci_dev_rh->dma_alias_mask)) ||
+		(dev2->pci_dev_rh->dma_alias_mask &&
+		 test_bit(dev1->devfn, dev2->pci_dev_rh->dma_alias_mask));
+}
+
 bool pci_device_is_present(struct pci_dev *pdev)
 {
 	u32 v;
@@ -4282,6 +4306,17 @@ bool pci_device_is_present(struct pci_dev *pdev)
 	return pci_bus_read_dev_vendor_id(pdev->bus, pdev->devfn, &v, 0);
 }
 EXPORT_SYMBOL_GPL(pci_device_is_present);
+
+void pci_ignore_hotplug(struct pci_dev *dev)
+{
+	struct pci_dev *bridge = dev->bus->self;
+
+	dev->ignore_hotplug = 1;
+	/* Propagate the "ignore hotplug" setting to the parent bridge. */
+	if (bridge)
+		bridge->ignore_hotplug = 1;
+}
+EXPORT_SYMBOL_GPL(pci_ignore_hotplug);
 
 #define RESOURCE_ALIGNMENT_PARAM_SIZE COMMAND_LINE_SIZE
 static char resource_alignment_param[RESOURCE_ALIGNMENT_PARAM_SIZE] = {0};

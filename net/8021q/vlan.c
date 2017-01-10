@@ -98,13 +98,13 @@ void unregister_vlan_dev(struct net_device *dev, struct list_head *head)
 		vlan_gvrp_request_leave(dev);
 
 	vlan_group_set_device(grp, vlan->vlan_proto, vlan_id, NULL);
+
+	netdev_upper_dev_unlink(real_dev, dev);
 	/* Because unregister_netdevice_queue() makes sure at least one rcu
 	 * grace period is respected before device freeing,
 	 * we dont need to call synchronize_net() here.
 	 */
 	unregister_netdevice_queue(dev, head);
-
-	netdev_upper_dev_unlink(real_dev, dev);
 
 	if (grp->nr_vlan_devs == 0) {
 		vlan_mvrp_uninit_applicant(real_dev);
@@ -169,13 +169,13 @@ int register_vlan_dev(struct net_device *dev)
 	if (err < 0)
 		goto out_uninit_mvrp;
 
-	err = netdev_upper_dev_link(real_dev, dev);
-	if (err)
-		goto out_uninit_mvrp;
-
 	err = register_netdevice(dev);
 	if (err < 0)
-		goto out_upper_dev_unlink;
+		goto out_uninit_mvrp;
+
+	err = netdev_upper_dev_link(real_dev, dev);
+	if (err)
+		goto out_unregister_netdev;
 
 	/* Account for reference in struct vlan_dev_priv */
 	dev_hold(real_dev);
@@ -191,8 +191,8 @@ int register_vlan_dev(struct net_device *dev)
 
 	return 0;
 
-out_upper_dev_unlink:
-	netdev_upper_dev_unlink(real_dev, dev);
+out_unregister_netdev:
+	unregister_netdevice(dev);
 out_uninit_mvrp:
 	if (grp->nr_vlan_devs == 0)
 		vlan_mvrp_uninit_applicant(real_dev);
@@ -343,7 +343,7 @@ static void __vlan_device_event(struct net_device *dev, unsigned long event)
 static int vlan_device_event(struct notifier_block *unused, unsigned long event,
 			     void *ptr)
 {
-	struct net_device *dev = ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct vlan_group *grp;
 	struct vlan_info *vlan_info;
 	int i, flgs;
@@ -720,7 +720,7 @@ static int __init vlan_proto_init(void)
 	if (err < 0)
 		goto err0;
 
-	err = register_netdevice_notifier(&vlan_notifier_block);
+	err = register_netdevice_notifier_rh(&vlan_notifier_block);
 	if (err < 0)
 		goto err2;
 
@@ -747,7 +747,7 @@ err5:
 err4:
 	vlan_gvrp_uninit();
 err3:
-	unregister_netdevice_notifier(&vlan_notifier_block);
+	unregister_netdevice_notifier_rh(&vlan_notifier_block);
 err2:
 	unregister_pernet_subsys(&vlan_net_ops);
 err0:
@@ -765,7 +765,7 @@ static void __exit vlan_cleanup_module(void)
 
 	vlan_netlink_fini();
 
-	unregister_netdevice_notifier(&vlan_notifier_block);
+	unregister_netdevice_notifier_rh(&vlan_notifier_block);
 
 	unregister_pernet_subsys(&vlan_net_ops);
 	rcu_barrier(); /* Wait for completion of call_rcu()'s */

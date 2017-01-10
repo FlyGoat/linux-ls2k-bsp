@@ -112,6 +112,7 @@
 #include <net/raw.h>
 #include <net/icmp.h>
 #include <net/inet_common.h>
+#include <net/ip_tunnels.h>
 #include <net/xfrm.h>
 #include <net/net_namespace.h>
 #include <net/secure_seq.h>
@@ -1215,23 +1216,6 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 	int ihl;
 	int id;
 
-	if (unlikely(skb_shinfo(skb)->gso_type &
-		     ~(SKB_GSO_TCPV4 |
-		       SKB_GSO_UDP |
-		       SKB_GSO_DODGY |
-		       SKB_GSO_TCP_ECN |
-		       SKB_GSO_GRE |
-		       SKB_GSO_GRE_CSUM |
-		       SKB_GSO_IPIP |
-		       SKB_GSO_SIT |
-		       SKB_GSO_TCPV6 |
-		       SKB_GSO_UDP_TUNNEL |
-		       SKB_GSO_UDP_TUNNEL_CSUM |
-		       SKB_GSO_TUNNEL_REMCSUM |
-		       SKB_GSO_MPLS |
-		       0)))
-		goto out;
-
 	skb_reset_network_header(skb);
 	nhoff = skb_network_header(skb) - skb_mac_header(skb);
 	if (unlikely(!pskb_may_pull(skb, sizeof(*iph))))
@@ -1516,6 +1500,7 @@ static const struct net_protocol tcp_protocol = {
 };
 
 static const struct net_protocol udp_protocol = {
+	.early_demux =	udp_v4_early_demux,
 	.handler =	udp_rcv,
 	.err_handler =	udp_err,
 	.no_policy =	1,
@@ -1756,6 +1741,8 @@ static int __init inet_init(void)
 	ipfrag_init();
 
 	dev_add_pack(&ip_packet_type);
+
+	ip_tunnel_core_init();
 
 	rc = 0;
 out:

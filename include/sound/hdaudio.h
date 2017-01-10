@@ -21,6 +21,7 @@ struct hdac_stream;
 struct hdac_device;
 struct hdac_driver;
 struct hdac_widget_tree;
+struct hda_device_id;
 
 /*
  * exported bus type
@@ -92,6 +93,7 @@ struct hdac_device {
 enum {
 	HDA_DEV_CORE,
 	HDA_DEV_LEGACY,
+	HDA_DEV_ASOC,
 };
 
 /* direction */
@@ -106,8 +108,11 @@ int snd_hdac_device_init(struct hdac_device *dev, struct hdac_bus *bus,
 void snd_hdac_device_exit(struct hdac_device *dev);
 int snd_hdac_device_register(struct hdac_device *codec);
 void snd_hdac_device_unregister(struct hdac_device *codec);
+int snd_hdac_device_set_chip_name(struct hdac_device *codec, const char *name);
+int snd_hdac_codec_modalias(struct hdac_device *hdac, char *buf, size_t size);
 
 int snd_hdac_refresh_widgets(struct hdac_device *codec);
+int snd_hdac_refresh_widget_sysfs(struct hdac_device *codec);
 
 unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
 			       unsigned int verb, unsigned int parm);
@@ -135,6 +140,12 @@ int snd_hdac_query_supported_pcm(struct hdac_device *codec, hda_nid_t nid,
 bool snd_hdac_is_supported_format(struct hdac_device *codec, hda_nid_t nid,
 				  unsigned int format);
 
+int snd_hdac_codec_read(struct hdac_device *hdac, hda_nid_t nid,
+			int flags, unsigned int verb, unsigned int parm);
+int snd_hdac_codec_write(struct hdac_device *hdac, hda_nid_t nid,
+			int flags, unsigned int verb, unsigned int parm);
+bool snd_hdac_check_power_state(struct hdac_device *hdac,
+		hda_nid_t nid, unsigned int target_state);
 /**
  * snd_hdac_read_parm - read a codec parameter
  * @codec: the codec object
@@ -153,40 +164,18 @@ static inline int snd_hdac_read_parm(struct hdac_device *codec, hda_nid_t nid,
 }
 
 #ifdef CONFIG_PM
-void snd_hdac_power_up(struct hdac_device *codec);
-void snd_hdac_power_down(struct hdac_device *codec);
+int snd_hdac_power_up(struct hdac_device *codec);
+int snd_hdac_power_down(struct hdac_device *codec);
+int snd_hdac_power_up_pm(struct hdac_device *codec);
+int snd_hdac_power_down_pm(struct hdac_device *codec);
+int snd_hdac_keep_power_up(struct hdac_device *codec);
 #else
-static inline void snd_hdac_power_up(struct hdac_device *codec) {}
-static inline void snd_hdac_power_down(struct hdac_device *codec) {}
+static inline int snd_hdac_power_up(struct hdac_device *codec) { return 0; }
+static inline int snd_hdac_power_down(struct hdac_device *codec) { return 0; }
+static inline int snd_hdac_power_up_pm(struct hdac_device *codec) { return 0; }
+static inline int snd_hdac_power_down_pm(struct hdac_device *codec) { return 0; }
+static inline int snd_hdac_keep_power_up(struct hdac_device *codec) { return 0; }
 #endif
-
-/**
- * snd_hdac_power_up_pm - power up the codec
- * @codec: the codec object
- *
- * This function can be called in a recursive code path like init code
- * which may be called by PM suspend/resume again.  OTOH, if a power-up
- * call must wake up the sleeper (e.g. in a kctl callback), use
- * snd_hdac_power_up() instead.
- */
-static inline void snd_hdac_power_up_pm(struct hdac_device *codec)
-{
-	if (!atomic_read(&codec->in_pm))
-		snd_hdac_power_up(codec);
-}
-
-/**
- * snd_hdac_power_down_pm - power down the codec
- * @codec: the codec object
- *
- * Like snd_hdac_power_up_pm(), this function is used in a recursive
- * code path like init code which may be called by PM suspend/resume again.
- */
-static inline void snd_hdac_power_down_pm(struct hdac_device *codec)
-{
-	if (!atomic_read(&codec->in_pm))
-		snd_hdac_power_down(codec);
-}
 
 /*
  * HD-audio codec base driver
@@ -194,11 +183,15 @@ static inline void snd_hdac_power_down_pm(struct hdac_device *codec)
 struct hdac_driver {
 	struct device_driver driver;
 	int type;
+	const struct hda_device_id *id_table;
 	int (*match)(struct hdac_device *dev, struct hdac_driver *drv);
 	void (*unsol_event)(struct hdac_device *dev, unsigned int event);
 };
 
 #define drv_to_hdac_driver(_drv) container_of(_drv, struct hdac_driver, driver)
+
+const struct hda_device_id *
+hdac_get_device_id(struct hdac_device *hdev, struct hdac_driver *drv);
 
 /*
  * Bus verb operators
@@ -352,7 +345,7 @@ void snd_hdac_bus_enter_link_reset(struct hdac_bus *bus);
 void snd_hdac_bus_exit_link_reset(struct hdac_bus *bus);
 
 void snd_hdac_bus_update_rirb(struct hdac_bus *bus);
-void snd_hdac_bus_handle_stream_irq(struct hdac_bus *bus, unsigned int status,
+int snd_hdac_bus_handle_stream_irq(struct hdac_bus *bus, unsigned int status,
 				    void (*ack)(struct hdac_bus *,
 						struct hdac_stream *));
 
@@ -446,6 +439,8 @@ void snd_hdac_stream_init(struct hdac_bus *bus, struct hdac_stream *azx_dev,
 struct hdac_stream *snd_hdac_stream_assign(struct hdac_bus *bus,
 					   struct snd_pcm_substream *substream);
 void snd_hdac_stream_release(struct hdac_stream *azx_dev);
+struct hdac_stream *snd_hdac_get_stream(struct hdac_bus *bus,
+					int dir, int stream_tag);
 
 int snd_hdac_stream_setup(struct hdac_stream *azx_dev);
 void snd_hdac_stream_cleanup(struct hdac_stream *azx_dev);

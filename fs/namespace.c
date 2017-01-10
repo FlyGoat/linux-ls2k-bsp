@@ -17,7 +17,7 @@
 #include <linux/security.h>
 #include <linux/idr.h>
 #include <linux/acct.h>		/* acct_auto_close_mnt */
-#include <linux/ramfs.h>	/* init_rootfs */
+#include <linux/init.h>		/* init_rootfs */
 #include <linux/fs_struct.h>	/* get_fs_root et.al. */
 #include <linux/fsnotify.h>	/* fsnotify_vfsmount_delete */
 #include <linux/uaccess.h>
@@ -830,6 +830,10 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 	if ((flag & CL_UNPRIVILEGED) && (mnt->mnt.mnt_flags & MNT_READONLY))
 		mnt->mnt.mnt_flags |= MNT_LOCK_READONLY;
 
+	/* Don't allow unprivileged users to reveal what is under a mount */
+	if ((flag & CL_UNPRIVILEGED) && list_empty(&old->mnt_expire))
+		mnt->mnt.mnt_flags |= MNT_LOCKED;
+
 	atomic_inc(&sb->s_active);
 	mnt->mnt.mnt_sb = sb;
 	mnt->mnt.mnt_root = dget(root);
@@ -1341,6 +1345,8 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
 		goto dput_and_out;
 	if (!check_mnt(mnt))
 		goto dput_and_out;
+	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+		goto dput_and_out;
 
 	retval = do_umount(mnt, flags);
 dput_and_out:
@@ -1757,6 +1763,19 @@ static int do_change_type(struct path *path, int flag)
 	return err;
 }
 
+static bool has_locked_children(struct mount *mnt, struct dentry *dentry)
+{
+	struct mount *child;
+	list_for_each_entry(child, &mnt->mnt_mounts, mnt_child) {
+		if (!is_subdir(child->mnt_mountpoint, dentry))
+			continue;
+
+		if (child->mnt.mnt_flags & MNT_LOCKED)
+			return true;
+	}
+	return false;
+}
+
 /*
  * do loopback mount.
  */
@@ -1792,6 +1811,9 @@ static int do_loopback(struct path *path, const char *old_name,
 	if (!check_mnt(parent) || !check_mnt(old))
 		goto out2;
 
+	if (!recurse && has_locked_children(old, old_path.dentry))
+		goto out2;
+
 	if (recurse)
 		mnt = copy_tree(old, old_path.dentry, CL_COPY_MNT_NS_FILE);
 	else
@@ -1801,6 +1823,8 @@ static int do_loopback(struct path *path, const char *old_name,
 		err = PTR_ERR(mnt);
 		goto out2;
 	}
+
+	mnt->mnt.mnt_flags &= ~MNT_LOCKED;
 
 	err = graft_tree(mnt, parent, mp);
 	if (err) {
@@ -1912,6 +1936,9 @@ static int do_move_mount(struct path *path, const char *old_name)
 
 	err = -EINVAL;
 	if (!check_mnt(p) || !check_mnt(old))
+		goto out1;
+
+	if (old->mnt.mnt_flags & MNT_LOCKED)
 		goto out1;
 
 	err = -EINVAL;
@@ -2512,8 +2539,10 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
 		return ns;
 
 	/* Unprivileged creation currently disabled in RHEL7  */
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN)) {
+		put_mnt_ns(ns);
 		return ERR_PTR(-EPERM);
+	}
 
 	new_ns = dup_mnt_ns(ns, user_ns, new_fs);
 
@@ -2699,6 +2728,8 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 		goto out4;
 	if (!check_mnt(root_mnt) || !check_mnt(new_mnt))
 		goto out4;
+	if (new_mnt->mnt.mnt_flags & MNT_LOCKED)
+		goto out4;
 	error = -ENOENT;
 	if (d_unlinked(new.dentry))
 		goto out4;
@@ -2722,6 +2753,10 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 	br_write_lock(&vfsmount_lock);
 	detach_mnt(new_mnt, &parent_path);
 	detach_mnt(root_mnt, &root_parent);
+	if (root_mnt->mnt.mnt_flags & MNT_LOCKED) {
+		new_mnt->mnt.mnt_flags |= MNT_LOCKED;
+		root_mnt->mnt.mnt_flags &= ~MNT_LOCKED;
+	}
 	/* mount old root on put_old */
 	attach_mnt(root_mnt, old_mnt, old_mp);
 	/* mount new_root on / */
@@ -2771,6 +2806,7 @@ static void __init init_mount_tree(void)
 
 	root.mnt = mnt;
 	root.dentry = mnt->mnt_root;
+	mnt->mnt_flags |= MNT_LOCKED;
 
 	set_fs_pwd(current->fs, &root);
 	set_fs_root(current->fs, &root);

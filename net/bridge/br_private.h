@@ -87,14 +87,14 @@ struct net_bridge_fdb_entry
 	struct hlist_node		hlist;
 	struct net_bridge_port		*dst;
 
-	struct rcu_head			rcu;
 	unsigned long			updated;
 	unsigned long			used;
 	mac_addr			addr;
+	__u16				vlan_id;
 	unsigned char			is_local;
 	unsigned char			is_static;
 	unsigned char			added_by_user;
-	__u16				vlan_id;
+	struct rcu_head			rcu;
 };
 
 struct net_bridge_port_group {
@@ -205,7 +205,7 @@ struct net_bridge
 	RH_KABI_REPLACE(struct br_cpu_netstats __percpu *stats, struct pcpu_sw_netstats		__percpu *stats)
 	spinlock_t			hash_lock;
 	struct hlist_head		hash[BR_HASH_SIZE];
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	union {
 		struct rtable		fake_rtable;
 		struct rt6_info		fake_rt6_info;
@@ -293,6 +293,7 @@ struct br_input_skb_cb {
 	int igmp;
 	int mrouters_only;
 #endif
+
 };
 
 #define BR_INPUT_SKB_CB(__skb)	((struct br_input_skb_cb *)(__skb)->cb)
@@ -372,6 +373,9 @@ static inline void br_netpoll_disable(struct net_bridge_port *p)
 int br_fdb_init(void);
 void br_fdb_fini(void);
 void br_fdb_flush(struct net_bridge *br);
+void br_fdb_find_delete_local(struct net_bridge *br,
+			      const struct net_bridge_port *p,
+			      const unsigned char *addr, u16 vid);
 void br_fdb_changeaddr(struct net_bridge_port *p, const unsigned char *newaddr);
 void br_fdb_change_mac_address(struct net_bridge *br, const u8 *newaddr);
 void br_fdb_cleanup(unsigned long arg);
@@ -387,14 +391,13 @@ int br_fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 		  const unsigned char *addr, u16 vid);
 void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 		   const unsigned char *addr, u16 vid, bool added_by_user);
-int fdb_delete_by_addr(struct net_bridge *br, const u8 *addr, u16 vid);
 
 int br_fdb_delete(struct ndmsg *ndm, struct nlattr *tb[],
-		  struct net_device *dev, const unsigned char *addr);
+		  struct net_device *dev, const unsigned char *addr, u16 vid);
 int br_fdb_add(struct ndmsg *nlh, struct nlattr *tb[], struct net_device *dev,
-	       const unsigned char *addr, u16 nlh_flags);
+	       const unsigned char *addr, u16 vid, u16 nlh_flags);
 int br_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
-	        struct net_device *dev, int idx);
+		struct net_device *dev, struct net_device *fdev, int idx);
 int br_fdb_sync_static(struct net_bridge *br, struct net_bridge_port *p);
 void br_fdb_unsync_static(struct net_bridge *br, struct net_bridge_port *p);
 
@@ -748,14 +751,19 @@ static inline int br_vlan_enabled(struct net_bridge *br)
 }
 #endif
 
+struct nf_br_ops {
+	int (*br_dev_xmit_hook)(struct sk_buff *skb);
+};
+extern const struct nf_br_ops __rcu *nf_br_ops;
+
 /* br_netfilter.c */
-#ifdef CONFIG_BRIDGE_NETFILTER
-int br_netfilter_init(void);
-void br_netfilter_fini(void);
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+int br_nf_core_init(void);
+void br_nf_core_fini(void);
 void br_netfilter_rtable_init(struct net_bridge *);
 #else
-#define br_netfilter_init()	(0)
-#define br_netfilter_fini()	do { } while(0)
+static inline int br_nf_core_init(void) { return 0; }
+static inline void br_nf_core_fini(void) {}
 #define br_netfilter_rtable_init(x)
 #endif
 
@@ -804,10 +812,10 @@ extern struct rtnl_link_ops br_link_ops;
 int br_netlink_init(void);
 void br_netlink_fini(void);
 void br_ifinfo_notify(int event, struct net_bridge_port *port);
-int br_setlink(struct net_device *dev, struct nlmsghdr *nlmsg);
-int br_dellink(struct net_device *dev, struct nlmsghdr *nlmsg);
+int br_setlink(struct net_device *dev, struct nlmsghdr *nlmsg, u16 flags);
+int br_dellink(struct net_device *dev, struct nlmsghdr *nlmsg, u16 flags);
 int br_getlink(struct sk_buff *skb, u32 pid, u32 seq, struct net_device *dev,
-	       u32 filter_mask);
+	       u32 filter_mask, int nlflags);
 
 #ifdef CONFIG_SYSFS
 /* br_sysfs_if.c */

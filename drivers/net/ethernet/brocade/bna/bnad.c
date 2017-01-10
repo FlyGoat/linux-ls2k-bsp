@@ -54,9 +54,7 @@ MODULE_PARM_DESC(bna_debugfs_enable, "Enables debugfs feature, default=1,"
  * Global variables
  */
 static u32 bnad_rxqs_per_cq = 2;
-static u32 bna_id;
-static struct mutex bnad_list_mutex;
-static LIST_HEAD(bnad_list);
+static atomic_t bna_id;
 static const u8 bnad_bcast_addr[] __aligned(2) =
 	{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
@@ -75,23 +73,6 @@ do {								\
 	(_res_info)->res_u.mem_info.num = (_num);		\
 	(_res_info)->res_u.mem_info.len = (_size);		\
 } while (0)
-
-static void
-bnad_add_to_list(struct bnad *bnad)
-{
-	mutex_lock(&bnad_list_mutex);
-	list_add_tail(&bnad->list_entry, &bnad_list);
-	bnad->id = bna_id++;
-	mutex_unlock(&bnad_list_mutex);
-}
-
-static void
-bnad_remove_from_list(struct bnad *bnad)
-{
-	mutex_lock(&bnad_list_mutex);
-	list_del(&bnad->list_entry);
-	mutex_unlock(&bnad_list_mutex);
-}
 
 /*
  * Reinitialize completions in CQ, once Rx is taken down
@@ -251,7 +232,7 @@ bnad_tx_complete(struct bnad *bnad, struct bna_tcb *tcb)
 	if (likely(test_bit(BNAD_TXQ_TX_STARTED, &tcb->flags)))
 		bna_ib_ack(tcb->i_dbell, sent);
 
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(BNAD_TXQ_FREE_SENT, &tcb->flags);
 
 	return sent;
@@ -309,7 +290,7 @@ bnad_rxq_alloc_init(struct bnad *bnad, struct bna_rcb *rcb)
 		}
 	}
 
-	BUG_ON(((PAGE_SIZE << order) % unmap_q->map_size));
+	BUG_ON((PAGE_SIZE << order) % unmap_q->map_size);
 
 	return 0;
 }
@@ -399,7 +380,13 @@ bnad_rxq_refill_page(struct bnad *bnad, struct bna_rcb *rcb, u32 nalloc)
 		}
 
 		dma_addr = dma_map_page(&bnad->pcidev->dev, page, page_offset,
-				unmap_q->map_size, DMA_FROM_DEVICE);
+					unmap_q->map_size, DMA_FROM_DEVICE);
+		if (dma_mapping_error(&bnad->pcidev->dev, dma_addr)) {
+			put_page(page);
+			BNAD_UPDATE_CTR(bnad, rxbuf_map_failed);
+			rcb->rxq->rxbuf_map_failed++;
+			goto finishing;
+		}
 
 		unmap->page = page;
 		unmap->page_offset = page_offset;
@@ -454,8 +441,15 @@ bnad_rxq_refill_skb(struct bnad *bnad, struct bna_rcb *rcb, u32 nalloc)
 			rcb->rxq->rxbuf_alloc_failed++;
 			goto finishing;
 		}
+
 		dma_addr = dma_map_single(&bnad->pcidev->dev, skb->data,
 					  buff_sz, DMA_FROM_DEVICE);
+		if (dma_mapping_error(&bnad->pcidev->dev, dma_addr)) {
+			dev_kfree_skb_any(skb);
+			BNAD_UPDATE_CTR(bnad, rxbuf_map_failed);
+			rcb->rxq->rxbuf_map_failed++;
+			goto finishing;
+		}
 
 		unmap->skb = skb;
 		dma_unmap_addr_set(&unmap->vector, dma_addr, dma_addr);
@@ -529,39 +523,50 @@ bnad_cq_drop_packet(struct bnad *bnad, struct bna_rcb *rcb,
 }
 
 static void
-bnad_cq_setup_skb_frags(struct bna_rcb *rcb, struct sk_buff *skb,
-			u32 sop_ci, u32 nvecs, u32 last_fraglen)
+bnad_cq_setup_skb_frags(struct bna_ccb *ccb, struct sk_buff *skb, u32 nvecs)
 {
+	struct bna_rcb *rcb;
 	struct bnad *bnad;
-	u32 ci, vec, len, totlen = 0;
 	struct bnad_rx_unmap_q *unmap_q;
-	struct bnad_rx_unmap *unmap;
+	struct bna_cq_entry *cq, *cmpl;
+	u32 ci, pi, totlen = 0;
 
+	cq = ccb->sw_q;
+	pi = ccb->producer_index;
+	cmpl = &cq[pi];
+
+	rcb = bna_is_small_rxq(cmpl->rxq_id) ? ccb->rcb[1] : ccb->rcb[0];
 	unmap_q = rcb->unmap_q;
 	bnad = rcb->bnad;
+	ci = rcb->consumer_index;
 
 	/* prefetch header */
-	prefetch(page_address(unmap_q->unmap[sop_ci].page) +
-			unmap_q->unmap[sop_ci].page_offset);
+	prefetch(page_address(unmap_q->unmap[ci].page) +
+		 unmap_q->unmap[ci].page_offset);
 
-	for (vec = 1, ci = sop_ci; vec <= nvecs; vec++) {
+	while (nvecs--) {
+		struct bnad_rx_unmap *unmap;
+		u32 len;
+
 		unmap = &unmap_q->unmap[ci];
 		BNA_QE_INDX_INC(ci, rcb->q_depth);
 
 		dma_unmap_page(&bnad->pcidev->dev,
-				dma_unmap_addr(&unmap->vector, dma_addr),
-				unmap->vector.len, DMA_FROM_DEVICE);
+			       dma_unmap_addr(&unmap->vector, dma_addr),
+			       unmap->vector.len, DMA_FROM_DEVICE);
 
-		len = (vec == nvecs) ?
-			last_fraglen : unmap->vector.len;
+		len = ntohs(cmpl->length);
 		skb->truesize += unmap->vector.len;
 		totlen += len;
 
 		skb_fill_page_desc(skb, skb_shinfo(skb)->nr_frags,
-				unmap->page, unmap->page_offset, len);
+				   unmap->page, unmap->page_offset, len);
 
 		unmap->page = NULL;
 		unmap->vector.len = 0;
+
+		BNA_QE_INDX_INC(pi, ccb->q_depth);
+		cmpl = &cq[pi];
 	}
 
 	skb->len += totlen;
@@ -676,6 +681,7 @@ bnad_cq_process(struct bnad *bnad, struct bna_ccb *ccb, int budget)
 			if (!next_cmpl->valid)
 				break;
 		}
+		packets++;
 
 		/* TODO: BNA_CQ_EF_LOCAL ? */
 		if (unlikely(flags & (BNA_CQ_EF_MAC_ERROR |
@@ -690,9 +696,8 @@ bnad_cq_process(struct bnad *bnad, struct bna_ccb *ccb, int budget)
 		if (BNAD_RXBUF_IS_SK_BUFF(unmap_q->type))
 			bnad_cq_setup_skb(bnad, skb, unmap, len);
 		else
-			bnad_cq_setup_skb_frags(rcb, skb, sop_ci, nvecs, len);
+			bnad_cq_setup_skb_frags(ccb, skb, nvecs);
 
-		packets++;
 		rcb->rxq->rx_packets++;
 		rcb->rxq->rx_bytes += totlen;
 		ccb->bytes_per_intr += totlen;
@@ -757,7 +762,7 @@ bnad_msix_rx(int irq, void *data)
 	struct bna_ccb *ccb = (struct bna_ccb *)data;
 
 	if (ccb) {
-		((struct bnad_rx_ctrl *)(ccb->ctrl))->rx_intr_ctr++;
+		((struct bnad_rx_ctrl *)ccb->ctrl)->rx_intr_ctr++;
 		bnad_netif_rx_schedule_poll(ccb->bnad, ccb);
 	}
 
@@ -1117,7 +1122,7 @@ bnad_tx_cleanup(struct delayed_work *work)
 
 		bnad_txq_cleanup(bnad, tcb);
 
-		smp_mb__before_clear_bit();
+		smp_mb__before_atomic();
 		clear_bit(BNAD_TXQ_FREE_SENT, &tcb->flags);
 	}
 
@@ -2327,7 +2332,7 @@ bnad_rx_coalescing_timeo_set(struct bnad *bnad)
  * Called with bnad->bna_lock held
  */
 int
-bnad_mac_addr_set_locked(struct bnad *bnad, u8 *mac_addr)
+bnad_mac_addr_set_locked(struct bnad *bnad, const u8 *mac_addr)
 {
 	int ret;
 
@@ -2356,8 +2361,8 @@ bnad_enable_default_bcast(struct bnad *bnad)
 	init_completion(&bnad->bnad_completions.mcast_comp);
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
-	ret = bna_rx_mcast_add(rx_info->rx, (u8 *)bnad_bcast_addr,
-				bnad_cb_rx_mcast_add);
+	ret = bna_rx_mcast_add(rx_info->rx, bnad_bcast_addr,
+			       bnad_cb_rx_mcast_add);
 	spin_unlock_irqrestore(&bnad->bna_lock, flags);
 
 	if (ret == BNA_CB_SUCCESS)
@@ -2985,7 +2990,7 @@ bnad_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 			sent = bnad_txcmpl_process(bnad, tcb);
 			if (likely(test_bit(BNAD_TXQ_TX_STARTED, &tcb->flags)))
 				bna_ib_ack(tcb->i_dbell, sent);
-			smp_mb__before_clear_bit();
+			smp_mb__before_atomic();
 			clear_bit(BNAD_TXQ_FREE_SENT, &tcb->flags);
 		} else {
 			netif_stop_queue(netdev);
@@ -3025,6 +3030,11 @@ bnad_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	unmap = head_unmap;
 	dma_addr = dma_map_single(&bnad->pcidev->dev, skb->data,
 				  len, DMA_TO_DEVICE);
+	if (dma_mapping_error(&bnad->pcidev->dev, dma_addr)) {
+		dev_kfree_skb_any(skb);
+		BNAD_UPDATE_CTR(bnad, tx_skb_map_failed);
+		return NETDEV_TX_OK;
+	}
 	BNA_SET_DMA_ADDR(dma_addr, &txqent->vector[0].host_addr);
 	txqent->vector[0].length = htons(len);
 	dma_unmap_addr_set(&unmap->vectors[0], dma_addr, dma_addr);
@@ -3056,6 +3066,15 @@ bnad_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 
 		dma_addr = skb_frag_dma_map(&bnad->pcidev->dev, frag,
 					    0, size, DMA_TO_DEVICE);
+		if (dma_mapping_error(&bnad->pcidev->dev, dma_addr)) {
+			/* Undo the changes starting at tcb->producer_index */
+			bnad_tx_buff_unmap(bnad, unmap_q, q_depth,
+					   tcb->producer_index);
+			dev_kfree_skb_any(skb);
+			BNAD_UPDATE_CTR(bnad, tx_skb_map_failed);
+			return NETDEV_TX_OK;
+		}
+
 		dma_unmap_len_set(&unmap->vectors[vect_id], dma_len, size);
 		BNA_SET_DMA_ADDR(dma_addr, &txqent->vector[vect_id].host_addr);
 		txqent->vector[vect_id].length = htons(size);
@@ -3535,14 +3554,12 @@ bnad_lock_init(struct bnad *bnad)
 {
 	spin_lock_init(&bnad->bna_lock);
 	mutex_init(&bnad->conf_mutex);
-	mutex_init(&bnad_list_mutex);
 }
 
 static void
 bnad_lock_uninit(struct bnad *bnad)
 {
 	mutex_destroy(&bnad->conf_mutex);
-	mutex_destroy(&bnad_list_mutex);
 }
 
 /* PCI Initialization */
@@ -3615,7 +3632,7 @@ bnad_pci_probe(struct pci_dev *pdev,
 	}
 	bnad = netdev_priv(netdev);
 	bnad_lock_init(bnad);
-	bnad_add_to_list(bnad);
+	bnad->id = atomic_inc_return(&bna_id) - 1;
 
 	mutex_lock(&bnad->conf_mutex);
 	/*
@@ -3677,13 +3694,13 @@ bnad_pci_probe(struct pci_dev *pdev,
 
 	/* Set up timers */
 	setup_timer(&bnad->bna.ioceth.ioc.ioc_timer, bnad_ioc_timeout,
-				((unsigned long)bnad));
+		    (unsigned long)bnad);
 	setup_timer(&bnad->bna.ioceth.ioc.hb_timer, bnad_ioc_hb_check,
-				((unsigned long)bnad));
+		    (unsigned long)bnad);
 	setup_timer(&bnad->bna.ioceth.ioc.iocpf_timer, bnad_iocpf_timeout,
-				((unsigned long)bnad));
+		    (unsigned long)bnad);
 	setup_timer(&bnad->bna.ioceth.ioc.sem_timer, bnad_iocpf_sem_timeout,
-				((unsigned long)bnad));
+		    (unsigned long)bnad);
 
 	/*
 	 * Start the chip
@@ -3769,7 +3786,6 @@ pci_uninit:
 	bnad_pci_uninit(pdev);
 unlock_mutex:
 	mutex_unlock(&bnad->conf_mutex);
-	bnad_remove_from_list(bnad);
 	bnad_lock_uninit(bnad);
 	free_netdev(netdev);
 	return err;
@@ -3807,7 +3823,6 @@ bnad_pci_remove(struct pci_dev *pdev)
 	bnad_disable_msix(bnad);
 	bnad_pci_uninit(pdev);
 	mutex_unlock(&bnad->conf_mutex);
-	bnad_remove_from_list(bnad);
 	bnad_lock_uninit(bnad);
 	/* Remove the debugfs node for this bnad */
 	kfree(bnad->regdata);

@@ -67,12 +67,22 @@ static int crypto_check_alg(struct crypto_alg *alg)
 	return crypto_set_driver_name(alg);
 }
 
+static void crypto_free_instance(struct crypto_instance *inst)
+{
+	if (!inst->alg.cra_type->free) {
+		inst->tmpl->free(inst);
+		return;
+	}
+
+	inst->alg.cra_type->free(inst);
+}
+
 static void crypto_destroy_instance(struct crypto_alg *alg)
 {
 	struct crypto_instance *inst = (void *)alg;
 	struct crypto_template *tmpl = inst->tmpl;
 
-	tmpl->free(inst);
+	crypto_free_instance(inst);
 	crypto_tmpl_put(tmpl);
 }
 
@@ -482,7 +492,7 @@ void crypto_unregister_template(struct crypto_template *tmpl)
 
 	hlist_for_each_entry_safe(inst, n, list, list) {
 		BUG_ON(atomic_read(&inst->alg.cra_refcnt) != 1);
-		tmpl->free(inst);
+		crypto_free_instance(inst);
 	}
 	crypto_remove_final(&users);
 }
@@ -616,6 +626,22 @@ out:
 	return err;
 }
 EXPORT_SYMBOL_GPL(crypto_init_spawn2);
+
+int crypto_grab_spawn(struct crypto_spawn *spawn, const char *name,
+		      u32 type, u32 mask)
+{
+	struct crypto_alg *alg;
+	int err;
+
+	alg = crypto_find_alg(name, spawn->frontend, type, mask);
+	if (IS_ERR(alg))
+		return PTR_ERR(alg);
+
+	err = crypto_init_spawn(spawn, alg, spawn->inst, mask);
+	crypto_mod_put(alg);
+	return err;
+}
+EXPORT_SYMBOL_GPL(crypto_grab_spawn);
 
 void crypto_drop_spawn(struct crypto_spawn *spawn)
 {
@@ -966,6 +992,12 @@ void crypto_xor(u8 *dst, const u8 *src, unsigned int size)
 	crypto_xor_byte((u8 *)a, (u8 *)b, size);
 }
 EXPORT_SYMBOL_GPL(crypto_xor);
+
+unsigned int crypto_alg_extsize(struct crypto_alg *alg)
+{
+	return alg->cra_ctxsize;
+}
+EXPORT_SYMBOL_GPL(crypto_alg_extsize);
 
 static int __init crypto_algapi_init(void)
 {

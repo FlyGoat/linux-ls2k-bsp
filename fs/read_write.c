@@ -17,6 +17,7 @@
 #include <linux/pagemap.h>
 #include <linux/splice.h>
 #include <linux/compat.h>
+#include <linux/fs.h>
 #include "internal.h"
 
 #include <asm/uaccess.h>
@@ -172,6 +173,45 @@ loff_t fixed_size_llseek(struct file *file, loff_t offset, int whence, loff_t si
 	}
 }
 EXPORT_SYMBOL(fixed_size_llseek);
+
+/**
+ * no_seek_end_llseek - llseek implementation for fixed-sized devices
+ * @file:	file structure to seek on
+ * @offset:	file offset to seek to
+ * @whence:	type of seek
+ *
+ */
+loff_t no_seek_end_llseek(struct file *file, loff_t offset, int whence)
+{
+	switch (whence) {
+	case SEEK_SET: case SEEK_CUR:
+		return generic_file_llseek_size(file, offset, whence,
+						OFFSET_MAX, 0);
+	default:
+		return -EINVAL;
+	}
+}
+EXPORT_SYMBOL(no_seek_end_llseek);
+
+/**
+ * no_seek_end_llseek_size - llseek implementation for fixed-sized devices
+ * @file:	file structure to seek on
+ * @offset:	file offset to seek to
+ * @whence:	type of seek
+ * @size:	maximal offset allowed
+ *
+ */
+loff_t no_seek_end_llseek_size(struct file *file, loff_t offset, int whence, loff_t size)
+{
+	switch (whence) {
+	case SEEK_SET: case SEEK_CUR:
+		return generic_file_llseek_size(file, offset, whence,
+						size, 0);
+	default:
+		return -EINVAL;
+	}
+}
+EXPORT_SYMBOL(no_seek_end_llseek_size);
 
 /**
  * noop_llseek - No Operation Performed llseek implementation
@@ -1184,7 +1224,9 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	if (in.file->f_flags & O_NONBLOCK)
 		fl = SPLICE_F_NONBLOCK;
 #endif
+	file_start_write(out.file);
 	retval = do_splice_direct(in.file, &pos, out.file, &out_pos, count, fl);
+	file_end_write(out.file);
 
 	if (retval > 0) {
 		add_rchar(current, retval);

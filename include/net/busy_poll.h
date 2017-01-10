@@ -42,27 +42,10 @@ static inline bool net_busy_loop_on(void)
 	return sysctl_net_busy_poll;
 }
 
-/* a wrapper to make debug_smp_processor_id() happy
- * we can use sched_clock() because we don't care much about precision
- * we only care that the average is bounded
- */
-#ifdef CONFIG_DEBUG_PREEMPT
 static inline u64 busy_loop_us_clock(void)
 {
-	u64 rc;
-
-	preempt_disable_notrace();
-	rc = sched_clock();
-	preempt_enable_no_resched_notrace();
-
-	return rc >> 10;
+	return local_clock() >> 10;
 }
-#else /* CONFIG_DEBUG_PREEMPT */
-static inline u64 busy_loop_us_clock(void)
-{
-	return sched_clock() >> 10;
-}
-#endif /* CONFIG_DEBUG_PREEMPT */
 
 static inline unsigned long sk_busy_loop_end_time(struct sock *sk)
 {
@@ -89,49 +72,7 @@ static inline bool busy_loop_timeout(unsigned long end_time)
 	return time_after(now, end_time);
 }
 
-/* when used in sock_poll() nonblock is known at compile time to be true
- * so the loop and end_time will be optimized out
- */
-static inline bool sk_busy_loop(struct sock *sk, int nonblock)
-{
-	unsigned long end_time = !nonblock ? sk_busy_loop_end_time(sk) : 0;
-	const struct net_device_ops *ops;
-	struct napi_struct *napi;
-	int rc = false;
-
-	/*
-	 * rcu read lock for napi hash
-	 * bh so we don't race with net_rx_action
-	 */
-	rcu_read_lock_bh();
-
-	napi = napi_by_id(sk->sk_napi_id);
-	if (!napi)
-		goto out;
-
-	ops = napi->dev->netdev_ops;
-	if (!ops->ndo_busy_poll)
-		goto out;
-
-	do {
-		rc = ops->ndo_busy_poll(napi);
-
-		if (rc == LL_FLUSH_FAILED)
-			break; /* permanent failure */
-
-		if (rc > 0)
-			/* local bh are disabled so it is ok to use _BH */
-			NET_ADD_STATS_BH(sock_net(sk),
-					 LINUX_MIB_BUSYPOLLRXPACKETS, rc);
-
-	} while (!nonblock && skb_queue_empty(&sk->sk_receive_queue) &&
-		 !need_resched() && !busy_loop_timeout(end_time));
-
-	rc = !skb_queue_empty(&sk->sk_receive_queue);
-out:
-	rcu_read_unlock_bh();
-	return rc;
-}
+bool sk_busy_loop(struct sock *sk, int nonblock);
 
 /* used in the NIC receive handler to mark the skb */
 static inline void skb_mark_napi_id(struct sk_buff *skb,

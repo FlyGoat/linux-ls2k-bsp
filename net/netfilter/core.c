@@ -17,6 +17,7 @@
 #include <linux/interrupt.h>
 #include <linux/if.h>
 #include <linux/netdevice.h>
+#include <linux/netfilter_ipv6.h>
 #include <linux/inetdevice.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
@@ -32,6 +33,9 @@ const struct nf_afinfo __rcu *nf_afinfo[NFPROTO_NUMPROTO] __read_mostly;
 EXPORT_SYMBOL(nf_afinfo);
 const struct nf_ipv6_ops __rcu *nf_ipv6_ops __read_mostly;
 EXPORT_SYMBOL_GPL(nf_ipv6_ops);
+
+DEFINE_PER_CPU(bool, nf_skb_duplicated);
+EXPORT_SYMBOL_GPL(nf_skb_duplicated);
 
 int nf_register_afinfo(const struct nf_afinfo *afinfo)
 {
@@ -267,6 +271,12 @@ EXPORT_SYMBOL_GPL(nfq_ct_hook);
 struct nfq_ct_nat_hook __rcu *nfq_ct_nat_hook __read_mostly;
 EXPORT_SYMBOL_GPL(nfq_ct_nat_hook);
 
+/* Built-in default zone used e.g. by modules. */
+const struct nf_conntrack_zone nf_ct_zone_dflt = {
+	.id	= NF_CT_DEFAULT_ZONE_ID,
+	.dir	= NF_CT_DEFAULT_ZONE_DIR,
+};
+EXPORT_SYMBOL_GPL(nf_ct_zone_dflt);
 #endif /* CONFIG_NF_CONNTRACK */
 
 #ifdef CONFIG_NF_NAT_NEEDED

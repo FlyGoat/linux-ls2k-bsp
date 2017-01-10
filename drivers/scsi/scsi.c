@@ -357,8 +357,8 @@ scsi_alloc_host_cmd_pool(struct Scsi_Host *shost)
 	if (!pool)
 		return NULL;
 
-	pool->cmd_name = kasprintf(GFP_KERNEL, "%s_cmd", hostt->name);
-	pool->sense_name = kasprintf(GFP_KERNEL, "%s_sense", hostt->name);
+	pool->cmd_name = kasprintf(GFP_KERNEL, "%s_cmd", hostt->proc_name);
+	pool->sense_name = kasprintf(GFP_KERNEL, "%s_sense", hostt->proc_name);
 	if (!pool->cmd_name || !pool->sense_name) {
 		scsi_free_host_cmd_pool(pool);
 		return NULL;
@@ -964,10 +964,11 @@ void scsi_attach_vpd(struct scsi_device *sdev)
 	int vpd_len = SCSI_VPD_PG_LEN;
 	int pg80_supported = 0;
 	int pg83_supported = 0;
-	unsigned char *vpd_buf;
+	unsigned char __rcu *vpd_buf, *orig_vpd_buf = NULL;
 
-	if (sdev->skip_vpd_pages)
+	if (!scsi_device_supports_vpd(sdev))
 		return;
+
 retry_pg0:
 	vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
 	if (!vpd_buf)
@@ -1010,8 +1011,16 @@ retry_pg80:
 			kfree(vpd_buf);
 			goto retry_pg80;
 		}
+		spin_lock(&sdev->inquiry_lock);
+		orig_vpd_buf = sdev->vpd_pg80;
 		sdev->vpd_pg80_len = result;
-		sdev->vpd_pg80 = vpd_buf;
+		rcu_assign_pointer(sdev->vpd_pg80, vpd_buf);
+		spin_unlock(&sdev->inquiry_lock);
+		synchronize_rcu();
+		if (orig_vpd_buf) {
+			kfree(orig_vpd_buf);
+			orig_vpd_buf = NULL;
+		}
 		vpd_len = SCSI_VPD_PG_LEN;
 	}
 
@@ -1031,8 +1040,14 @@ retry_pg83:
 			kfree(vpd_buf);
 			goto retry_pg83;
 		}
+		spin_lock(&sdev->inquiry_lock);
+		orig_vpd_buf = sdev->vpd_pg83;
 		sdev->vpd_pg83_len = result;
-		sdev->vpd_pg83 = vpd_buf;
+		rcu_assign_pointer(sdev->vpd_pg83, vpd_buf);
+		spin_unlock(&sdev->inquiry_lock);
+		synchronize_rcu();
+		if (orig_vpd_buf)
+			kfree(orig_vpd_buf);
 	}
 }
 
@@ -1087,18 +1102,24 @@ EXPORT_SYMBOL(scsi_report_opcode);
  * Description: Gets a reference to the scsi_device and increments the use count
  * of the underlying LLDD module.  You must hold host_lock of the
  * parent Scsi_Host or already have a reference when calling this.
+ *
+ * This will fail if a device is deleted or cancelled, or when the LLD module
+ * is in the process of being unloaded.
  */
 int scsi_device_get(struct scsi_device *sdev)
 {
-	if (sdev->sdev_state == SDEV_DEL)
-		return -ENXIO;
+	if (sdev->sdev_state == SDEV_DEL || sdev->sdev_state == SDEV_CANCEL)
+		goto fail;
 	if (!get_device(&sdev->sdev_gendev))
-		return -ENXIO;
-	/* We can fail this if we're doing SCSI operations
-	 * from module exit (like cache flush) */
-	try_module_get(sdev->host->hostt->module);
-
+		goto fail;
+	if (!try_module_get(sdev->host->hostt->module))
+		goto fail_put_device;
 	return 0;
+
+fail_put_device:
+	put_device(&sdev->sdev_gendev);
+fail:
+	return -ENXIO;
 }
 EXPORT_SYMBOL(scsi_device_get);
 
@@ -1112,14 +1133,7 @@ EXPORT_SYMBOL(scsi_device_get);
  */
 void scsi_device_put(struct scsi_device *sdev)
 {
-#ifdef CONFIG_MODULE_UNLOAD
-	struct module *module = sdev->host->hostt->module;
-
-	/* The module refcount will be zero if scsi_device_get()
-	 * was called from a module removal routine */
-	if (module && module_refcount(module) != 0)
-		module_put(module);
-#endif
+	module_put(sdev->host->hostt->module);
 	put_device(&sdev->sdev_gendev);
 }
 EXPORT_SYMBOL(scsi_device_put);

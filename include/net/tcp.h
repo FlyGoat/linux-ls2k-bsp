@@ -283,6 +283,14 @@ extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern int tcp_memory_pressure;
 
+/* optimized version of sk_under_memory_pressure() for TCP sockets */
+static inline bool tcp_under_memory_pressure(const struct sock *sk)
+{
+	if (mem_cgroup_sockets_enabled && sk->sk_cgrp)
+		return !!sk->sk_cgrp->memory_pressure;
+
+	return tcp_memory_pressure;
+}
 /*
  * The next routines deal with comparing 32 bit unsigned ints
  * and worry about wraparound (automatic with unsigned arithmetic).
@@ -307,6 +315,8 @@ static inline bool tcp_out_of_memory(struct sock *sk)
 		return true;
 	return false;
 }
+
+void sk_forced_mem_schedule(struct sock *sk, int size);
 
 static inline bool tcp_too_many_orphans(struct sock *sk, int shift)
 {
@@ -566,7 +576,7 @@ static inline int tcp_bound_to_half_wnd(struct tcp_sock *tp, int pktsize)
 	 * On the other hand, for extremely large MSS devices, handling
 	 * smaller than MSS windows in this way does make sense.
 	 */
-	if (tp->max_window >= 512)
+	if (tp->max_window > TCP_MSS_DEFAULT)
 		cutoff = (tp->max_window >> 1);
 	else
 		cutoff = tp->max_window;
@@ -578,7 +588,7 @@ static inline int tcp_bound_to_half_wnd(struct tcp_sock *tp, int pktsize)
 }
 
 /* tcp.c */
-void tcp_get_info(const struct sock *, struct tcp_info *);
+void tcp_get_info(struct sock *, struct tcp_info *);
 
 /* Read 'sendfile()'-style from a TCP socket */
 typedef int (*sk_read_actor_t)(read_descriptor_t *, struct sk_buff *,

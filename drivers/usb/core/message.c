@@ -178,7 +178,7 @@ EXPORT_SYMBOL_GPL(usb_control_msg);
  *
  * Return:
  * If successful, 0. Otherwise a negative error number. The number of actual
- * bytes transferred will be stored in the @actual_length paramater.
+ * bytes transferred will be stored in the @actual_length parameter.
  */
 int usb_interrupt_msg(struct usb_device *usb_dev, unsigned int pipe,
 		      void *data, int len, int *actual_length, int timeout)
@@ -770,9 +770,7 @@ static int usb_get_langid(struct usb_device *dev, unsigned char *tbuf)
 		dev->string_langid = 0x0409;
 		dev->have_langid = 1;
 		dev_err(&dev->dev,
-			"string descriptor 0 malformed (err = %d), "
-			"defaulting to 0x%04x\n",
-				err, dev->string_langid);
+			"language id specifier not provided by device, defaulting to English\n");
 		return 0;
 	}
 
@@ -1389,8 +1387,6 @@ int usb_set_interface(struct usb_device *dev, int interface, int alternate)
 	 * new altsetting.
 	 */
 	if (manual) {
-		int i;
-
 		for (i = 0; i < alt->desc.bNumEndpoints; i++) {
 			epaddr = alt->endpoint[i].desc.bEndpointAddress;
 			pipe = __create_pipe(dev,
@@ -1555,6 +1551,44 @@ static void usb_release_interface(struct device *dev)
 	kref_put(&intfc->ref, usb_release_interface_cache);
 	usb_put_dev(interface_to_usbdev(intf));
 	kfree(intf);
+}
+
+/*
+ * usb_deauthorize_interface - deauthorize an USB interface
+ *
+ * @intf: USB interface structure
+ */
+void usb_deauthorize_interface(struct usb_interface *intf)
+{
+	struct device *dev = &intf->dev;
+
+	device_lock(dev->parent);
+
+	if (intf->authorized) {
+		device_lock(dev);
+		intf->authorized = 0;
+		device_unlock(dev);
+
+		usb_forced_unbind_intf(intf);
+	}
+
+	device_unlock(dev->parent);
+}
+
+/*
+ * usb_authorize_interface - authorize an USB interface
+ *
+ * @intf: USB interface structure
+ */
+void usb_authorize_interface(struct usb_interface *intf)
+{
+	struct device *dev = &intf->dev;
+
+	if (!intf->authorized) {
+		device_lock(dev);
+		intf->authorized = 1; /* authorize interface */
+		device_unlock(dev);
+	}
 }
 
 static int usb_if_uevent(struct device *dev, struct kobj_uevent_env *env)
@@ -1809,6 +1843,7 @@ free_interfaces:
 		intfc = cp->intf_cache[i];
 		intf->altsetting = intfc->altsetting;
 		intf->num_altsetting = intfc->num_altsetting;
+		intf->authorized = !!HCD_INTF_AUTHORIZED(hcd);
 		kref_get(&intfc->ref);
 
 		alt = usb_altnum_to_altsetting(intf, 0);
@@ -1906,6 +1941,7 @@ free_interfaces:
 	usb_autosuspend_device(dev);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(usb_set_configuration);
 
 static LIST_HEAD(set_config_list);
 static DEFINE_SPINLOCK(set_config_lock);

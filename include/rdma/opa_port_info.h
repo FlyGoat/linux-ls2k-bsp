@@ -97,7 +97,7 @@
 #define OPA_LINKDOWN_REASON_WIDTH_POLICY			41
 /* 42-48 reserved */
 #define OPA_LINKDOWN_REASON_DISCONNECTED			49
-#define OPA_LINKDOWN_REASONLOCAL_MEDIA_NOT_INSTALLED		50
+#define OPA_LINKDOWN_REASON_LOCAL_MEDIA_NOT_INSTALLED		50
 #define OPA_LINKDOWN_REASON_NOT_INSTALLED			51
 #define OPA_LINKDOWN_REASON_CHASSIS_CONFIG			52
 /* 53 reserved */
@@ -294,8 +294,8 @@ struct opa_port_states {
 
 struct opa_port_state_info {
 	struct opa_port_states port_states;
-	u16 link_width_downgrade_tx_active;
-	u16 link_width_downgrade_rx_active;
+	__be16 link_width_downgrade_tx_active;
+	__be16 link_width_downgrade_rx_active;
 };
 
 struct opa_port_info {

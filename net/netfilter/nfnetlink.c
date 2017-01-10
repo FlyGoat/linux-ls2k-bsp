@@ -47,6 +47,7 @@ static const int nfnl_group2type[NFNLGRP_MAX+1] = {
 	[NFNLGRP_CONNTRACK_EXP_NEW]	= NFNL_SUBSYS_CTNETLINK_EXP,
 	[NFNLGRP_CONNTRACK_EXP_UPDATE]	= NFNL_SUBSYS_CTNETLINK_EXP,
 	[NFNLGRP_CONNTRACK_EXP_DESTROY] = NFNL_SUBSYS_CTNETLINK_EXP,
+	[NFNLGRP_NFTRACE]		= NFNL_SUBSYS_NFTABLES,
 };
 
 void nfnl_lock(__u8 subsys_id)
@@ -222,6 +223,57 @@ replay:
 	}
 }
 
+struct nfnl_err {
+	struct list_head	head;
+	struct nlmsghdr		*nlh;
+	int			err;
+};
+
+static int nfnl_err_add(struct list_head *list, struct nlmsghdr *nlh, int err)
+{
+	struct nfnl_err *nfnl_err;
+
+	nfnl_err = kmalloc(sizeof(struct nfnl_err), GFP_KERNEL);
+	if (nfnl_err == NULL)
+		return -ENOMEM;
+
+	nfnl_err->nlh = nlh;
+	nfnl_err->err = err;
+	list_add_tail(&nfnl_err->head, list);
+
+	return 0;
+}
+
+static void nfnl_err_del(struct nfnl_err *nfnl_err)
+{
+	list_del(&nfnl_err->head);
+	kfree(nfnl_err);
+}
+
+static void nfnl_err_reset(struct list_head *err_list)
+{
+	struct nfnl_err *nfnl_err, *next;
+
+	list_for_each_entry_safe(nfnl_err, next, err_list, head)
+		nfnl_err_del(nfnl_err);
+}
+
+static void nfnl_err_deliver(struct list_head *err_list, struct sk_buff *skb)
+{
+	struct nfnl_err *nfnl_err, *next;
+
+	list_for_each_entry_safe(nfnl_err, next, err_list, head) {
+		netlink_ack(skb, nfnl_err->nlh, nfnl_err->err);
+		nfnl_err_del(nfnl_err);
+	}
+}
+
+enum {
+	NFNL_BATCH_FAILURE	= (1 << 0),
+	NFNL_BATCH_DONE		= (1 << 1),
+	NFNL_BATCH_REPLAY	= (1 << 2),
+};
+
 static void nfnetlink_rcv_batch(struct sk_buff *skb, struct nlmsghdr *nlh,
 				u_int16_t subsys_id)
 {
@@ -229,17 +281,19 @@ static void nfnetlink_rcv_batch(struct sk_buff *skb, struct nlmsghdr *nlh,
 	struct net *net = sock_net(skb->sk);
 	const struct nfnetlink_subsystem *ss;
 	const struct nfnl_callback *nc;
-	bool success = true, done = false;
+	static LIST_HEAD(err_list);
+	u32 status;
 	int err;
 
 	if (subsys_id >= NFNL_SUBSYS_COUNT)
 		return netlink_ack(skb, nlh, -EINVAL);
 replay:
+	status = 0;
+
 	nskb = netlink_skb_clone(oskb, GFP_KERNEL);
 	if (!nskb)
 		return netlink_ack(oskb, nlh, -ENOMEM);
 
-	nskb->sk = oskb->sk;
 	skb = nskb;
 
 	nfnl_lock(subsys_id);
@@ -256,15 +310,15 @@ replay:
 #endif
 		{
 			nfnl_unlock(subsys_id);
-			kfree_skb(nskb);
-			return netlink_ack(skb, nlh, -EOPNOTSUPP);
+			netlink_ack(oskb, nlh, -EOPNOTSUPP);
+			return kfree_skb(nskb);
 		}
 	}
 
 	if (!ss->commit || !ss->abort) {
 		nfnl_unlock(subsys_id);
-		kfree_skb(nskb);
-		return netlink_ack(skb, nlh, -EOPNOTSUPP);
+		netlink_ack(oskb, nlh, -EOPNOTSUPP);
+		return kfree_skb(skb);
 	}
 
 	while (skb->len >= nlmsg_total_size(0)) {
@@ -287,10 +341,11 @@ replay:
 		type = nlh->nlmsg_type;
 		if (type == NFNL_MSG_BATCH_BEGIN) {
 			/* Malformed: Batch begin twice */
-			success = false;
+			nfnl_err_reset(&err_list);
+			status |= NFNL_BATCH_FAILURE;
 			goto done;
 		} else if (type == NFNL_MSG_BATCH_END) {
-			done = true;
+			status |= NFNL_BATCH_DONE;
 			goto done;
 		} else if (type < NLMSG_MIN_TYPE) {
 			err = -EINVAL;
@@ -324,7 +379,7 @@ replay:
 				goto ack;
 
 			if (nc->call_batch) {
-				err = nc->call_batch(net->nfnl, skb, nlh,
+				err = nc->call_batch(net, net->nfnl, skb, nlh,
 						     (const struct nlattr **)cda);
 			}
 
@@ -333,34 +388,53 @@ replay:
 			 * original skb.
 			 */
 			if (err == -EAGAIN) {
-				ss->abort(skb);
-				nfnl_unlock(subsys_id);
-				kfree_skb(nskb);
-				goto replay;
+				status |= NFNL_BATCH_REPLAY;
+				goto next;
 			}
 		}
 ack:
 		if (nlh->nlmsg_flags & NLM_F_ACK || err) {
+			/* Errors are delivered once the full batch has been
+			 * processed, this avoids that the same error is
+			 * reported several times when replaying the batch.
+			 */
+			if (nfnl_err_add(&err_list, nlh, err) < 0) {
+				/* We failed to enqueue an error, reset the
+				 * list of errors and send OOM to userspace
+				 * pointing to the batch header.
+				 */
+				nfnl_err_reset(&err_list);
+				netlink_ack(oskb, nlmsg_hdr(oskb), -ENOMEM);
+				status |= NFNL_BATCH_FAILURE;
+				goto done;
+			}
 			/* We don't stop processing the batch on errors, thus,
 			 * userspace gets all the errors that the batch
 			 * triggers.
 			 */
-			netlink_ack(skb, nlh, err);
 			if (err)
-				success = false;
+				status |= NFNL_BATCH_FAILURE;
 		}
-
+next:
 		msglen = NLMSG_ALIGN(nlh->nlmsg_len);
 		if (msglen > skb->len)
 			msglen = skb->len;
 		skb_pull(skb, msglen);
 	}
 done:
-	if (success && done)
-		ss->commit(skb);
-	else
-		ss->abort(skb);
+	if (status & NFNL_BATCH_REPLAY) {
+		ss->abort(oskb);
+		nfnl_err_reset(&err_list);
+		nfnl_unlock(subsys_id);
+		kfree_skb(skb);
+		goto replay;
+	} else if (status == NFNL_BATCH_DONE) {
+		ss->commit(oskb);
+	} else {
+		ss->abort(oskb);
+	}
 
+	nfnl_err_deliver(&err_list, oskb);
 	nfnl_unlock(subsys_id);
 	kfree_skb(nskb);
 }
@@ -368,6 +442,7 @@ done:
 static void nfnetlink_rcv(struct sk_buff *skb)
 {
 	struct nlmsghdr *nlh = nlmsg_hdr(skb);
+	u_int16_t res_id;
 	int msglen;
 
 	if (nlh->nlmsg_len < NLMSG_HDRLEN ||
@@ -392,26 +467,29 @@ static void nfnetlink_rcv(struct sk_buff *skb)
 
 		nfgenmsg = nlmsg_data(nlh);
 		skb_pull(skb, msglen);
-		nfnetlink_rcv_batch(skb, nlh, nfgenmsg->res_id);
+		/* Work around old nft using host byte order */
+		if (nfgenmsg->res_id == NFNL_SUBSYS_NFTABLES)
+			res_id = NFNL_SUBSYS_NFTABLES;
+		else
+			res_id = ntohs(nfgenmsg->res_id);
+		nfnetlink_rcv_batch(skb, nlh, res_id);
 	} else {
 		netlink_rcv_skb(skb, &nfnetlink_rcv_msg);
 	}
 }
 
 #ifdef CONFIG_MODULES
-static void nfnetlink_bind(int group)
+static int nfnetlink_bind(int group)
 {
 	const struct nfnetlink_subsystem *ss;
 	int type = nfnl_group2type[group];
 
 	rcu_read_lock();
 	ss = nfnetlink_get_subsys(type);
-	if (!ss) {
-		rcu_read_unlock();
-		request_module("nfnetlink-subsys-%d", type);
-		return;
-	}
 	rcu_read_unlock();
+	if (!ss)
+		request_module("nfnetlink-subsys-%d", type);
+	return 0;
 }
 #endif
 

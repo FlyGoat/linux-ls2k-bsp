@@ -128,14 +128,6 @@ static inline void FNAME(protect_clean_gpte)(unsigned *access, unsigned gpte)
 	*access &= mask;
 }
 
-static bool FNAME(is_rsvd_bits_set)(struct kvm_mmu *mmu, u64 gpte, int level)
-{
-	int bit7 = (gpte >> 7) & 1, low6 = gpte & 0x3f;
-
-	return (gpte & mmu->rsvd_bits_mask[bit7][level-1]) |
-		((mmu->bad_mt_xwr & (1ull << low6)) != 0);
-}
-
 static inline int FNAME(is_present_gpte)(unsigned long pte)
 {
 #if PTTYPE != PTTYPE_EPT
@@ -172,7 +164,7 @@ static bool FNAME(prefetch_invalid_gpte)(struct kvm_vcpu *vcpu,
 				  struct kvm_mmu_page *sp, u64 *spte,
 				  u64 gpte)
 {
-	if (FNAME(is_rsvd_bits_set)(&vcpu->arch.mmu, gpte, PT_PAGE_TABLE_LEVEL))
+	if (is_rsvd_bits_set(&vcpu->arch.mmu, gpte, PT_PAGE_TABLE_LEVEL))
 		goto no_present;
 
 	if (!FNAME(is_present_gpte)(gpte))
@@ -197,8 +189,11 @@ static inline unsigned FNAME(gpte_access)(struct kvm_vcpu *vcpu, u64 gpte)
 		((gpte & VMX_EPT_EXECUTABLE_MASK) ? ACC_EXEC_MASK : 0) |
 		ACC_USER_MASK;
 #else
-	access = (gpte & (PT_WRITABLE_MASK | PT_USER_MASK)) | ACC_EXEC_MASK;
-	access &= ~(gpte >> PT64_NX_SHIFT);
+	BUILD_BUG_ON(ACC_EXEC_MASK != PT_PRESENT_MASK);
+	BUILD_BUG_ON(ACC_EXEC_MASK != 1);
+	access = gpte & (PT_WRITABLE_MASK | PT_USER_MASK | PT_PRESENT_MASK);
+	/* Combine NX with P (which is set here) to get ACC_EXEC_MASK.  */
+	access ^= (gpte >> PT64_NX_SHIFT);
 #endif
 
 	return access;
@@ -257,7 +252,7 @@ static int FNAME(update_accessed_dirty_bits)(struct kvm_vcpu *vcpu,
 			return ret;
 
 		kvm_vcpu_mark_page_dirty(vcpu, table_gfn);
-		walker->ptes[level] = pte;
+		walker->ptes[level - 1] = pte;
 	}
 	return 0;
 }
@@ -353,8 +348,7 @@ retry_walk:
 		if (unlikely(!FNAME(is_present_gpte)(pte)))
 			goto error;
 
-		if (unlikely(FNAME(is_rsvd_bits_set)(mmu, pte,
-					             walker->level))) {
+		if (unlikely(is_rsvd_bits_set(mmu, pte, walker->level))) {
 			errcode |= PFERR_RSVD_MASK | PFERR_PRESENT_MASK;
 			goto error;
 		}
@@ -465,7 +459,7 @@ FNAME(prefetch_gpte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 {
 	unsigned pte_access;
 	gfn_t gfn;
-	pfn_t pfn;
+	kvm_pfn_t pfn;
 
 	if (FNAME(prefetch_invalid_gpte)(vcpu, sp, spte, gpte))
 		return false;
@@ -560,7 +554,7 @@ static void FNAME(pte_prefetch)(struct kvm_vcpu *vcpu, struct guest_walker *gw,
 static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 			 struct guest_walker *gw,
 			 int write_fault, int hlevel,
-			 pfn_t pfn, bool map_writable, bool prefault)
+			 kvm_pfn_t pfn, bool map_writable, bool prefault)
 {
 	struct kvm_mmu_page *sp = NULL;
 	struct kvm_shadow_walk_iterator it;
@@ -607,7 +601,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 			goto out_gpte_changed;
 
 		if (sp)
-			link_shadow_page(it.sptep, sp, PT_GUEST_ACCESSED_MASK);
+			link_shadow_page(it.sptep, sp);
 	}
 
 	for (;
@@ -627,7 +621,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 
 		sp = kvm_mmu_get_page(vcpu, direct_gfn, addr, it.level-1,
 				      true, direct_access, it.sptep);
-		link_shadow_page(it.sptep, sp, PT_GUEST_ACCESSED_MASK);
+		link_shadow_page(it.sptep, sp);
 	}
 
 	clear_sp_write_flooding_count(it.sptep);
@@ -705,7 +699,7 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, gva_t addr, u32 error_code,
 	int user_fault = error_code & PFERR_USER_MASK;
 	struct guest_walker walker;
 	int r;
-	pfn_t pfn;
+	kvm_pfn_t pfn;
 	int level = PT_PAGE_TABLE_LEVEL;
 	int force_pt_level;
 	unsigned long mmu_seq;
@@ -714,8 +708,7 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, gva_t addr, u32 error_code,
 	pgprintk("%s: addr %lx err %x\n", __func__, addr, error_code);
 
 	if (unlikely(error_code & PFERR_RSVD_MASK)) {
-		r = handle_mmio_page_fault(vcpu, addr, error_code,
-					      mmu_is_nested(vcpu));
+		r = handle_mmio_page_fault(vcpu, addr, mmu_is_nested(vcpu));
 		if (likely(r != RET_MMIO_PF_INVALID))
 			return r;
 

@@ -19,6 +19,7 @@
 #include <linux/errno.h>
 #include <linux/rwsem.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/usb.h>
 
 #include "usb.h"
@@ -29,27 +30,19 @@ static DECLARE_RWSEM(minor_rwsem);
 
 static int usb_open(struct inode *inode, struct file *file)
 {
-	int minor = iminor(inode);
-	const struct file_operations *c;
 	int err = -ENODEV;
-	const struct file_operations *old_fops, *new_fops = NULL;
+	const struct file_operations *new_fops;
 
 	down_read(&minor_rwsem);
-	c = usb_minors[minor];
+	new_fops = fops_get(usb_minors[iminor(inode)]);
 
-	if (!c || !(new_fops = fops_get(c)))
+	if (!new_fops)
 		goto done;
 
-	old_fops = file->f_op;
-	file->f_op = new_fops;
+	replace_fops(file, new_fops);
 	/* Curiouser and curiouser... NULL ->open() as "no device" ? */
 	if (file->f_op->open)
 		err = file->f_op->open(inode, file);
-	if (err) {
-		fops_put(file->f_op);
-		file->f_op = fops_get(old_fops);
-	}
-	fops_put(old_fops);
  done:
 	up_read(&minor_rwsem);
 	return err;
@@ -163,7 +156,6 @@ int usb_register_dev(struct usb_interface *intf,
 	int minor_base = class_driver->minor_base;
 	int minor;
 	char name[20];
-	char *temp;
 
 #ifdef CONFIG_USB_DYNAMIC_MINORS
 	/*
@@ -200,14 +192,9 @@ int usb_register_dev(struct usb_interface *intf,
 
 	/* create a usb class device for this usb interface */
 	snprintf(name, sizeof(name), class_driver->name, minor - minor_base);
-	temp = strrchr(name, '/');
-	if (temp && (temp[1] != '\0'))
-		++temp;
-	else
-		temp = name;
 	intf->usb_dev = device_create(usb_class->class, &intf->dev,
 				      MKDEV(USB_MAJOR, minor), class_driver,
-				      "%s", temp);
+				      "%s", kbasename(name));
 	if (IS_ERR(intf->usb_dev)) {
 		down_write(&minor_rwsem);
 		usb_minors[minor] = NULL;

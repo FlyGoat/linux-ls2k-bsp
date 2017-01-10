@@ -376,7 +376,7 @@ int nfs_readdir_xdr_filler(struct page **pages, nfs_readdir_descriptor_t *desc,
  again:
 	timestamp = jiffies;
 	gencount = nfs_inc_attr_generation_counter();
-	error = NFS_PROTO(inode)->readdir(file->f_path.dentry, cred, entry->cookie, pages,
+	error = NFS_PROTO(inode)->readdir(file_dentry(file), cred, entry->cookie, pages,
 					  NFS_SERVER(inode)->dtsize, desc->plus);
 	if (error < 0) {
 		/* We requested READDIRPLUS, but the server doesn't grok it */
@@ -407,14 +407,22 @@ static int xdr_decode(nfs_readdir_descriptor_t *desc,
 	return 0;
 }
 
+/* Match file and dirent using either filehandle or fileid
+ * Note: caller is responsible for checking the fsid
+ */
 static
 int nfs_same_file(struct dentry *dentry, struct nfs_entry *entry)
 {
+	struct nfs_inode *nfsi;
+
 	if (dentry->d_inode == NULL)
 		goto different;
-	if (nfs_compare_fh(entry->fh, NFS_FH(dentry->d_inode)) != 0)
-		goto different;
-	return 1;
+
+	nfsi = NFS_I(dentry->d_inode);
+	if (entry->fattr->fileid == nfsi->fileid)
+		return 1;
+	if (nfs_compare_fh(entry->fh, &nfsi->fh) == 0)
+		return 1;
 different:
 	return 0;
 }
@@ -468,6 +476,8 @@ void nfs_prime_dcache(struct dentry *parent, struct nfs_entry *entry)
 	struct inode *inode;
 	int status;
 
+	if (!(entry->fattr->valid & NFS_ATTR_FATTR_FILEID))
+		return;
 	if (!(entry->fattr->valid & NFS_ATTR_FATTR_FSID))
 		return;
 	if (filename.name[0] == '.') {
@@ -551,7 +561,7 @@ int nfs_readdir_page_filler(nfs_readdir_descriptor_t *desc, struct nfs_entry *en
 		count++;
 
 		if (desc->plus != 0)
-			nfs_prime_dcache(desc->file->f_path.dentry, entry);
+			nfs_prime_dcache(file_dentry(desc->file), entry);
 
 		status = nfs_readdir_add_to_array(entry, page);
 		if (status != 0)
@@ -574,26 +584,19 @@ out_nopages:
 }
 
 static
-void nfs_readdir_free_pagearray(struct page **pages, unsigned int npages)
+void nfs_readdir_free_pages(struct page **pages, unsigned int npages)
 {
 	unsigned int i;
 	for (i = 0; i < npages; i++)
 		put_page(pages[i]);
 }
 
-static
-void nfs_readdir_free_large_page(void *ptr, struct page **pages,
-		unsigned int npages)
-{
-	nfs_readdir_free_pagearray(pages, npages);
-}
-
 /*
  * nfs_readdir_large_page will allocate pages that must be freed with a call
- * to nfs_readdir_free_large_page
+ * to nfs_readdir_free_pagearray
  */
 static
-int nfs_readdir_large_page(struct page **pages, unsigned int npages)
+int nfs_readdir_alloc_pages(struct page **pages, unsigned int npages)
 {
 	unsigned int i;
 
@@ -606,7 +609,7 @@ int nfs_readdir_large_page(struct page **pages, unsigned int npages)
 	return 0;
 
 out_freepages:
-	nfs_readdir_free_pagearray(pages, i);
+	nfs_readdir_free_pages(pages, i);
 	return -ENOMEM;
 }
 
@@ -614,7 +617,6 @@ static
 int nfs_readdir_xdr_to_array(nfs_readdir_descriptor_t *desc, struct page *page, struct inode *inode)
 {
 	struct page *pages[NFS_MAX_READDIR_PAGES];
-	void *pages_ptr = NULL;
 	struct nfs_entry entry;
 	struct file	*file = desc->file;
 	struct nfs_cache_array *array;
@@ -644,7 +646,7 @@ int nfs_readdir_xdr_to_array(nfs_readdir_descriptor_t *desc, struct page *page, 
 	memset(array, 0, sizeof(struct nfs_cache_array));
 	array->eof_index = -1;
 
-	status = nfs_readdir_large_page(pages, array_size);
+	status = nfs_readdir_alloc_pages(pages, array_size);
 	if (status < 0)
 		goto out_release_array;
 	do {
@@ -662,7 +664,7 @@ int nfs_readdir_xdr_to_array(nfs_readdir_descriptor_t *desc, struct page *page, 
 		}
 	} while (array->eof_index < 0);
 
-	nfs_readdir_free_large_page(pages_ptr, pages, array_size);
+	nfs_readdir_free_pages(pages, array_size);
 out_release_array:
 	nfs_readdir_release_array(page);
 out_label_free:
@@ -866,7 +868,7 @@ static bool nfs_dir_mapping_need_revalidate(struct inode *dir)
  */
 static int nfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct dentry	*dentry = filp->f_path.dentry;
+	struct dentry	*dentry = file_dentry(filp);
 	struct inode	*inode = dentry->d_inode;
 	nfs_readdir_descriptor_t my_desc,
 			*desc = &my_desc;
@@ -1467,9 +1469,6 @@ static int nfs_finish_open(struct nfs_open_context *ctx,
 {
 	int err;
 
-	if ((open_flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL))
-		*opened |= FILE_CREATED;
-
 	err = finish_open(file, dentry, do_open, opened);
 	if (err)
 		goto out;
@@ -1539,9 +1538,9 @@ int nfs_atomic_open(struct inode *dir, struct dentry *dentry,
 		err = PTR_ERR(inode);
 		trace_nfs_atomic_open_exit(dir, ctx, open_flags, err);
 		put_nfs_open_context(ctx);
+		d_drop(dentry);
 		switch (err) {
 		case -ENOENT:
-			d_drop(dentry);
 			d_add(dentry, NULL);
 			nfs_set_verifier(dentry, nfs_save_change_attribute(dir));
 			break;
@@ -1721,9 +1720,6 @@ nfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
 
 	dfprintk(VFS, "NFS: mknod(%s/%lu), %pd\n",
 			dir->i_sb->s_id, dir->i_ino, dentry);
-
-	if (!new_valid_dev(rdev))
-		return -EINVAL;
 
 	attr.ia_mode = mode;
 	attr.ia_valid = ATTR_MODE;
@@ -2084,6 +2080,10 @@ static DEFINE_SPINLOCK(nfs_access_lru_lock);
 static LIST_HEAD(nfs_access_lru_list);
 static atomic_long_t nfs_access_nr_entries;
 
+static unsigned long nfs_access_max_cachesize = ULONG_MAX;
+module_param(nfs_access_max_cachesize, ulong, 0644);
+MODULE_PARM_DESC(nfs_access_max_cachesize, "NFS access maximum total cache length");
+
 static void nfs_access_free_entry(struct nfs_access_entry *entry)
 {
 	put_rpccred(entry->cred);
@@ -2104,17 +2104,11 @@ static void nfs_access_free_list(struct list_head *head)
 	}
 }
 
-int nfs_access_cache_shrinker(struct shrinker *shrink,
-			      struct shrink_control *sc)
+int nfs_do_access_cache_shrinker(int nr_to_scan)
 {
 	LIST_HEAD(head);
 	struct nfs_inode *nfsi, *next;
 	struct nfs_access_entry *cache;
-	int nr_to_scan = sc->nr_to_scan;
-	gfp_t gfp_mask = sc->gfp_mask;
-
-	if ((gfp_mask & GFP_KERNEL) != GFP_KERNEL)
-		return (nr_to_scan == 0) ? 0 : -1;
 
 	spin_lock(&nfs_access_lru_lock);
 	list_for_each_entry_safe(nfsi, next, &nfs_access_lru_list, access_cache_inode_lru) {
@@ -2145,6 +2139,33 @@ remove_lru_entry:
 	spin_unlock(&nfs_access_lru_lock);
 	nfs_access_free_list(&head);
 	return (atomic_long_read(&nfs_access_nr_entries) / 100) * sysctl_vfs_cache_pressure;
+}
+
+int nfs_access_cache_shrinker(struct shrinker *shrink,
+			      struct shrink_control *sc)
+{
+	int nr_to_scan = sc->nr_to_scan;
+	gfp_t gfp_mask = sc->gfp_mask;
+
+	if ((gfp_mask & GFP_KERNEL) != GFP_KERNEL)
+		return (nr_to_scan == 0) ? 0 : -1;
+	return nfs_do_access_cache_shrinker(nr_to_scan);
+}
+
+static void
+nfs_access_cache_enforce_limit(void)
+{
+	long nr_entries = atomic_long_read(&nfs_access_nr_entries);
+	unsigned long diff;
+	unsigned int nr_to_scan;
+
+	if (nr_entries < 0 || nr_entries <= nfs_access_max_cachesize)
+		return;
+	nr_to_scan = 100;
+	diff = nr_entries - nfs_access_max_cachesize;
+	if (diff < nr_to_scan)
+		nr_to_scan = diff;
+	nfs_do_access_cache_shrinker(nr_to_scan);
 }
 
 static void __nfs_access_zap_cache(struct nfs_inode *nfsi, struct list_head *head)
@@ -2329,6 +2350,7 @@ void nfs_access_add_cache(struct inode *inode, struct nfs_access_entry *set)
 					&nfs_access_lru_list);
 		spin_unlock(&nfs_access_lru_lock);
 	}
+	nfs_access_cache_enforce_limit();
 }
 EXPORT_SYMBOL_GPL(nfs_access_add_cache);
 
@@ -2424,6 +2446,9 @@ int nfs_permission(struct inode *inode, int mask)
 		case S_IFLNK:
 			goto out;
 		case S_IFREG:
+			if ((mask & MAY_OPEN) &&
+			   nfs_server_capable(inode, NFS_CAP_ATOMIC_OPEN))
+				return 0;
 			break;
 		case S_IFDIR:
 			/*

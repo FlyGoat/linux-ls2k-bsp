@@ -42,6 +42,9 @@ struct vfio_device_ops {
 	void	(*request)(void *device_data, unsigned int count);
 };
 
+extern struct iommu_group *vfio_iommu_group_get(struct device *dev);
+extern void vfio_iommu_group_put(struct iommu_group *group, struct device *dev);
+
 extern int vfio_add_group_dev(struct device *dev,
 			      const struct vfio_device_ops *ops,
 			      void *device_data);
@@ -77,19 +80,6 @@ extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
 
 extern void vfio_unregister_iommu_driver(
 				const struct vfio_iommu_driver_ops *ops);
-
-/**
- * offsetofend(TYPE, MEMBER)
- *
- * @TYPE: The type of the structure
- * @MEMBER: The member within the structure to get the end offset of
- *
- * Simple helper macro for dealing with variable sized structures passed
- * from user space.  This allows us to easily determine if the provided
- * structure is sized to include various fields.
- */
-#define offsetofend(TYPE, MEMBER) \
-	(offsetof(TYPE, MEMBER)	+ sizeof(((TYPE *)0)->MEMBER))
 
 /*
  * External user API

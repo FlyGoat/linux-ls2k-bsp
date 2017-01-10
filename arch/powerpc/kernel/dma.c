@@ -277,20 +277,26 @@ int __dma_set_mask(struct device *dev, u64 dma_mask)
 	*dev->dma_mask = dma_mask;
 	return 0;
 }
+
 int dma_set_mask(struct device *dev, u64 dma_mask)
 {
 	if (ppc_md.dma_set_mask)
 		return ppc_md.dma_set_mask(dev, dma_mask);
+
+	if (dev_is_pci(dev)) {
+		struct pci_dev *pdev = to_pci_dev(dev);
+		struct pci_controller *phb = pci_bus_to_host(pdev->bus);
+		if (phb->controller_ops.dma_set_mask)
+			return phb->controller_ops.dma_set_mask(pdev, dma_mask);
+	}
+
 	return __dma_set_mask(dev, dma_mask);
 }
 EXPORT_SYMBOL(dma_set_mask);
 
-u64 dma_get_required_mask(struct device *dev)
+u64 __dma_get_required_mask(struct device *dev)
 {
 	struct dma_map_ops *dma_ops = get_dma_ops(dev);
-
-	if (ppc_md.dma_get_required_mask)
-		return ppc_md.dma_get_required_mask(dev);
 
 	if (unlikely(dma_ops == NULL))
 		return 0;
@@ -299,6 +305,14 @@ u64 dma_get_required_mask(struct device *dev)
 		return dma_ops->get_required_mask(dev);
 
 	return DMA_BIT_MASK(8 * sizeof(dma_addr_t));
+}
+
+u64 dma_get_required_mask(struct device *dev)
+{
+	if (ppc_md.dma_get_required_mask)
+		return ppc_md.dma_get_required_mask(dev);
+
+	return __dma_get_required_mask(dev);
 }
 EXPORT_SYMBOL_GPL(dma_get_required_mask);
 

@@ -219,6 +219,14 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 			goto fail;
 	}
 
+        else if (shost->hostt->use_host_wide_tags) {
+                 shost->bqt = blk_init_tags(shost->can_queue);
+                 if (!shost->bqt) {
+                         error = -ENOMEM;
+                         goto fail;
+                 }
+         }
+
 	/*
 	 * Note that we allocate the freelist even for the MQ case for now,
 	 * as we need a command set aside for scsi_reset_provider.  Having
@@ -324,6 +332,17 @@ static void scsi_host_dev_release(struct device *dev)
 		queuedata = q->queuedata;
 		blk_cleanup_queue(q);
 		kfree(queuedata);
+	}
+
+	if (shost->shost_state == SHOST_CREATED) {
+		/*
+		 * Free the shost_dev device name here if scsi_host_alloc()
+		 * and scsi_host_put() have been called but neither
+		 * scsi_host_add() nor scsi_host_remove() has been called.
+		 * This avoids that the memory allocated for the shost_dev
+		 * name is leaked.
+		 */
+		kfree(dev_name(&shost->shost_dev));
 	}
 
 	scsi_destroy_command_freelist(shost);

@@ -324,6 +324,7 @@ static struct {
 	u32 sensors_pdrv_attrs_registered:1;
 	u32 sensors_pdev_attrs_registered:1;
 	u32 hotkey_poll_active:1;
+	u32 has_adaptive_kbd:1;
 } tp_features;
 
 static struct {
@@ -1910,6 +1911,27 @@ enum {	/* hot key scan codes (derived from ACPI DSDT) */
 	TP_ACPI_HOTKEYSCAN_UNK7,
 	TP_ACPI_HOTKEYSCAN_UNK8,
 
+	TP_ACPI_HOTKEYSCAN_MUTE2,
+	TP_ACPI_HOTKEYSCAN_BRIGHTNESS_ZERO,
+	TP_ACPI_HOTKEYSCAN_CLIPPING_TOOL,
+	TP_ACPI_HOTKEYSCAN_CLOUD,
+	TP_ACPI_HOTKEYSCAN_UNK9,
+	TP_ACPI_HOTKEYSCAN_VOICE,
+	TP_ACPI_HOTKEYSCAN_UNK10,
+	TP_ACPI_HOTKEYSCAN_GESTURES,
+	TP_ACPI_HOTKEYSCAN_UNK11,
+	TP_ACPI_HOTKEYSCAN_UNK12,
+	TP_ACPI_HOTKEYSCAN_UNK13,
+	TP_ACPI_HOTKEYSCAN_CONFIG,
+	TP_ACPI_HOTKEYSCAN_NEW_TAB,
+	TP_ACPI_HOTKEYSCAN_RELOAD,
+	TP_ACPI_HOTKEYSCAN_BACK,
+	TP_ACPI_HOTKEYSCAN_MIC_DOWN,
+	TP_ACPI_HOTKEYSCAN_MIC_UP,
+	TP_ACPI_HOTKEYSCAN_MIC_CANCELLATION,
+	TP_ACPI_HOTKEYSCAN_CAMERA_MODE,
+	TP_ACPI_HOTKEYSCAN_ROTATE_DISPLAY,
+
 	/* Hotkey keymap size */
 	TPACPI_HOTKEY_MAP_LEN
 };
@@ -2018,6 +2040,7 @@ static int hotkey_autosleep_ack;
 
 static u32 hotkey_orig_mask;		/* events the BIOS had enabled */
 static u32 hotkey_all_mask;		/* all events supported in fw */
+static u32 hotkey_adaptive_all_mask;	/* all adaptive events supported in fw */
 static u32 hotkey_reserved_mask;	/* events better left disabled */
 static u32 hotkey_driver_mask;		/* events needed by the driver */
 static u32 hotkey_user_mask;		/* events visible to userspace */
@@ -2726,6 +2749,17 @@ static ssize_t hotkey_all_mask_show(struct device *dev,
 static struct device_attribute dev_attr_hotkey_all_mask =
 	__ATTR(hotkey_all_mask, S_IRUGO, hotkey_all_mask_show, NULL);
 
+/* sysfs hotkey all_mask ----------------------------------------------- */
+static ssize_t hotkey_adaptive_all_mask_show(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "0x%08x\n",
+			hotkey_adaptive_all_mask | hotkey_source_mask);
+}
+
+static DEVICE_ATTR_RO(hotkey_adaptive_all_mask);
+
 /* sysfs hotkey recommended_mask --------------------------------------- */
 static ssize_t hotkey_recommended_mask_show(struct device *dev,
 					    struct device_attribute *attr,
@@ -2930,6 +2964,57 @@ static void hotkey_wakeup_hotunplug_complete_notify_change(void)
 		     "wakeup_hotunplug_complete");
 }
 
+/* sysfs adaptive kbd mode --------------------------------------------- */
+
+static int adaptive_keyboard_get_mode(void);
+static int adaptive_keyboard_set_mode(int new_mode);
+
+enum ADAPTIVE_KEY_MODE {
+	HOME_MODE,
+	WEB_BROWSER_MODE,
+	WEB_CONFERENCE_MODE,
+	FUNCTION_MODE,
+	LAYFLAT_MODE
+};
+
+static ssize_t adaptive_kbd_mode_show(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	u32 current_mode;
+
+	current_mode = adaptive_keyboard_get_mode();
+	if (current_mode < 0)
+		return current_mode;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", current_mode);
+}
+
+static ssize_t adaptive_kbd_mode_store(struct device *dev,
+			    struct device_attribute *attr,
+			    const char *buf, size_t count)
+{
+	unsigned long t;
+	int res;
+
+	if (parse_strtoul(buf, LAYFLAT_MODE, &t))
+		return -EINVAL;
+
+	res = adaptive_keyboard_set_mode(t);
+	return (res < 0) ? res : count;
+}
+
+static DEVICE_ATTR_RW(adaptive_kbd_mode);
+
+static struct attribute *adaptive_kbd_attributes[] = {
+	&dev_attr_adaptive_kbd_mode.attr,
+	NULL
+};
+
+static const struct attribute_group adaptive_kbd_attr_group = {
+	.attrs = adaptive_kbd_attributes,
+};
+
 /* --------------------------------------------------------------------- */
 
 static struct attribute *hotkey_attributes[] __initdata = {
@@ -2941,6 +3026,7 @@ static struct attribute *hotkey_attributes[] __initdata = {
 	&dev_attr_hotkey_wakeup_hotunplug_complete.attr,
 	&dev_attr_hotkey_mask.attr,
 	&dev_attr_hotkey_all_mask.attr,
+	&dev_attr_hotkey_adaptive_all_mask.attr,
 	&dev_attr_hotkey_recommended_mask.attr,
 #ifdef CONFIG_THINKPAD_ACPI_HOTKEY_POLL
 	&dev_attr_hotkey_source_mask.attr,
@@ -3132,6 +3218,13 @@ static int __init hotkey_init(struct ibm_init_struct *iibm)
 		/* (assignments unknown, please report if found) */
 		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
 		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
+
+		/* No assignments, only used for Adaptive keyboards. */
+		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
+		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
+		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
+		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
+		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
 		},
 
 	/* Generic keymap for Lenovo ThinkPads */
@@ -3184,8 +3277,39 @@ static int __init hotkey_init(struct ibm_init_struct *iibm)
 		KEY_MICMUTE,	/* 0x1a: Mic mute (since ?400 or so) */
 
 		/* (assignments unknown, please report if found) */
-		KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN,
 		KEY_UNKNOWN,
+
+		/* Extra keys in use since the X240 / T440 / T540 */
+		KEY_CONFIG, KEY_SEARCH, KEY_SCALE, KEY_FILE,
+
+		/*
+		 * These are the adaptive keyboard keycodes for Carbon X1 2014.
+		 * The first item in this list is the Mute button which is
+		 * emitted with 0x103 through
+		 * adaptive_keyboard_hotkey_notify_hotkey() when the sound
+		 * symbol is held.
+		 * We'll need to offset those by 0x20.
+		 */
+		KEY_RESERVED,        /* Mute held, 0x103 */
+		KEY_BRIGHTNESS_MIN,  /* Backlight off */
+		KEY_RESERVED,        /* Clipping tool */
+		KEY_RESERVED,        /* Cloud */
+		KEY_RESERVED,
+		KEY_VOICECOMMAND,    /* Voice */
+		KEY_RESERVED,
+		KEY_RESERVED,        /* Gestures */
+		KEY_RESERVED,
+		KEY_RESERVED,
+		KEY_RESERVED,
+		KEY_CONFIG,          /* Settings */
+		KEY_RESERVED,        /* New tab */
+		KEY_REFRESH,         /* Reload */
+		KEY_BACK,            /* Back */
+		KEY_RESERVED,        /* Microphone down */
+		KEY_RESERVED,        /* Microphone up */
+		KEY_RESERVED,        /* Microphone cancellation */
+		KEY_RESERVED,        /* Camera mode */
+		KEY_RESERVED,        /* Rotate display, 0x116 */
 		},
 	};
 
@@ -3261,18 +3385,16 @@ static int __init hotkey_init(struct ibm_init_struct *iibm)
 	   A30, R30, R31, T20-22, X20-21, X22-24.  Detected by checking
 	   for HKEY interface version 0x100 */
 	if (acpi_evalf(hkey_handle, &hkeyv, "MHKV", "qd")) {
-		if ((hkeyv >> 8) != 1) {
-			pr_err("unknown version of the HKEY interface: 0x%x\n",
-			       hkeyv);
-			pr_err("please report this to %s\n", TPACPI_MAIL);
-		} else {
+		vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_HKEY,
+			    "firmware HKEY interface version: 0x%x\n",
+			    hkeyv);
+
+		switch (hkeyv >> 8) {
+		case 1:
 			/*
 			 * MHKV 0x100 in A31, R40, R40e,
 			 * T4x, X31, and later
 			 */
-			vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_HKEY,
-				"firmware HKEY interface version: 0x%x\n",
-				hkeyv);
 
 			/* Paranoia check AND init hotkey_all_mask */
 			if (!acpi_evalf(hkey_handle, &hotkey_all_mask,
@@ -3285,6 +3407,49 @@ static int __init hotkey_init(struct ibm_init_struct *iibm)
 			} else {
 				tp_features.hotkey_mask = 1;
 			}
+			break;
+
+		case 2:
+			/*
+			 * MHKV 0x200 in X1, T460s, X260, T560, X1 Tablet (2016)
+			 */
+
+			/* Paranoia check AND init hotkey_all_mask */
+			if (!acpi_evalf(hkey_handle, &hotkey_all_mask,
+					"MHKA", "dd", 1)) {
+				pr_err("missing MHKA handler, please report this to %s\n",
+				       TPACPI_MAIL);
+				/* Fallback: pre-init for FN+F3,F4,F12 */
+				hotkey_all_mask = 0x080cU;
+			} else {
+				tp_features.hotkey_mask = 1;
+			}
+
+			/*
+			 * Check if we have an adaptive keyboard, like on the
+			 * Lenovo Carbon X1 2014 (2nd Gen).
+			 */
+			if (acpi_evalf(hkey_handle, &hotkey_adaptive_all_mask,
+				       "MHKA", "dd", 2)) {
+				if (hotkey_adaptive_all_mask != 0) {
+					tp_features.has_adaptive_kbd = true;
+					res = sysfs_create_group(
+						&tpacpi_pdev->dev.kobj,
+						&adaptive_kbd_attr_group);
+					if (res)
+						goto err_exit;
+				}
+			} else {
+				tp_features.has_adaptive_kbd = false;
+				hotkey_adaptive_all_mask = 0x0U;
+			}
+			break;
+
+		default:
+			pr_err("unknown version of the HKEY interface: 0x%x\n",
+			       hkeyv);
+			pr_err("please report this to %s\n", TPACPI_MAIL);
+			break;
 		}
 	}
 
@@ -3454,6 +3619,9 @@ static int __init hotkey_init(struct ibm_init_struct *iibm)
 
 err_exit:
 	delete_attr_set(hotkey_dev_attributes, &tpacpi_pdev->dev.kobj);
+	sysfs_remove_group(&tpacpi_pdev->dev.kobj,
+			&adaptive_kbd_attr_group);
+
 	hotkey_dev_attributes = NULL;
 
 	return (res < 0)? res : 1;
@@ -3466,14 +3634,6 @@ err_exit:
  * Will consider support rest of modes in future.
  *
  */
-enum ADAPTIVE_KEY_MODE {
-	HOME_MODE,
-	WEB_BROWSER_MODE,
-	WEB_CONFERENCE_MODE,
-	FUNCTION_MODE,
-	LAYFLAT_MODE
-};
-
 const int adaptive_keyboard_modes[] = {
 	HOME_MODE,
 /*	WEB_BROWSER_MODE = 2,
@@ -3483,12 +3643,40 @@ const int adaptive_keyboard_modes[] = {
 
 #define DFR_CHANGE_ROW			0x101
 #define DFR_SHOW_QUICKVIEW_ROW		0x102
+#define FIRST_ADAPTIVE_KEY		0x103
+#define ADAPTIVE_KEY_OFFSET		0x020
 
 /* press Fn key a while second, it will switch to Function Mode. Then
  * release Fn key, previous mode be restored.
  */
 static bool adaptive_keyboard_mode_is_saved;
 static int adaptive_keyboard_prev_mode;
+
+static int adaptive_keyboard_get_mode(void)
+{
+	int mode = 0;
+
+	if (!acpi_evalf(hkey_handle, &mode, "GTRW", "dd", 0)) {
+		pr_err("Cannot read adaptive keyboard mode\n");
+		return -EIO;
+	}
+
+	return mode;
+}
+
+static int adaptive_keyboard_set_mode(int new_mode)
+{
+	if (new_mode < 0 ||
+		new_mode > LAYFLAT_MODE)
+		return -EINVAL;
+
+	if (!acpi_evalf(hkey_handle, NULL, "STRW", "vd", new_mode)) {
+		pr_err("Cannot set adaptive keyboard mode\n");
+		return -EIO;
+	}
+
+	return 0;
+}
 
 static int adaptive_keyboard_get_next_mode(int mode)
 {
@@ -3512,6 +3700,7 @@ static bool adaptive_keyboard_hotkey_notify_hotkey(unsigned int scancode)
 {
 	u32 current_mode = 0;
 	int new_mode = 0;
+	int keycode;
 
 	switch (scancode) {
 	case DFR_CHANGE_ROW:
@@ -3519,43 +3708,51 @@ static bool adaptive_keyboard_hotkey_notify_hotkey(unsigned int scancode)
 			new_mode = adaptive_keyboard_prev_mode;
 			adaptive_keyboard_mode_is_saved = false;
 		} else {
-			if (!acpi_evalf(
-					hkey_handle, &current_mode,
-					"GTRW", "dd", 0)) {
-				pr_err("Cannot read adaptive keyboard mode\n");
+			current_mode = adaptive_keyboard_get_mode();
+			if (current_mode < 0)
 				return false;
-			} else {
-				new_mode = adaptive_keyboard_get_next_mode(
-						current_mode);
-			}
+			new_mode = adaptive_keyboard_get_next_mode(
+					current_mode);
 		}
 
-		if (!acpi_evalf(hkey_handle, NULL, "STRW", "vd", new_mode)) {
-			pr_err("Cannot set adaptive keyboard mode\n");
+		if (adaptive_keyboard_set_mode(new_mode) < 0)
 			return false;
-		}
 
 		return true;
 
 	case DFR_SHOW_QUICKVIEW_ROW:
-		if (!acpi_evalf(hkey_handle,
-				&adaptive_keyboard_prev_mode,
-				"GTRW", "dd", 0)) {
-			pr_err("Cannot read adaptive keyboard mode\n");
+		current_mode = adaptive_keyboard_get_mode();
+		if (current_mode < 0)
 			return false;
-		} else {
-			adaptive_keyboard_mode_is_saved = true;
 
-			if (!acpi_evalf(hkey_handle,
-					NULL, "STRW", "vd", FUNCTION_MODE)) {
-				pr_err("Cannot set adaptive keyboard mode\n");
-				return false;
-			}
-		}
+		adaptive_keyboard_prev_mode = current_mode;
+		adaptive_keyboard_mode_is_saved = true;
+
+		if (adaptive_keyboard_set_mode (FUNCTION_MODE) < 0)
+			return false;
 		return true;
 
 	default:
-		return false;
+		if (scancode < FIRST_ADAPTIVE_KEY ||
+		    scancode >= FIRST_ADAPTIVE_KEY + TPACPI_HOTKEY_MAP_LEN -
+				ADAPTIVE_KEY_OFFSET) {
+			pr_info("Unhandled adaptive keyboard key: 0x%x\n",
+					scancode);
+			return false;
+		}
+		keycode = hotkey_keycode_map[scancode - FIRST_ADAPTIVE_KEY + ADAPTIVE_KEY_OFFSET];
+		if (keycode != KEY_RESERVED) {
+			mutex_lock(&tpacpi_inputdev_send_mutex);
+
+			input_report_key(tpacpi_inputdev, keycode, 1);
+			input_sync(tpacpi_inputdev);
+
+			input_report_key(tpacpi_inputdev, keycode, 0);
+			input_sync(tpacpi_inputdev);
+
+			mutex_unlock(&tpacpi_inputdev_send_mutex);
+		}
+		return true;
 	}
 }
 
@@ -3859,28 +4056,21 @@ static void hotkey_notify(struct ibm_struct *ibm, u32 event)
 
 static void hotkey_suspend(void)
 {
-	int hkeyv;
-
 	/* Do these on suspend, we get the events on early resume! */
 	hotkey_wakeup_reason = TP_ACPI_WAKEUP_NONE;
 	hotkey_autosleep_ack = 0;
 
 	/* save previous mode of adaptive keyboard of X1 Carbon */
-	if (acpi_evalf(hkey_handle, &hkeyv, "MHKV", "qd")) {
-		if ((hkeyv >> 8) == 2) {
-			if (!acpi_evalf(hkey_handle,
-						&adaptive_keyboard_prev_mode,
-						"GTRW", "dd", 0)) {
-				pr_err("Cannot read adaptive keyboard mode.\n");
-			}
+	if (tp_features.has_adaptive_kbd) {
+		if (!acpi_evalf(hkey_handle, &adaptive_keyboard_prev_mode,
+					"GTRW", "dd", 0)) {
+			pr_err("Cannot read adaptive keyboard mode.\n");
 		}
 	}
 }
 
 static void hotkey_resume(void)
 {
-	int hkeyv;
-
 	tpacpi_disable_brightness_delay();
 
 	if (hotkey_status_set(true) < 0 ||
@@ -3895,14 +4085,10 @@ static void hotkey_resume(void)
 	hotkey_poll_setup_safe(false);
 
 	/* restore previous mode of adapive keyboard of X1 Carbon */
-	if (acpi_evalf(hkey_handle, &hkeyv, "MHKV", "qd")) {
-		if ((hkeyv >> 8) == 2) {
-			if (!acpi_evalf(hkey_handle,
-						NULL,
-						"STRW", "vd",
-						adaptive_keyboard_prev_mode)) {
-				pr_err("Cannot set adaptive keyboard mode.\n");
-			}
+	if (tp_features.has_adaptive_kbd) {
+		if (!acpi_evalf(hkey_handle, NULL, "STRW", "vd",
+					adaptive_keyboard_prev_mode)) {
+			pr_err("Cannot set adaptive keyboard mode.\n");
 		}
 	}
 }
@@ -6560,6 +6746,17 @@ static struct ibm_struct brightness_driver_data = {
  * bits 3-0 (volume).  Other bits in NVRAM may have other functions,
  * such as bit 7 which is used to detect repeated presses of MUTE,
  * and we leave them unchanged.
+ *
+ * On newer Lenovo ThinkPads, the EC can automatically change the volume
+ * in response to user input.  Unfortunately, this rarely works well.
+ * The laptop changes the state of its internal MUTE gate and, on some
+ * models, sends KEY_MUTE, causing any user code that responds to the
+ * mute button to get confused.  The hardware MUTE gate is also
+ * unnecessary, since user code can handle the mute button without
+ * kernel or EC help.
+ *
+ * To avoid confusing userspace, we simply disable all EC-based mute
+ * and volume controls when possible.
  */
 
 #ifdef CONFIG_THINKPAD_ACPI_ALSA_SUPPORT
@@ -6609,11 +6806,21 @@ enum tpacpi_volume_capabilities {
 	TPACPI_VOL_CAP_MAX
 };
 
+enum tpacpi_mute_btn_mode {
+	TP_EC_MUTE_BTN_LATCH  = 0,	/* Mute mutes; up/down unmutes */
+	/* We don't know what mode 1 is. */
+	TP_EC_MUTE_BTN_NONE   = 2,	/* Mute and up/down are just keys */
+	TP_EC_MUTE_BTN_TOGGLE = 3,	/* Mute toggles; up/down unmutes */
+};
+
 static enum tpacpi_volume_access_mode volume_mode =
 	TPACPI_VOL_MODE_MAX;
 
 static enum tpacpi_volume_capabilities volume_capabilities;
 static bool volume_control_allowed;
+static bool software_mute_requested = true;
+static bool software_mute_active;
+static int software_mute_orig_mode;
 
 /*
  * Used to syncronize writers to TP_EC_AUDIO and
@@ -6630,6 +6837,8 @@ static void tpacpi_volume_checkpoint_nvram(void)
 	if (volume_mode != TPACPI_VOL_MODE_ECNVRAM)
 		return;
 	if (!volume_control_allowed)
+		return;
+	if (software_mute_active)
 		return;
 
 	vdbg_printk(TPACPI_DBG_MIXER,
@@ -6691,6 +6900,12 @@ static int volume_set_status_ec(const u8 status)
 		return -EIO;
 
 	dbg_printk(TPACPI_DBG_MIXER, "set EC mixer to 0x%02x\n", status);
+
+	/*
+	 * On X200s, and possibly on others, it can take a while for
+	 * reads to become correct.
+	 */
+	msleep(1);
 
 	return 0;
 }
@@ -6772,6 +6987,57 @@ static int __volume_set_volume_ec(const u8 vol)
 unlock:
 	mutex_unlock(&volume_mutex);
 	return rc;
+}
+
+static int volume_set_software_mute(bool startup)
+{
+	int result;
+
+	if (!tpacpi_is_lenovo())
+		return -ENODEV;
+
+	if (startup) {
+		if (!acpi_evalf(ec_handle, &software_mute_orig_mode,
+				"HAUM", "qd"))
+			return -EIO;
+
+		dbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+			    "Initial HAUM setting was %d\n",
+			    software_mute_orig_mode);
+	}
+
+	if (!acpi_evalf(ec_handle, &result, "SAUM", "qdd",
+			(int)TP_EC_MUTE_BTN_NONE))
+		return -EIO;
+
+	if (result != TP_EC_MUTE_BTN_NONE)
+		pr_warn("Unexpected SAUM result %d\n",
+			result);
+
+	/*
+	 * In software mute mode, the standard codec controls take
+	 * precendence, so we unmute the ThinkPad HW switch at
+	 * startup.  Just on case there are SAUM-capable ThinkPads
+	 * with level controls, set max HW volume as well.
+	 */
+	if (tp_features.mixer_no_level_control)
+		result = volume_set_mute(false);
+	else
+		result = volume_set_status(TP_EC_VOLUME_MAX);
+
+	if (result != 0)
+		pr_warn("Failed to unmute the HW mute switch\n");
+
+	return 0;
+}
+
+static void volume_exit_software_mute(void)
+{
+	int r;
+
+	if (!acpi_evalf(ec_handle, &r, "SAUM", "qdd", software_mute_orig_mode)
+	    || r != software_mute_orig_mode)
+		pr_warn("Failed to restore mute mode\n");
 }
 
 static int volume_alsa_set_volume(const u8 vol)
@@ -6881,7 +7147,12 @@ static void volume_suspend(void)
 
 static void volume_resume(void)
 {
-	volume_alsa_notify_change();
+	if (software_mute_active) {
+		if (volume_set_software_mute(false) < 0)
+			pr_warn("Failed to restore software mute\n");
+	} else {
+		volume_alsa_notify_change();
+	}
 }
 
 static void volume_shutdown(void)
@@ -6897,6 +7168,9 @@ static void volume_exit(void)
 	}
 
 	tpacpi_volume_checkpoint_nvram();
+
+	if (software_mute_active)
+		volume_exit_software_mute();
 }
 
 static int __init volume_create_alsa_mixer(void)
@@ -6907,8 +7181,9 @@ static int __init volume_create_alsa_mixer(void)
 	struct snd_kcontrol *ctl_mute;
 	int rc;
 
-	rc = snd_card_create(alsa_index, alsa_id, THIS_MODULE,
-			    sizeof(struct tpacpi_alsa_data), &card);
+	rc = snd_card_new(&tpacpi_pdev->dev,
+			  alsa_index, alsa_id, THIS_MODULE,
+			  sizeof(struct tpacpi_alsa_data), &card);
 	if (rc < 0 || !card) {
 		pr_err("Failed to create ALSA card structures: %d\n", rc);
 		return 1;
@@ -6959,7 +7234,6 @@ static int __init volume_create_alsa_mixer(void)
 	}
 	data->ctl_mute_id = &ctl_mute->id;
 
-	snd_card_set_dev(card, &tpacpi_pdev->dev);
 	rc = snd_card_register(card);
 	if (rc < 0) {
 		pr_err("Failed to register ALSA card: %d\n", rc);
@@ -7081,16 +7355,20 @@ static int __init volume_init(struct ibm_init_struct *iibm)
 			"mute is supported, volume control is %s\n",
 			str_supported(!tp_features.mixer_no_level_control));
 
-	rc = volume_create_alsa_mixer();
-	if (rc) {
-		pr_err("Could not create the ALSA mixer interface\n");
-		return rc;
-	}
+	if (software_mute_requested && volume_set_software_mute(true) == 0) {
+		software_mute_active = true;
+	} else {
+		rc = volume_create_alsa_mixer();
+		if (rc) {
+			pr_err("Could not create the ALSA mixer interface\n");
+			return rc;
+		}
 
-	pr_info("Console audio control enabled, mode: %s\n",
-		(volume_control_allowed) ?
-			"override (read/write)" :
-			"monitor (read only)");
+		pr_info("Console audio control enabled, mode: %s\n",
+			(volume_control_allowed) ?
+				"override (read/write)" :
+				"monitor (read only)");
+	}
 
 	vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
 		"registering volume hotkeys as change notification\n");
@@ -8578,9 +8856,21 @@ static void mute_led_exit(void)
 		tpacpi_led_set(i, false);
 }
 
+static void mute_led_resume(void)
+{
+	int i;
+
+	for (i = 0; i < TPACPI_LED_MAX; i++) {
+		struct tp_led_table *t = &led_tables[i];
+		if (t->state >= 0)
+			mute_led_on_off(t, t->state);
+	}
+}
+
 static struct ibm_struct mute_led_driver_data = {
 	.name = "mute_led",
 	.exit = mute_led_exit,
+	.resume = mute_led_resume,
 };
 
 /****************************************************************************
@@ -9093,6 +9383,10 @@ module_param_named(volume_control, volume_control_allowed, bool, 0444);
 MODULE_PARM_DESC(volume_control,
 		 "Enables software override for the console audio "
 		 "control when true");
+
+module_param_named(software_mute, software_mute_requested, bool, 0444);
+MODULE_PARM_DESC(software_mute,
+		 "Request full software mute control");
 
 /* ALSA module API parameters */
 module_param_named(index, alsa_index, int, 0444);

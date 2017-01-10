@@ -83,7 +83,8 @@ nfs_file_release(struct inode *inode, struct file *filp)
 	dprintk("NFS: release(%pD2)\n", filp);
 
 	nfs_inc_stats(inode, NFSIOS_VFSRELEASE);
-	return nfs_release(inode, filp);
+	nfs_file_clear_open_context(filp);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_file_release);
 
@@ -142,7 +143,7 @@ EXPORT_SYMBOL_GPL(nfs_file_llseek);
 /*
  * Flush all dirty pages, and check for write errors.
  */
-int
+static int
 nfs_file_flush(struct file *file, fl_owner_t id)
 {
 	struct inode	*inode = file_inode(file);
@@ -153,17 +154,9 @@ nfs_file_flush(struct file *file, fl_owner_t id)
 	if ((file->f_mode & FMODE_WRITE) == 0)
 		return 0;
 
-	/*
-	 * If we're holding a write delegation, then just start the i/o
-	 * but don't wait for completion (or send a commit).
-	 */
-	if (NFS_PROTO(inode)->have_delegation(inode, FMODE_WRITE))
-		return filemap_fdatawrite(file->f_mapping);
-
 	/* Flush writes to the server and return any errors */
 	return vfs_fsync(file, 0);
 }
-EXPORT_SYMBOL_GPL(nfs_file_flush);
 
 ssize_t
 nfs_file_read(struct kiocb *iocb, const struct iovec *iov,
@@ -282,6 +275,7 @@ nfs_file_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 
 	trace_nfs_fsync_enter(inode);
 
+	nfs_inode_dio_wait(inode);
 	do {
 		ret = filemap_write_and_wait_range(inode->i_mapping, start, end);
 		if (ret != 0)
@@ -369,10 +363,14 @@ start:
 	 * Prevent starvation issues if someone is doing a consistency
 	 * sync-to-disk
 	 */
-	ret = wait_on_bit(&NFS_I(mapping->host)->flags, NFS_INO_FLUSHING,
-			nfs_wait_bit_killable, TASK_KILLABLE);
+	ret = wait_on_bit_action(&NFS_I(mapping->host)->flags, NFS_INO_FLUSHING,
+				 nfs_wait_bit_killable, TASK_KILLABLE);
 	if (ret)
 		return ret;
+	/*
+	 * Wait for O_DIRECT to complete
+	 */
+	nfs_inode_dio_wait(mapping->host);
 
 	page = grab_cache_page_write_begin(mapping, index, flags);
 	if (!page)
@@ -450,11 +448,13 @@ static int nfs_write_end(struct file *file, struct address_space *mapping,
  * - Called if either PG_private or PG_fscache is set on the page
  * - Caller holds page lock
  */
-static void nfs_invalidate_page(struct page *page, unsigned long offset)
+static void nfs_invalidate_page(struct page *page, unsigned int offset,
+				unsigned int length)
 {
-	dfprintk(PAGECACHE, "NFS: invalidate_page(%p, %lu)\n", page, offset);
+	dfprintk(PAGECACHE, "NFS: invalidate_page(%p, %u, %u)\n",
+		 page, offset, length);
 
-	if (offset != 0)
+	if (offset != 0 || length < PAGE_CACHE_SIZE)
 		return;
 	/* Cancel any unstarted writes on this page */
 	nfs_wb_page_cancel(page_file_mapping(page)->host, page);
@@ -474,17 +474,26 @@ static int nfs_release_page(struct page *page, gfp_t gfp)
 
 	dfprintk(PAGECACHE, "NFS: release_page(%p)\n", page);
 
-	/* Only do I/O if gfp is a superset of GFP_KERNEL, and we're not
-	 * doing this memory reclaim for a fs-related allocation.
+	/* Always try to initiate a 'commit' if relevant, but only
+	 * wait for it if __GFP_WAIT is set.  Even then, only wait 1
+	 * second and only if the 'bdi' is not congested.
+	 * Waiting indefinitely can cause deadlocks when the NFS
+	 * server is on this machine, when a new TCP connection is
+	 * needed and in other rare cases.  There is no particular
+	 * need to wait extensively here.  A short wait has the
+	 * benefit that someone else can worry about the freezer.
 	 */
-	if (mapping && (gfp & GFP_KERNEL) == GFP_KERNEL &&
-	    !(current->flags & PF_FSTRANS)) {
-		int how = FLUSH_SYNC;
-
-		/* Don't let kswapd deadlock waiting for OOM RPC calls */
-		if (current_is_kswapd())
-			how = 0;
-		nfs_commit_inode(mapping->host, how);
+	if (mapping) {
+		struct nfs_server *nfss = NFS_SERVER(mapping->host);
+		nfs_commit_inode(mapping->host, 0);
+		if ((gfp & __GFP_WAIT) &&
+		    !bdi_write_congested(&nfss->backing_dev_info)) {
+			wait_on_page_bit_killable_timeout(page, PG_private,
+							  HZ);
+			if (PagePrivate(page))
+				set_bdi_congested(&nfss->backing_dev_info,
+						  BLK_RW_ASYNC);
+		}
 	}
 	/* If PagePrivate() is set, then the page is not freeable */
 	if (PagePrivate(page))
@@ -538,34 +547,25 @@ static int nfs_launder_page(struct page *page)
 		inode->i_ino, (long long)page_offset(page));
 
 	nfs_fscache_wait_on_page_write(nfsi, page);
-	return nfs_wb_page(inode, page);
+	return nfs_wb_launder_page(inode, page);
 }
 
-#ifdef CONFIG_NFS_SWAP
 static int nfs_swap_activate(struct swap_info_struct *sis, struct file *file,
 						sector_t *span)
 {
-	int ret;
 	struct rpc_clnt *clnt = NFS_CLIENT(file->f_mapping->host);
 
 	*span = sis->pages;
 
-	rcu_read_lock();
-	ret = xs_swapper(rcu_dereference(clnt->cl_xprt), 1);
-	rcu_read_unlock();
-
-	return ret;
+	return rpc_clnt_swap_activate(clnt);
 }
 
 static void nfs_swap_deactivate(struct file *file)
 {
 	struct rpc_clnt *clnt = NFS_CLIENT(file->f_mapping->host);
 
-	rcu_read_lock();
-	xs_swapper(rcu_dereference(clnt->cl_xprt), 0);
-	rcu_read_unlock();
+	rpc_clnt_swap_deactivate(clnt);
 }
-#endif
 
 const struct address_space_operations nfs_file_aops = {
 	.readpage = nfs_readpage,
@@ -575,17 +575,15 @@ const struct address_space_operations nfs_file_aops = {
 	.writepages = nfs_writepages,
 	.write_begin = nfs_write_begin,
 	.write_end = nfs_write_end,
-	.invalidatepage = nfs_invalidate_page,
+	.invalidatepage_range = nfs_invalidate_page,
 	.releasepage = nfs_release_page,
 	.direct_IO = nfs_direct_IO,
 	.migratepage = nfs_migrate_page,
 	.launder_page = nfs_launder_page,
 	.is_dirty_writeback = nfs_check_dirty_writeback,
 	.error_remove_page = generic_error_remove_page,
-#ifdef CONFIG_NFS_SWAP
 	.swap_activate = nfs_swap_activate,
 	.swap_deactivate = nfs_swap_deactivate,
-#endif
 };
 
 /*
@@ -608,6 +606,9 @@ static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	/* make sure the cache has finished storing the page */
 	nfs_fscache_wait_on_page_write(NFS_I(inode), page);
+
+	wait_on_bit_action(&NFS_I(inode)->flags, NFS_INO_INVALIDATING,
+			nfs_wait_bit_killable, TASK_KILLABLE);
 
 	lock_page(page);
 	mapping = page_file_mapping(page);
@@ -638,12 +639,10 @@ static const struct vm_operations_struct nfs_file_vm_ops = {
 	.remap_pages = generic_file_remap_pages,
 };
 
-static int nfs_need_sync_write(struct file *filp, struct inode *inode)
+static int nfs_need_check_write(struct file *filp, struct inode *inode)
 {
 	struct nfs_open_context *ctx;
 
-	if (IS_SYNC(inode) || (filp->f_flags & O_DSYNC))
-		return 1;
 	ctx = nfs_file_open_context(filp);
 	if (test_bit(NFS_CONTEXT_ERROR_WRITE, &ctx->flags) ||
 	    nfs_ctx_key_to_expire(ctx))
@@ -690,8 +689,8 @@ ssize_t nfs_file_write(struct kiocb *iocb, const struct iovec *iov,
 	if (result > 0)
 		written = result;
 
-	/* Return error values for O_DSYNC and IS_SYNC() */
-	if (result >= 0 && nfs_need_sync_write(file, inode)) {
+	/* Return error values */
+	if (result >= 0 && nfs_need_check_write(file, inode)) {
 		int err = vfs_fsync(file, 0);
 		if (err < 0)
 			result = err;
@@ -726,7 +725,7 @@ ssize_t nfs_file_splice_write(struct pipe_inode_info *pipe,
 	if (ret > 0)
 		written = ret;
 
-	if (ret >= 0 && nfs_need_sync_write(filp, inode)) {
+	if (ret >= 0 && nfs_need_check_write(filp, inode)) {
 		int err = vfs_fsync(filp, 0);
 		if (err < 0)
 			ret = err;
@@ -793,7 +792,7 @@ do_unlk(struct file *filp, int cmd, struct file_lock *fl, int is_local)
 	 * Flush all pending writes before doing anything
 	 * with locks..
 	 */
-	nfs_sync_mapping(filp->f_mapping);
+	vfs_fsync(filp, 0);
 
 	l_ctx = nfs_get_lock_context(nfs_file_open_context(filp));
 	if (!IS_ERR(l_ctx)) {

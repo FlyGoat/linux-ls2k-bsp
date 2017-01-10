@@ -144,43 +144,6 @@
 #define IB_NOTICE_PROD_ROUTER		cpu_to_be16(3)
 #define IB_NOTICE_PROD_CLASS_MGR	cpu_to_be16(4)
 
-/*
- * Generic trap/notice numbers
- */
-#define IB_NOTICE_TRAP_LLI_THRESH	cpu_to_be16(129)
-#define IB_NOTICE_TRAP_EBO_THRESH	cpu_to_be16(130)
-#define IB_NOTICE_TRAP_FLOW_UPDATE	cpu_to_be16(131)
-#define IB_NOTICE_TRAP_CAP_MASK_CHG	cpu_to_be16(144)
-#define IB_NOTICE_TRAP_SYS_GUID_CHG	cpu_to_be16(145)
-#define IB_NOTICE_TRAP_BAD_MKEY		cpu_to_be16(256)
-#define IB_NOTICE_TRAP_BAD_PKEY		cpu_to_be16(257)
-#define IB_NOTICE_TRAP_BAD_QKEY		cpu_to_be16(258)
-
-/*
- * Repress trap/notice flags
- */
-#define IB_NOTICE_REPRESS_LLI_THRESH	(1 << 0)
-#define IB_NOTICE_REPRESS_EBO_THRESH	(1 << 1)
-#define IB_NOTICE_REPRESS_FLOW_UPDATE	(1 << 2)
-#define IB_NOTICE_REPRESS_CAP_MASK_CHG	(1 << 3)
-#define IB_NOTICE_REPRESS_SYS_GUID_CHG	(1 << 4)
-#define IB_NOTICE_REPRESS_BAD_MKEY	(1 << 5)
-#define IB_NOTICE_REPRESS_BAD_PKEY	(1 << 6)
-#define IB_NOTICE_REPRESS_BAD_QKEY	(1 << 7)
-
-/*
- * Generic trap/notice other local changes flags (trap 144).
- */
-#define IB_NOTICE_TRAP_LSE_CHG		0x04	/* Link Speed Enable changed */
-#define IB_NOTICE_TRAP_LWE_CHG		0x02	/* Link Width Enable changed */
-#define IB_NOTICE_TRAP_NODE_DESC_CHG	0x01
-
-/*
- * Generic trap/notice M_Key volation flags in dr_trunc_hop (trap 256).
- */
-#define IB_NOTICE_TRAP_DR_NOTICE	0x80
-#define IB_NOTICE_TRAP_DR_TRUNC		0x40
-
 enum {
 	IB_MGMT_MAD_HDR = 24,
 	IB_MGMT_MAD_DATA = 232,
@@ -274,12 +237,17 @@ struct ib_vendor_mad {
 	u8			data[IB_MGMT_VENDOR_DATA];
 };
 
+#define IB_MGMT_CLASSPORTINFO_ATTR_ID	cpu_to_be16(0x0001)
+
+#define IB_CLASS_PORT_INFO_RESP_TIME_MASK	0x1F
+#define IB_CLASS_PORT_INFO_RESP_TIME_FIELD_SIZE 5
+
 struct ib_class_port_info {
 	u8			base_version;
 	u8			class_version;
 	__be16			capability_mask;
-	u8			reserved[3];
-	u8			resp_time_value;
+	  /* 27 bits for cap_mask2, 5 bits for resp_time */
+	__be32			cap_mask2_resp_time;
 	u8			redirect_gid[16];
 	__be32			redirect_tcslfl;
 	__be16			redirect_lid;
@@ -294,20 +262,58 @@ struct ib_class_port_info {
 	__be32			trap_qkey;
 };
 
-struct ib_node_info {
-	u8 base_version;
-	u8 class_version;
-	u8 node_type;
-	u8 num_ports;
-	__be64 sys_guid;
-	__be64 node_guid;
-	__be64 port_guid;
-	__be16 partition_cap;
-	__be16 device_id;
-	__be32 revision;
-	u8 local_port_num;
-	u8 vendor_id[3];
-} __packed;
+/**
+ * ib_get_cpi_resp_time - Returns the resp_time value from
+ * cap_mask2_resp_time in ib_class_port_info.
+ * @cpi: A struct ib_class_port_info mad.
+ */
+static inline u8 ib_get_cpi_resp_time(struct ib_class_port_info *cpi)
+{
+	return (u8)(be32_to_cpu(cpi->cap_mask2_resp_time) &
+		    IB_CLASS_PORT_INFO_RESP_TIME_MASK);
+}
+
+/**
+ * ib_set_cpi_resptime - Sets the response time in an
+ * ib_class_port_info mad.
+ * @cpi: A struct ib_class_port_info.
+ * @rtime: The response time to set.
+ */
+static inline void ib_set_cpi_resp_time(struct ib_class_port_info *cpi,
+					u8 rtime)
+{
+	cpi->cap_mask2_resp_time =
+		(cpi->cap_mask2_resp_time &
+		 cpu_to_be32(~IB_CLASS_PORT_INFO_RESP_TIME_MASK)) |
+		cpu_to_be32(rtime & IB_CLASS_PORT_INFO_RESP_TIME_MASK);
+}
+
+/**
+ * ib_get_cpi_capmask2 - Returns the capmask2 value from
+ * cap_mask2_resp_time in ib_class_port_info.
+ * @cpi: A struct ib_class_port_info mad.
+ */
+static inline u32 ib_get_cpi_capmask2(struct ib_class_port_info *cpi)
+{
+	return (be32_to_cpu(cpi->cap_mask2_resp_time) >>
+		IB_CLASS_PORT_INFO_RESP_TIME_FIELD_SIZE);
+}
+
+/**
+ * ib_set_cpi_capmask2 - Sets the capmask2 in an
+ * ib_class_port_info mad.
+ * @cpi: A struct ib_class_port_info.
+ * @capmask2: The capmask2 to set.
+ */
+static inline void ib_set_cpi_capmask2(struct ib_class_port_info *cpi,
+				       u32 capmask2)
+{
+	cpi->cap_mask2_resp_time =
+		(cpi->cap_mask2_resp_time &
+		 cpu_to_be32(IB_CLASS_PORT_INFO_RESP_TIME_MASK)) |
+		cpu_to_be32(capmask2 <<
+			    IB_CLASS_PORT_INFO_RESP_TIME_FIELD_SIZE);
+}
 
 struct ib_mad_notice_attr {
 	u8 generic_type;
@@ -371,11 +377,6 @@ struct ib_mad_notice_attr {
 		} __packed ntc_257_258;
 
 	} details;
-};
-
-struct ib_vl_weight_elem {
-	u8      vl;     /* VL is low 5 bits, upper 3 bits reserved */
-	u8      weight;
 };
 
 /**
@@ -479,11 +480,11 @@ typedef void (*ib_mad_send_handler)(struct ib_mad_agent *mad_agent,
 /**
  * ib_mad_snoop_handler - Callback handler for snooping sent MADs.
  * @mad_agent: MAD agent that snooped the MAD.
- * @send_wr: Work request information on the sent MAD.
+ * @send_buf: send MAD data buffer.
  * @mad_send_wc: Work completion information on the sent MAD.  Valid
  *   only for snooping that occurs on a send completion.
  *
- * Clients snooping MADs should not modify data referenced by the @send_wr
+ * Clients snooping MADs should not modify data referenced by the @send_buf
  * or @mad_send_wc.
  */
 typedef void (*ib_mad_snoop_handler)(struct ib_mad_agent *mad_agent,
@@ -493,6 +494,7 @@ typedef void (*ib_mad_snoop_handler)(struct ib_mad_agent *mad_agent,
 /**
  * ib_mad_recv_handler - callback handler for a received MAD.
  * @mad_agent: MAD agent requesting the received MAD.
+ * @send_buf: Send buffer if found, else NULL
  * @mad_recv_wc: Received work completion information on the received MAD.
  *
  * MADs received in response to a send request operation will be handed to
@@ -502,6 +504,7 @@ typedef void (*ib_mad_snoop_handler)(struct ib_mad_agent *mad_agent,
  * modify the data referenced by @mad_recv_wc.
  */
 typedef void (*ib_mad_recv_handler)(struct ib_mad_agent *mad_agent,
+				    struct ib_mad_send_buf *send_buf,
 				    struct ib_mad_recv_wc *mad_recv_wc);
 
 /**
@@ -526,7 +529,6 @@ enum {
 struct ib_mad_agent {
 	struct ib_device	*device;
 	struct ib_qp		*qp;
-	struct ib_mr		*mr;
 	ib_mad_recv_handler	recv_handler;
 	ib_mad_send_handler	send_handler;
 	ib_mad_snoop_handler	snoop_handler;

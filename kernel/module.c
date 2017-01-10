@@ -106,12 +106,6 @@ static LIST_HEAD(modules);
 struct list_head *kdb_modules = &modules; /* kdb needs the list of modules */
 #endif /* CONFIG_KGDB_KDB */
 
-/* extended module structure for RHEL */
-struct module_ext {
-	struct list_head next;
-	struct module *module; /* "parent" struct */
-	char *rhelversion;
-};
 DEFINE_MUTEX(module_ext_mutex);
 LIST_HEAD(modules_ext);
 
@@ -1124,6 +1118,8 @@ static size_t module_flags_taint(struct module *mod, char *buf)
 		buf[l++] = 'C';
 	if (mod->taints & (1 << TAINT_UNSIGNED_MODULE))
 		buf[l++] = 'E';
+	if (mod->taints & (1 << TAINT_TECH_PREVIEW))
+		buf[l++] = 'T';
 	/*
 	 * TAINT_FORCED_RMMOD: could be added.
 	 * TAINT_UNSAFE_SMP, TAINT_MACHINE_CHECK, TAINT_BAD_PAGE don't
@@ -2798,8 +2794,12 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 		return -ENOEXEC;
 	}
 
-	if (!get_modinfo(info, "intree"))
+	if (!get_modinfo(info, "intree")) {
+		if (!test_taint(TAINT_OOT_MODULE))
+			pr_warn("%s: loading out-of-tree module taints kernel.\n",
+				mod->name);
 		add_taint_module(mod, TAINT_OOT_MODULE, LOCKDEP_STILL_OK);
+	}
 
 	if (get_modinfo(info, "staging")) {
 		add_taint_module(mod, TAINT_CRAP, LOCKDEP_STILL_OK);
@@ -2879,11 +2879,22 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 					 &mod->num_trace_bprintk_fmt);
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
+#ifdef CONFIG_S390
+	struct module_ext *mod_ext;
+
+	mutex_lock(&module_ext_mutex);
+	mod_ext = find_module_ext(mod);
+	mod_ext->ftrace_callsites = section_objs(info, "__mcount_loc",
+					     sizeof(*mod_ext->ftrace_callsites),
+					     &mod_ext->num_ftrace_callsites);
+	mutex_unlock(&module_ext_mutex);
+#else /* CONFIG_S390 */
 	/* sechdrs[0].sh_size is always zero */
 	mod->ftrace_callsites = section_objs(info, "__mcount_loc",
 					     sizeof(*mod->ftrace_callsites),
 					     &mod->num_ftrace_callsites);
-#endif
+#endif /* CONFIG_S390 */
+#endif /* CONFIG_FTRACE_MCOUNT_RECORD */
 
 	mod->extable = section_objs(info, "__ex_table",
 				    sizeof(*mod->extable), &mod->num_exentries);
@@ -2963,6 +2974,8 @@ static int move_module(struct module *mod, struct load_info *info)
 
 static int check_module_license_and_versions(struct module *mod)
 {
+	int prev_taint = test_taint(TAINT_PROPRIETARY_MODULE);
+
 	/*
 	 * ndiswrapper is under GPL by itself, but loads proprietary modules.
 	 * Don't use add_taint_module(), as it would prevent ndiswrapper from
@@ -2980,6 +2993,9 @@ static int check_module_license_and_versions(struct module *mod)
 	if (strcmp(mod->name, "lve") == 0)
 		add_taint_module(mod, TAINT_PROPRIETARY_MODULE,
 				 LOCKDEP_NOW_UNRELIABLE);
+
+	if (!prev_taint && test_taint(TAINT_PROPRIETARY_MODULE))
+		pr_warn("%s: module license taints kernel.\n", mod->name);
 
 #ifdef CONFIG_MODVERSIONS
 	if ((mod->num_syms && !mod->crcs)
@@ -3028,6 +3044,27 @@ int __weak module_frob_arch_sections(Elf_Ehdr *hdr,
 	return 0;
 }
 
+/* module_blacklist is a comma-separated list of module names */
+static char *module_blacklist;
+static bool blacklisted(char *module_name)
+{
+	const char *p;
+	size_t len;
+
+	if (!module_blacklist)
+		return false;
+
+	for (p = module_blacklist; *p; p += len) {
+		len = strcspn(p, ",");
+		if (strlen(module_name) == len && !memcmp(module_name, p, len))
+			return true;
+		if (p[len] == ',')
+			len++;
+	}
+	return false;
+}
+core_param(module_blacklist, module_blacklist, charp, 0400);
+
 static struct module *layout_and_allocate(struct load_info *info, int flags)
 {
 	/* Module within temporary copy. */
@@ -3037,6 +3074,9 @@ static struct module *layout_and_allocate(struct load_info *info, int flags)
 	mod = setup_load_info(info, flags);
 	if (IS_ERR(mod))
 		return mod;
+
+	if (blacklisted(mod->name))
+		return ERR_PTR(-EPERM);
 
 	err = check_modinfo(mod, info, flags);
 	if (err)
@@ -3352,12 +3392,6 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	if (err)
 		goto unlink_mod;
 
-	/* Now we've got everything in the final locations, we can
-	 * find optional sections. */
-	err = find_module_sections(mod, info);
-	if (err)
-		goto free_unload;
-
 	mutex_lock(&module_ext_mutex);
 	mod_ext = kzalloc(sizeof(*mod_ext), GFP_KERNEL);
 	if (!mod_ext) {
@@ -3368,6 +3402,12 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	INIT_LIST_HEAD(&mod_ext->next);
 	list_add(&mod_ext->next, &modules_ext);
 	mutex_unlock(&module_ext_mutex);
+
+	/* Now we've got everything in the final locations, we can
+	 * find optional sections. */
+	err = find_module_sections(mod, info);
+	if (err)
+		goto free_mod_ext;
 
 	err = check_module_license_and_versions(mod);
 	if (err)

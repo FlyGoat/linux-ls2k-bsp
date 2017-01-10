@@ -37,7 +37,6 @@ static inline void svcpu_put(struct kvmppc_book3s_shadow_vcpu *svcpu)
 
 #ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
 #define KVM_DEFAULT_HPT_ORDER	24	/* 16MB HPT by default */
-extern unsigned long kvm_rma_pages;
 #endif
 
 #define VRMA_VSID	0x1ffffffUL	/* 1TB VSID reserved for VRMA */
@@ -303,25 +302,30 @@ static inline pte_t kvmppc_read_update_linux_pte(pte_t *ptep, int writing)
 	pte_t old_pte, new_pte = __pte(0);
 
 	while (1) {
-		old_pte = pte_val(*ptep);
+		/*
+		 * Make sure we don't reload from ptep
+		 */
+		old_pte = READ_ONCE(*ptep);
 		/*
 		 * wait until _PAGE_BUSY is clear then set it atomically
 		 */
-		if (unlikely(old_pte & _PAGE_BUSY)) {
+		if (unlikely(pte_val(old_pte) & _PAGE_BUSY)) {
 			cpu_relax();
 			continue;
 		}
 		/* If pte is not present return None */
-		if (unlikely(!(old_pte & _PAGE_PRESENT)))
+		if (unlikely(!(pte_val(old_pte) & _PAGE_PRESENT)))
 			return __pte(0);
 
 		new_pte = pte_mkyoung(old_pte);
 		if (writing && pte_write(old_pte))
 			new_pte = pte_mkdirty(new_pte);
 
-		if (old_pte == __cmpxchg_u64((unsigned long *)ptep, old_pte,
-					     new_pte))
+		if (pte_val(old_pte) == __cmpxchg_u64((unsigned long *)ptep,
+						      pte_val(old_pte),
+						      pte_val(new_pte))) {
 			break;
+		}
 	}
 	return new_pte;
 }

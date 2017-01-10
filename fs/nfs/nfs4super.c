@@ -3,12 +3,12 @@
  */
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/nfs_idmap.h>
 #include <linux/nfs4_mount.h>
 #include <linux/nfs_fs.h>
 #include "delegation.h"
 #include "internal.h"
 #include "nfs4_fs.h"
+#include "nfs4idmap.h"
 #include "dns_resolve.h"
 #include "pnfs.h"
 #include "nfs.h"
@@ -29,7 +29,7 @@ static struct file_system_type nfs4_remote_fs_type = {
 	.name		= "nfs4",
 	.mount		= nfs4_remote_mount,
 	.kill_sb	= nfs_kill_super,
-	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA,
+	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA|FS_HAS_INVALIDATE_RANGE,
 };
 
 static struct file_system_type nfs4_remote_referral_fs_type = {
@@ -37,7 +37,7 @@ static struct file_system_type nfs4_remote_referral_fs_type = {
 	.name		= "nfs4",
 	.mount		= nfs4_remote_referral_mount,
 	.kill_sb	= nfs_kill_super,
-	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA,
+	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA|FS_HAS_INVALIDATE_RANGE,
 };
 
 struct file_system_type nfs4_referral_fs_type = {
@@ -45,7 +45,7 @@ struct file_system_type nfs4_referral_fs_type = {
 	.name		= "nfs4",
 	.mount		= nfs4_referral_mount,
 	.kill_sb	= nfs_kill_super,
-	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA,
+	.fs_flags	= FS_RENAME_DOES_D_MOVE|FS_BINARY_MOUNTDATA|FS_HAS_INVALIDATE_RANGE,
 };
 
 static const struct super_operations nfs4_sops = {
@@ -92,10 +92,11 @@ static void nfs4_evict_inode(struct inode *inode)
 {
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
-	pnfs_return_layout(inode);
-	pnfs_destroy_layout(NFS_I(inode));
 	/* If we are holding a delegation, return it! */
 	nfs_inode_return_delegation_noreclaim(inode);
+	/* Note that above delegreturn would trigger pnfs return-on-close */
+	pnfs_return_layout(inode);
+	pnfs_destroy_layout(NFS_I(inode));
 	/* First call standard NFS clear_inode() code */
 	nfs_clear_inode(inode);
 }
@@ -253,9 +254,9 @@ struct dentry *nfs4_try_mount(int flags, const char *dev_name,
 
 	res = nfs_follow_remote_path(root_mnt, export_path);
 
-	dfprintk(MOUNT, "<-- nfs4_try_mount() = %ld%s\n",
-			IS_ERR(res) ? PTR_ERR(res) : 0,
-			IS_ERR(res) ? " [error]" : "");
+	dfprintk(MOUNT, "<-- nfs4_try_mount() = %d%s\n",
+		 PTR_ERR_OR_ZERO(res),
+		 IS_ERR(res) ? " [error]" : "");
 	return res;
 }
 
@@ -311,9 +312,9 @@ static struct dentry *nfs4_referral_mount(struct file_system_type *fs_type,
 	data->mnt_path = export_path;
 
 	res = nfs_follow_remote_path(root_mnt, export_path);
-	dprintk("<-- nfs4_referral_mount() = %ld%s\n",
-			IS_ERR(res) ? PTR_ERR(res) : 0,
-			IS_ERR(res) ? " [error]" : "");
+	dprintk("<-- nfs4_referral_mount() = %d%s\n",
+		PTR_ERR_OR_ZERO(res),
+		IS_ERR(res) ? " [error]" : "");
 	return res;
 }
 

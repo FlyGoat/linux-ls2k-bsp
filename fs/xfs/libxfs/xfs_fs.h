@@ -67,6 +67,7 @@ struct fsxattr {
 #define XFS_XFLAG_EXTSZINHERIT	0x00001000	/* inherit inode extent size */
 #define XFS_XFLAG_NODEFRAG	0x00002000  	/* do not defragment */
 #define XFS_XFLAG_FILESTREAM	0x00004000	/* use filestream allocator */
+#define XFS_XFLAG_DAX		0x00008000	/* use DAX for IO */
 #define XFS_XFLAG_HASATTR	0x80000000	/* no DIFLAG for this	*/
 
 /*
@@ -239,6 +240,7 @@ typedef struct xfs_fsop_resblks {
 #define XFS_FSOP_GEOM_FLAGS_V5SB	0x8000	/* version 5 superblock */
 #define XFS_FSOP_GEOM_FLAGS_FTYPE	0x10000	/* inode directory types */
 #define XFS_FSOP_GEOM_FLAGS_FINOBT	0x20000	/* free inode btree */
+#define XFS_FSOP_GEOM_FLAGS_SPINODES	0x40000	/* sparse inode chunks	*/
 
 /*
  * Minimum and maximum sizes need for growth checks.
@@ -487,6 +489,16 @@ typedef struct xfs_swapext
 #define XFS_FSOP_GOING_FLAGS_DEFAULT		0x0	/* going down */
 #define XFS_FSOP_GOING_FLAGS_LOGFLUSH		0x1	/* flush log but not data */
 #define XFS_FSOP_GOING_FLAGS_NOLOGFLUSH		0x2	/* don't flush log nor data */
+
+/*
+ * ioctl limits
+ */
+#ifdef XATTR_LIST_MAX
+#  define XFS_XATTR_LIST_MAX XATTR_LIST_MAX
+#else
+#  define XFS_XATTR_LIST_MAX 65536
+#endif
+
 
 /*
  * ioctl commands that are used by Linux filesystems

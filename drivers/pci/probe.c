@@ -6,6 +6,9 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/pci.h>
+#ifndef __GENKSYMS__
+#include <linux/pci_hotplug.h>
+#endif
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/cpumask.h>
@@ -87,8 +90,7 @@ static void release_pcibus_dev(struct device *dev)
 {
 	struct pci_bus *pci_bus = to_pci_bus(dev);
 
-	if (pci_bus->bridge)
-		put_device(pci_bus->bridge);
+	put_device(pci_bus->bridge);
 	pci_bus_remove_resources(pci_bus);
 	pci_release_bus_of_node(pci_bus);
 	kfree(pci_bus->pci_bus_rh);
@@ -291,8 +293,8 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 	}
 
 	if (res->flags & IORESOURCE_MEM_64) {
-		if ((sizeof(dma_addr_t) < 8 || sizeof(resource_size_t) < 8) &&
-		    sz64 > 0x100000000ULL) {
+		if ((sizeof(pci_bus_addr_t) < 8 || sizeof(resource_size_t) < 8)
+		    && sz64 > 0x100000000ULL) {
 			res->flags |= IORESOURCE_UNSET | IORESOURCE_DISABLED;
 			res->start = 0;
 			res->end = 0;
@@ -301,7 +303,7 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 			goto out;
 		}
 
-		if ((sizeof(dma_addr_t) < 8) && l) {
+		if ((sizeof(pci_bus_addr_t) < 8) && l) {
 			/* Above 32-bit boundary; try to reallocate */
 			res->flags |= IORESOURCE_UNSET;
 			res->start = 0;
@@ -352,6 +354,9 @@ out:
 static void pci_read_bases(struct pci_dev *dev, unsigned int howmany, int rom)
 {
 	unsigned int pos, reg;
+
+	if (dev->non_compliant_bars)
+		return;
 
 	for (pos = 0; pos < howmany; pos++) {
 		struct resource *res = &dev->resource[pos];
@@ -435,15 +440,16 @@ static void pci_read_bridge_mmio_pref(struct pci_bus *child)
 {
 	struct pci_dev *dev = child->self;
 	u16 mem_base_lo, mem_limit_lo;
-	unsigned long base, limit;
+	u64 base64, limit64;
+	pci_bus_addr_t base, limit;
 	struct pci_bus_region region;
 	struct resource *res;
 
 	res = child->resource[2];
 	pci_read_config_word(dev, PCI_PREF_MEMORY_BASE, &mem_base_lo);
 	pci_read_config_word(dev, PCI_PREF_MEMORY_LIMIT, &mem_limit_lo);
-	base = ((unsigned long) mem_base_lo & PCI_PREF_RANGE_MASK) << 16;
-	limit = ((unsigned long) mem_limit_lo & PCI_PREF_RANGE_MASK) << 16;
+	base64 = (mem_base_lo & PCI_PREF_RANGE_MASK) << 16;
+	limit64 = (mem_limit_lo & PCI_PREF_RANGE_MASK) << 16;
 
 	if ((mem_base_lo & PCI_PREF_RANGE_TYPE_MASK) == PCI_PREF_RANGE_TYPE_64) {
 		u32 mem_base_hi, mem_limit_hi;
@@ -457,17 +463,20 @@ static void pci_read_bridge_mmio_pref(struct pci_bus *child)
 		 * this, just assume they are not being used.
 		 */
 		if (mem_base_hi <= mem_limit_hi) {
-#if BITS_PER_LONG == 64
-			base |= ((unsigned long) mem_base_hi) << 32;
-			limit |= ((unsigned long) mem_limit_hi) << 32;
-#else
-			if (mem_base_hi || mem_limit_hi) {
-				dev_err(&dev->dev, "can't handle 64-bit address space for bridge\n");
-				return;
-			}
-#endif
+			base64 |= (u64) mem_base_hi << 32;
+			limit64 |= (u64) mem_limit_hi << 32;
 		}
 	}
+
+	base = (pci_bus_addr_t) base64;
+	limit = (pci_bus_addr_t) limit64;
+
+	if (base != base64) {
+		dev_err(&dev->dev, "can't handle bridge window above 4GB (bus address %#010llx)\n",
+			(unsigned long long) base64);
+		return;
+	}
+
 	if (base <= limit) {
 		res->flags = (mem_base_lo & PCI_PREF_RANGE_TYPE_MASK) |
 					 IORESOURCE_MEM | IORESOURCE_PREFETCH;
@@ -514,7 +523,7 @@ void pci_read_bridge_bases(struct pci_bus *child)
 	}
 }
 
-static struct pci_bus *pci_alloc_bus(void)
+static struct pci_bus *pci_alloc_bus(struct pci_bus *parent)
 {
 	struct pci_bus *b;
 
@@ -535,6 +544,10 @@ static struct pci_bus *pci_alloc_bus(void)
 	INIT_LIST_HEAD(&b->resources);
 	b->max_bus_speed = PCI_SPEED_UNKNOWN;
 	b->cur_bus_speed = PCI_SPEED_UNKNOWN;
+#ifdef CONFIG_PCI_DOMAINS_GENERIC
+	if (parent)
+		b->domain_nr = parent->domain_nr;
+#endif
 	return b;
 }
 
@@ -557,6 +570,7 @@ static struct pci_host_bridge *pci_alloc_host_bridge(struct pci_bus *b)
 	bridge = kzalloc(sizeof(*bridge), GFP_KERNEL);
 	if (!bridge)
 		return NULL;
+	device_rh_alloc(&bridge->dev);
 
 	INIT_LIST_HEAD(&bridge->windows);
 	bridge->bus = b;
@@ -706,7 +720,7 @@ static struct pci_bus *pci_alloc_child_bus(struct pci_bus *parent,
 	/*
 	 * Allocate a new bus, and inherit stuff from the parent..
 	 */
-	child = pci_alloc_bus();
+	child = pci_alloc_bus(parent);
 	if (!child)
 		return NULL;
 
@@ -775,6 +789,17 @@ struct pci_bus *pci_add_new_bus(struct pci_bus *parent, struct pci_dev *dev,
 }
 EXPORT_SYMBOL(pci_add_new_bus);
 
+static void pci_enable_crs(struct pci_dev *pdev)
+{
+	u16 root_cap = 0;
+
+	/* Enable CRS Software Visibility if supported */
+	pcie_capability_read_word(pdev, PCI_EXP_RTCAP, &root_cap);
+	if (root_cap & PCI_EXP_RTCAP_CRSVIS)
+		pcie_capability_set_word(pdev, PCI_EXP_RTCTL,
+					 PCI_EXP_RTCTL_CRSSVE);
+}
+
 /*
  * If it's a bridge, configure it and scan the bus behind it.
  * For CardBus bridges, we don't scan behind as the devices will
@@ -821,6 +846,8 @@ int pci_scan_bridge(struct pci_bus *bus, struct pci_dev *dev, int max, int pass)
 	pci_read_config_word(dev, PCI_BRIDGE_CONTROL, &bctl);
 	pci_write_config_word(dev, PCI_BRIDGE_CONTROL,
 			      bctl & ~PCI_BRIDGE_CTL_MASTER_ABORT);
+
+	pci_enable_crs(dev);
 
 	if ((secondary || subordinate) && !pcibios_assign_all_busses() &&
 	    !is_cardbus && !broken) {
@@ -995,6 +1022,8 @@ void set_pcie_port_type(struct pci_dev *pdev)
 {
 	int pos;
 	u16 reg16;
+	int type;
+	struct pci_dev *parent;
 
 	pos = pci_find_capability(pdev, PCI_CAP_ID_EXP);
 	if (!pos)
@@ -1004,6 +1033,27 @@ void set_pcie_port_type(struct pci_dev *pdev)
 	pdev->pcie_flags_reg = reg16;
 	pci_read_config_word(pdev, pos + PCI_EXP_DEVCAP, &reg16);
 	pdev->pcie_mpss = reg16 & PCI_EXP_DEVCAP_PAYLOAD;
+
+	/*
+	 * A Root Port is always the upstream end of a Link.  No PCIe
+	 * component has two Links.  Two Links are connected by a Switch
+	 * that has a Port on each Link and internal logic to connect the
+	 * two Ports.
+	 */
+	type = pci_pcie_type(pdev);
+	if (type == PCI_EXP_TYPE_ROOT_PORT)
+		pdev->has_secondary_link = 1;
+	else if (type == PCI_EXP_TYPE_UPSTREAM ||
+		 type == PCI_EXP_TYPE_DOWNSTREAM) {
+		parent = pci_upstream_bridge(pdev);
+
+		/*
+		 * Usually there's an upstream device (Root Port or Switch
+		 * Downstream Port), but we can't assume one exists.
+		 */
+		if (parent && !parent->has_secondary_link)
+			pdev->has_secondary_link = 1;
+	}
 }
 
 void set_pcie_hotplug_bridge(struct pci_dev *pdev)
@@ -1107,6 +1157,22 @@ int pci_cfg_space_size(struct pci_dev *dev)
 
 #define LEGACY_IO_RESOURCE	(IORESOURCE_IO | IORESOURCE_PCI_FIXED)
 
+static void pci_msi_setup_pci_dev(struct pci_dev *dev)
+{
+	/*
+	 * Disable the MSI hardware to avoid screaming interrupts
+	 * during boot.  This is the power on reset default so
+	 * usually this should be a noop.
+	 */
+	dev->msi_cap = pci_find_capability(dev, PCI_CAP_ID_MSI);
+	if (dev->msi_cap)
+		pci_msi_set_enable(dev, 0);
+
+	dev->msix_cap = pci_find_capability(dev, PCI_CAP_ID_MSIX);
+	if (dev->msix_cap)
+		pci_msix_clear_and_set_ctrl(dev, PCI_MSIX_FLAGS_ENABLE, 0);
+}
+
 /**
  * pci_setup_device - fill in class and map information of a device
  * @dev: the device structure to fill
@@ -1120,6 +1186,7 @@ int pci_cfg_space_size(struct pci_dev *dev)
 int pci_setup_device(struct pci_dev *dev)
 {
 	u32 class;
+	u16 cmd;
 	u8 hdr_type;
 	struct pci_slot *slot;
 	int pos = 0;
@@ -1166,6 +1233,16 @@ int pci_setup_device(struct pci_dev *dev)
 	pci_fixup_device(pci_fixup_early, dev);
 	/* device class may be changed after fixup */
 	class = dev->class >> 8;
+
+	if (dev->non_compliant_bars) {
+		pci_read_config_word(dev, PCI_COMMAND, &cmd);
+		if (cmd & (PCI_COMMAND_IO | PCI_COMMAND_MEMORY)) {
+			dev_info(&dev->dev, "device has non-compliant BARs; disabling IO/MEM decoding\n");
+			cmd &= ~PCI_COMMAND_IO;
+			cmd &= ~PCI_COMMAND_MEMORY;
+			pci_write_config_word(dev, PCI_COMMAND, cmd);
+		}
+	}
 
 	switch (dev->hdr_type) {		    /* header type */
 	case PCI_HEADER_TYPE_NORMAL:		    /* standard header */
@@ -1261,6 +1338,177 @@ int pci_setup_device(struct pci_dev *dev)
 	return 0;
 }
 
+static void pci_configure_mps(struct pci_dev *dev)
+{
+	struct pci_dev *bridge = pci_upstream_bridge(dev);
+	int mps, p_mps, rc;
+
+	if (!pci_is_pcie(dev) || !bridge || !pci_is_pcie(bridge))
+		return;
+
+	mps = pcie_get_mps(dev);
+	p_mps = pcie_get_mps(bridge);
+
+	if (mps == p_mps)
+		return;
+
+	if (pcie_bus_config == PCIE_BUS_TUNE_OFF) {
+		dev_warn(&dev->dev, "Max Payload Size %d, but upstream %s set to %d; if necessary, use \"pci=pcie_bus_safe\" and report a bug\n",
+			 mps, pci_name(bridge), p_mps);
+		return;
+	}
+
+	/*
+	 * Fancier MPS configuration is done later by
+	 * pcie_bus_configure_settings()
+	 */
+	if (pcie_bus_config != PCIE_BUS_DEFAULT)
+		return;
+
+	rc = pcie_set_mps(dev, p_mps);
+	if (rc) {
+		dev_warn(&dev->dev, "can't set Max Payload Size to %d; if necessary, use \"pci=pcie_bus_safe\" and report a bug\n",
+			 p_mps);
+		return;
+	}
+
+	dev_info(&dev->dev, "Max Payload Size set to %d (was %d, max %d)\n",
+		 p_mps, mps, 128 << dev->pcie_mpss);
+}
+
+static struct hpp_type0 pci_default_type0 = {
+	.revision = 1,
+	.cache_line_size = 8,
+	.latency_timer = 0x40,
+	.enable_serr = 0,
+	.enable_perr = 0,
+};
+
+static void program_hpp_type0(struct pci_dev *dev, struct hpp_type0 *hpp)
+{
+	u16 pci_cmd, pci_bctl;
+
+	if (!hpp)
+		hpp = &pci_default_type0;
+
+	if (hpp->revision > 1) {
+		dev_warn(&dev->dev,
+			 "PCI settings rev %d not supported; using defaults\n",
+			 hpp->revision);
+		hpp = &pci_default_type0;
+	}
+
+	pci_write_config_byte(dev, PCI_CACHE_LINE_SIZE, hpp->cache_line_size);
+	pci_write_config_byte(dev, PCI_LATENCY_TIMER, hpp->latency_timer);
+	pci_read_config_word(dev, PCI_COMMAND, &pci_cmd);
+	if (hpp->enable_serr)
+		pci_cmd |= PCI_COMMAND_SERR;
+	if (hpp->enable_perr)
+		pci_cmd |= PCI_COMMAND_PARITY;
+	pci_write_config_word(dev, PCI_COMMAND, pci_cmd);
+
+	/* Program bridge control value */
+	if ((dev->class >> 8) == PCI_CLASS_BRIDGE_PCI) {
+		pci_write_config_byte(dev, PCI_SEC_LATENCY_TIMER,
+				      hpp->latency_timer);
+		pci_read_config_word(dev, PCI_BRIDGE_CONTROL, &pci_bctl);
+		if (hpp->enable_serr)
+			pci_bctl |= PCI_BRIDGE_CTL_SERR;
+		if (hpp->enable_perr)
+			pci_bctl |= PCI_BRIDGE_CTL_PARITY;
+		pci_write_config_word(dev, PCI_BRIDGE_CONTROL, pci_bctl);
+	}
+}
+
+static void program_hpp_type1(struct pci_dev *dev, struct hpp_type1 *hpp)
+{
+	if (hpp)
+		dev_warn(&dev->dev, "PCI-X settings not supported\n");
+}
+
+static void program_hpp_type2(struct pci_dev *dev, struct hpp_type2 *hpp)
+{
+	int pos;
+	u32 reg32;
+
+	if (!hpp)
+		return;
+
+	if (hpp->revision > 1) {
+		dev_warn(&dev->dev, "PCIe settings rev %d not supported\n",
+			 hpp->revision);
+		return;
+	}
+
+	/*
+	 * Don't allow _HPX to change MPS or MRRS settings.  We manage
+	 * those to make sure they're consistent with the rest of the
+	 * platform.
+	 */
+	hpp->pci_exp_devctl_and |= PCI_EXP_DEVCTL_PAYLOAD |
+				    PCI_EXP_DEVCTL_READRQ;
+	hpp->pci_exp_devctl_or &= ~(PCI_EXP_DEVCTL_PAYLOAD |
+				    PCI_EXP_DEVCTL_READRQ);
+
+	/* Initialize Device Control Register */
+	pcie_capability_clear_and_set_word(dev, PCI_EXP_DEVCTL,
+			~hpp->pci_exp_devctl_and, hpp->pci_exp_devctl_or);
+
+	/* Initialize Link Control Register */
+	if (pcie_cap_has_lnkctl(dev))
+		pcie_capability_clear_and_set_word(dev, PCI_EXP_LNKCTL,
+			~hpp->pci_exp_lnkctl_and, hpp->pci_exp_lnkctl_or);
+
+	/* Find Advanced Error Reporting Enhanced Capability */
+	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
+	if (!pos)
+		return;
+
+	/* Initialize Uncorrectable Error Mask Register */
+	pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_MASK, &reg32);
+	reg32 = (reg32 & hpp->unc_err_mask_and) | hpp->unc_err_mask_or;
+	pci_write_config_dword(dev, pos + PCI_ERR_UNCOR_MASK, reg32);
+
+	/* Initialize Uncorrectable Error Severity Register */
+	pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_SEVER, &reg32);
+	reg32 = (reg32 & hpp->unc_err_sever_and) | hpp->unc_err_sever_or;
+	pci_write_config_dword(dev, pos + PCI_ERR_UNCOR_SEVER, reg32);
+
+	/* Initialize Correctable Error Mask Register */
+	pci_read_config_dword(dev, pos + PCI_ERR_COR_MASK, &reg32);
+	reg32 = (reg32 & hpp->cor_err_mask_and) | hpp->cor_err_mask_or;
+	pci_write_config_dword(dev, pos + PCI_ERR_COR_MASK, reg32);
+
+	/* Initialize Advanced Error Capabilities and Control Register */
+	pci_read_config_dword(dev, pos + PCI_ERR_CAP, &reg32);
+	reg32 = (reg32 & hpp->adv_err_cap_and) | hpp->adv_err_cap_or;
+	pci_write_config_dword(dev, pos + PCI_ERR_CAP, reg32);
+
+	/*
+	 * FIXME: The following two registers are not supported yet.
+	 *
+	 *   o Secondary Uncorrectable Error Severity Register
+	 *   o Secondary Uncorrectable Error Mask Register
+	 */
+}
+
+static void pci_configure_device(struct pci_dev *dev)
+{
+	struct hotplug_params hpp;
+	int ret;
+
+	pci_configure_mps(dev);
+
+	memset(&hpp, 0, sizeof(hpp));
+	ret = pci_get_hp_params(dev, &hpp);
+	if (ret)
+		return;
+
+	program_hpp_type2(dev, hpp.t2);
+	program_hpp_type1(dev, hpp.t1);
+	program_hpp_type0(dev, hpp.t0);
+}
+
 static void pci_release_capabilities(struct pci_dev *dev)
 {
 	pci_vpd_release(dev);
@@ -1285,6 +1533,7 @@ static void pci_release_dev(struct device *dev)
 	pcibios_release_device(pci_dev);
 	pci_bus_put(pci_dev->bus);
 	kfree(pci_dev->pci_dev_rh->driver_override);
+	kfree(pci_dev->pci_dev_rh->dma_alias_mask);
 	kfree(pci_dev->pci_dev_rh);
 	kfree(pci_dev);
 }
@@ -1324,8 +1573,13 @@ bool pci_bus_read_dev_vendor_id(struct pci_bus *bus, int devfn, u32 *l,
 	    *l == 0x0000ffff || *l == 0xffff0000)
 		return false;
 
-	/* Configuration request Retry Status */
-	while (*l == 0xffff0001) {
+	/*
+	 * Configuration Request Retry Status.  Some root ports return the
+	 * actual device ID instead of the synthetic ID (0xFFFF) required
+	 * by the PCIe spec.  Ignore the device ID and only check for
+	 * (vendor id == 1).
+	 */
+	while ((*l & 0xffff) == 0x0001) {
 		if (!crs_timeout)
 			return false;
 
@@ -1383,6 +1637,9 @@ static void pci_init_capabilities(struct pci_dev *dev)
 	/* MSI/MSI-X list */
 	pci_msi_init_pci_dev(dev);
 
+	/* Setup MSI caps & disable MSI/MSI-X interrupts */
+	pci_msi_setup_pci_dev(dev);
+
 	/* Buffers for saving PCIe and PCI-X capabilities */
 	pci_allocate_cap_save_buffers(dev);
 
@@ -1390,13 +1647,16 @@ static void pci_init_capabilities(struct pci_dev *dev)
 	pci_pm_init(dev);
 
 	/* Vital Product Data */
-	pci_vpd_pci22_init(dev);
+	pci_vpd_init(dev);
 
 	/* Alternative Routing-ID Forwarding */
 	pci_configure_ari(dev);
 
 	/* Single Root I/O Virtualization */
 	pci_iov_init(dev);
+
+	/* Address Translation Services */
+	pci_ats_init(dev);
 
 	/* Enable ACS P2P upstream forwarding */
 	pci_enable_acs(dev);
@@ -1407,6 +1667,8 @@ static void pci_init_capabilities(struct pci_dev *dev)
 void pci_device_add(struct pci_dev *dev, struct pci_bus *bus)
 {
 	int ret;
+
+	pci_configure_device(dev);
 
 	device_initialize(&dev->dev);
 	dev->dev.release = pci_release_dev;
@@ -1504,7 +1766,7 @@ static int only_one_child(struct pci_bus *bus)
 		return 0;
 	if (pci_pcie_type(parent) == PCI_EXP_TYPE_ROOT_PORT)
 		return 1;
-	if (pci_pcie_type(parent) == PCI_EXP_TYPE_DOWNSTREAM &&
+	if (parent->has_secondary_link &&
 	    !pci_has_flag(PCI_SCAN_ALL_PCIE_DEVS))
 		return 1;
 	return 0;
@@ -1648,22 +1910,6 @@ static void pcie_write_mrrs(struct pci_dev *dev)
 		dev_err(&dev->dev, "MRRS was unable to be configured with a safe value.  If problems are experienced, try running with pci=pcie_bus_safe\n");
 }
 
-static void pcie_bus_detect_mps(struct pci_dev *dev)
-{
-	struct pci_dev *bridge = dev->bus->self;
-	int mps, p_mps;
-
-	if (!bridge)
-		return;
-
-	mps = pcie_get_mps(dev);
-	p_mps = pcie_get_mps(bridge);
-
-	if (mps != p_mps)
-		dev_warn(&dev->dev, "Max Payload Size %d, but upstream %s set to %d; if necessary, use \"pci=pcie_bus_safe\" and report a bug\n",
-			 mps, pci_name(bridge), p_mps);
-}
-
 static int pcie_bus_configure_set(struct pci_dev *dev, void *data)
 {
 	int mps, orig_mps;
@@ -1671,10 +1917,9 @@ static int pcie_bus_configure_set(struct pci_dev *dev, void *data)
 	if (!pci_is_pcie(dev))
 		return 0;
 
-	if (pcie_bus_config == PCIE_BUS_TUNE_OFF) {
-		pcie_bus_detect_mps(dev);
+	if (pcie_bus_config == PCIE_BUS_TUNE_OFF ||
+	    pcie_bus_config == PCIE_BUS_DEFAULT)
 		return 0;
-	}
 
 	mps = 128 << *(u8 *)data;
 	orig_mps = pcie_get_mps(dev);
@@ -1790,19 +2035,20 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	int error;
 	struct pci_host_bridge *bridge;
 	struct pci_bus *b, *b2;
-	struct pci_host_bridge_window *window, *n;
+	struct resource_entry *window, *n;
 	struct resource *res;
 	resource_size_t offset;
 	char bus_addr[64];
 	char *fmt;
 
-	b = pci_alloc_bus();
+	b = pci_alloc_bus(NULL);
 	if (!b)
 		return NULL;
 
 	b->sysdata = sysdata;
 	b->ops = ops;
 	b->number = b->busn_res.start = bus;
+	pci_bus_assign_domain_nr(b, parent);
 	b2 = pci_find_bus(pci_domain_nr(b), bus);
 	if (b2) {
 		/* If we already got to this bus through a different bridge, ignore it */
@@ -1853,8 +2099,8 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 		printk(KERN_INFO "PCI host bridge to bus %s\n", dev_name(&b->dev));
 
 	/* Add initial resources to the bus */
-	list_for_each_entry_safe(window, n, resources, list) {
-		list_move_tail(&window->list, &bridge->windows);
+	resource_list_for_each_entry_safe(window, n, resources) {
+		list_move_tail(&window->node, &bridge->windows);
 		res = window->res;
 		offset = window->offset;
 		if (res->flags & IORESOURCE_BUS)
@@ -1887,6 +2133,7 @@ err_out:
 	kfree(b);
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(pci_create_root_bus);
 
 int pci_bus_insert_busn_res(struct pci_bus *b, int bus, int bus_max)
 {
@@ -1954,12 +2201,12 @@ void pci_bus_release_busn_res(struct pci_bus *b)
 struct pci_bus *pci_scan_root_bus(struct device *parent, int bus,
 		struct pci_ops *ops, void *sysdata, struct list_head *resources)
 {
-	struct pci_host_bridge_window *window;
+	struct resource_entry *window;
 	bool found = false;
 	struct pci_bus *b;
 	int max;
 
-	list_for_each_entry(window, resources, list)
+	resource_list_for_each_entry(window, resources)
 		if (window->res->flags & IORESOURCE_BUS) {
 			found = true;
 			break;
@@ -1981,29 +2228,9 @@ struct pci_bus *pci_scan_root_bus(struct device *parent, int bus,
 	if (!found)
 		pci_bus_update_busn_res_end(b, max);
 
-	pci_bus_add_devices(b);
 	return b;
 }
 EXPORT_SYMBOL(pci_scan_root_bus);
-
-/* Deprecated; use pci_scan_root_bus() instead */
-struct pci_bus *pci_scan_bus_parented(struct device *parent,
-		int bus, struct pci_ops *ops, void *sysdata)
-{
-	LIST_HEAD(resources);
-	struct pci_bus *b;
-
-	pci_add_resource(&resources, &ioport_resource);
-	pci_add_resource(&resources, &iomem_resource);
-	pci_add_resource(&resources, &busn_resource);
-	b = pci_create_root_bus(parent, bus, ops, sysdata, &resources);
-	if (b)
-		pci_scan_child_bus(b);
-	else
-		pci_free_resource_list(&resources);
-	return b;
-}
-EXPORT_SYMBOL(pci_scan_bus_parented);
 
 struct pci_bus *pci_scan_bus(int bus, struct pci_ops *ops,
 					void *sysdata)
@@ -2017,7 +2244,6 @@ struct pci_bus *pci_scan_bus(int bus, struct pci_ops *ops,
 	b = pci_create_root_bus(NULL, bus, ops, sysdata, &resources);
 	if (b) {
 		pci_scan_child_bus(b);
-		pci_bus_add_devices(b);
 	} else {
 		pci_free_resource_list(&resources);
 	}

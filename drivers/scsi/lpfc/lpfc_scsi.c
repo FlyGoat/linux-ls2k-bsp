@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2004-2013 Emulex.  All rights reserved.           *
+ * Copyright (C) 2004-2015 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
  * Portions Copyright (C) 2004-2005 Christoph Hellwig              *
@@ -1414,7 +1414,6 @@ lpfc_bg_err_inject(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 		uint32_t *reftag, uint16_t *apptag, uint32_t new_guard)
 {
 	struct scatterlist *sgpe; /* s/g prot entry */
-	struct scatterlist *sgde; /* s/g data entry */
 	struct lpfc_scsi_buf *lpfc_cmd = NULL;
 	struct scsi_dif_tuple *src = NULL;
 	struct lpfc_nodelist *ndlp;
@@ -1430,7 +1429,6 @@ lpfc_bg_err_inject(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 		return 0;
 
 	sgpe = scsi_prot_sglist(sc);
-	sgde = scsi_sglist(sc);
 	lba = scsi_get_lba(sc);
 
 	/* First check if we need to match the LBA */
@@ -2003,7 +2001,6 @@ lpfc_bg_setup_bpl(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 #endif
 	uint32_t checking = 1;
 	uint32_t reftag;
-	unsigned blksize;
 	uint8_t txop, rxop;
 
 	status  = lpfc_sc_to_bg_opcodes(phba, sc, &txop, &rxop);
@@ -2011,7 +2008,6 @@ lpfc_bg_setup_bpl(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 		goto out;
 
 	/* extract some info from the scsi command for pde*/
-	blksize = lpfc_cmd_blksize(sc);
 	reftag = (uint32_t)scsi_get_lba(sc); /* Truncate LBA */
 
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
@@ -2384,7 +2380,6 @@ lpfc_bg_setup_sgl(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 	dma_addr_t physaddr;
 	int i = 0, num_sge = 0, status;
 	uint32_t reftag;
-	unsigned blksize;
 	uint8_t txop, rxop;
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
 	uint32_t rc;
@@ -2398,7 +2393,6 @@ lpfc_bg_setup_sgl(struct lpfc_hba *phba, struct scsi_cmnd *sc,
 		goto out;
 
 	/* extract some info from the scsi command for pde*/
-	blksize = lpfc_cmd_blksize(sc);
 	reftag = (uint32_t)scsi_get_lba(sc); /* Truncate LBA */
 
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
@@ -3002,7 +2996,7 @@ lpfc_calc_bg_err(struct lpfc_hba *phba, struct lpfc_scsi_buf *lpfc_cmd)
 	struct scsi_cmnd *cmd = lpfc_cmd->pCmd;
 	struct scsi_dif_tuple *src = NULL;
 	uint8_t *data_src = NULL;
-	uint16_t guard_tag, guard_type;
+	uint16_t guard_tag;
 	uint16_t start_app_tag, app_tag;
 	uint32_t start_ref_tag, ref_tag;
 	int prot, protsegcnt;
@@ -3043,7 +3037,6 @@ lpfc_calc_bg_err(struct lpfc_hba *phba, struct lpfc_scsi_buf *lpfc_cmd)
 		data_len = sgde->length;
 		if ((data_len & (blksize - 1)) == 0)
 			chk_guard = 1;
-		guard_type = scsi_host_get_guard(cmd->device->host);
 
 		src = (struct scsi_dif_tuple *)sg_virt(sgpe);
 		start_ref_tag = (uint32_t)scsi_get_lba(cmd); /* Truncate LBA */
@@ -3804,6 +3797,7 @@ static void
 lpfc_handle_fcp_err(struct lpfc_vport *vport, struct lpfc_scsi_buf *lpfc_cmd,
 		    struct lpfc_iocbq *rsp_iocb)
 {
+	struct lpfc_hba *phba = vport->phba;
 	struct scsi_cmnd *cmnd = lpfc_cmd->pCmd;
 	struct fcp_cmnd *fcpcmd = lpfc_cmd->fcp_cmnd;
 	struct fcp_rsp *fcprsp = lpfc_cmd->fcp_rsp;
@@ -3813,6 +3807,7 @@ lpfc_handle_fcp_err(struct lpfc_vport *vport, struct lpfc_scsi_buf *lpfc_cmd,
 	uint32_t *lp;
 	uint32_t host_status = DID_OK;
 	uint32_t rsplen = 0;
+	uint32_t fcpDl;
 	uint32_t logit = LOG_FCP | LOG_FCP_ERROR;
 
 
@@ -3883,13 +3878,14 @@ lpfc_handle_fcp_err(struct lpfc_vport *vport, struct lpfc_scsi_buf *lpfc_cmd,
 			 fcprsp->rspInfo3);
 
 	scsi_set_resid(cmnd, 0);
+	fcpDl = be32_to_cpu(fcpcmd->fcpDl);
 	if (resp_info & RESID_UNDER) {
 		scsi_set_resid(cmnd, be32_to_cpu(fcprsp->rspResId));
 
 		lpfc_printf_vlog(vport, KERN_INFO, LOG_FCP_UNDER,
 				 "9025 FCP Read Underrun, expected %d, "
 				 "residual %d Data: x%x x%x x%x\n",
-				 be32_to_cpu(fcpcmd->fcpDl),
+				 fcpDl,
 				 scsi_get_resid(cmnd), fcpi_parm, cmnd->cmnd[0],
 				 cmnd->underflow);
 
@@ -3905,7 +3901,7 @@ lpfc_handle_fcp_err(struct lpfc_vport *vport, struct lpfc_scsi_buf *lpfc_cmd,
 					 LOG_FCP | LOG_FCP_ERROR,
 					 "9026 FCP Read Check Error "
 					 "and Underrun Data: x%x x%x x%x x%x\n",
-					 be32_to_cpu(fcpcmd->fcpDl),
+					 fcpDl,
 					 scsi_get_resid(cmnd), fcpi_parm,
 					 cmnd->cmnd[0]);
 			scsi_set_resid(cmnd, scsi_bufflen(cmnd));
@@ -3940,13 +3936,25 @@ lpfc_handle_fcp_err(struct lpfc_vport *vport, struct lpfc_scsi_buf *lpfc_cmd,
 	 * Check SLI validation that all the transfer was actually done
 	 * (fcpi_parm should be zero). Apply check only to reads.
 	 */
-	} else if (fcpi_parm && (cmnd->sc_data_direction == DMA_FROM_DEVICE)) {
+	} else if (fcpi_parm) {
 		lpfc_printf_vlog(vport, KERN_WARNING, LOG_FCP | LOG_FCP_ERROR,
-				 "9029 FCP Read Check Error Data: "
+				 "9029 FCP %s Check Error xri x%x  Data: "
 				 "x%x x%x x%x x%x x%x\n",
-				 be32_to_cpu(fcpcmd->fcpDl),
-				 be32_to_cpu(fcprsp->rspResId),
+				 ((cmnd->sc_data_direction == DMA_FROM_DEVICE) ?
+				 "Read" : "Write"),
+				 ((phba->sli_rev == LPFC_SLI_REV4) ?
+				 lpfc_cmd->cur_iocbq.sli4_xritag :
+				 rsp_iocb->iocb.ulpContext),
+				 fcpDl, be32_to_cpu(fcprsp->rspResId),
 				 fcpi_parm, cmnd->cmnd[0], scsi_status);
+
+		/* There is some issue with the LPe12000 that causes it
+		 * to miscalculate the fcpi_parm and falsely trip this
+		 * recovery logic.  Detect this case and don't error when true.
+		 */
+		if (fcpi_parm > fcpDl)
+			goto out;
+
 		switch (scsi_status) {
 		case SAM_STAT_GOOD:
 		case SAM_STAT_CHECK_CONDITION:
@@ -3986,18 +3994,16 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 	struct lpfc_rport_data *rdata = lpfc_cmd->rdata;
 	struct lpfc_nodelist *pnode = rdata->pnode;
 	struct scsi_cmnd *cmd;
-	int result;
 	int depth;
 	unsigned long flags;
 	struct lpfc_fast_path_event *fast_path_evt;
 	struct Scsi_Host *shost;
-	uint32_t queue_depth, scsi_id;
 	uint32_t logit = LOG_FCP;
 
 	/* Sanity check on return of outstanding command */
-	if (!(lpfc_cmd->pCmd))
-		return;
 	cmd = lpfc_cmd->pCmd;
+	if (!cmd)
+		return;
 	shost = cmd->device->host;
 
 	lpfc_cmd->result = (pIocbOut->iocb.un.ulpWord[4] & IOERR_PARAM_MASK);
@@ -4173,7 +4179,6 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 	}
 
 	lpfc_update_stats(phba, lpfc_cmd);
-	result = cmd->result;
 	if (vport->cfg_max_scsicmpl_time &&
 	   time_after(jiffies, lpfc_cmd->start_time +
 		msecs_to_jiffies(vport->cfg_max_scsicmpl_time))) {
@@ -4210,26 +4215,7 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 	lpfc_scsi_unprep_dma_buf(phba, lpfc_cmd);
 
 	/* The sdev is not guaranteed to be valid post scsi_done upcall. */
-	queue_depth = cmd->device->queue_depth;
-	scsi_id = cmd->device->id;
 	cmd->scsi_done(cmd);
-
-	if (phba->cfg_poll & ENABLE_FCP_RING_POLLING) {
-		spin_lock_irqsave(&phba->hbalock, flags);
-		lpfc_cmd->pCmd = NULL;
-		spin_unlock_irqrestore(&phba->hbalock, flags);
-
-		/*
-		 * If there is a thread waiting for command completion
-		 * wake up the thread.
-		 */
-		spin_lock_irqsave(shost->host_lock, flags);
-		if (lpfc_cmd->waitq)
-			wake_up(lpfc_cmd->waitq);
-		spin_unlock_irqrestore(shost->host_lock, flags);
-		lpfc_release_scsi_buf(phba, lpfc_cmd);
-		return;
-	}
 
 	spin_lock_irqsave(&phba->hbalock, flags);
 	lpfc_cmd->pCmd = NULL;
@@ -4550,15 +4536,7 @@ lpfc_info(struct Scsi_Host *host)
 				 phba->Port);
 		}
 		len = strlen(lpfcinfobuf);
-		if (phba->sli_rev <= LPFC_SLI_REV3) {
-			link_speed = lpfc_sli_port_speed_get(phba);
-		} else {
-			if (phba->sli4_hba.link_state.logical_speed)
-				link_speed =
-				      phba->sli4_hba.link_state.logical_speed;
-			else
-				link_speed = phba->sli4_hba.link_state.speed;
-		}
+		link_speed = lpfc_sli_port_speed_get(phba);
 		if (link_speed != 0)
 			snprintf(lpfcinfobuf + len, 384-len,
 				 " Logical Link Speed: %d Mbps", link_speed);

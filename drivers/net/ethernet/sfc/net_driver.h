@@ -76,6 +76,9 @@
 /* Maximum possible MTU the driver supports */
 #define EFX_MAX_MTU (9 * 1024)
 
+/* Minimum MTU, from RFC791 (IP) */
+#define EFX_MIN_MTU 68
+
 /* Size of an RX scatter buffer.  Small enough to pack 2 into a 4K page,
  * and should be a multiple of the cache line size.
  */
@@ -182,6 +185,7 @@ struct efx_tx_buffer {
  *
  * @efx: The associated Efx NIC
  * @queue: DMA queue number
+ * @tso_version: Version of TSO in use for this queue.
  * @channel: The associated channel
  * @core_txq: The networking core TX queue structure
  * @buffer: The software buffer ring
@@ -228,6 +232,7 @@ struct efx_tx_queue {
 	/* Members which don't change on the fast path */
 	struct efx_nic *efx ____cacheline_aligned_in_smp;
 	unsigned queue;
+	unsigned int tso_version;
 	struct efx_channel *channel;
 	struct netdev_queue *core_txq;
 	struct efx_tx_buffer *buffer;
@@ -390,7 +395,7 @@ enum efx_sync_events_state {
  * @eventq_init: Event queue initialised flag
  * @enabled: Channel enabled indicator
  * @irq: IRQ number (MSI and MSI-X only)
- * @irq_moderation: IRQ moderation value (in hardware ticks)
+ * @irq_moderation_us: IRQ moderation value (in microseconds)
  * @napi_dev: Net device used with NAPI
  * @napi_str: NAPI control structure
  * @state: state for NAPI vs busy polling
@@ -429,7 +434,7 @@ struct efx_channel {
 	bool eventq_init;
 	bool enabled;
 	int irq;
-	unsigned int irq_moderation;
+	unsigned int irq_moderation_us;
 	struct net_device *napi_dev;
 	struct napi_struct napi_str;
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -804,8 +809,10 @@ struct vfdi_status;
  * @membase: Memory BAR value
  * @interrupt_mode: Interrupt mode
  * @timer_quantum_ns: Interrupt timer quantum, in nanoseconds
+ * @timer_max_ns: Interrupt timer maximum value, in nanoseconds
  * @irq_rx_adaptive: Adaptive IRQ moderation enabled for RX event queues
- * @irq_rx_moderation: IRQ moderation time for RX event queues
+ * @irq_rx_mod_step_us: Step size for IRQ moderation for RX event queues
+ * @irq_rx_moderation_us: IRQ moderation time for RX event queues
  * @msg_enable: Log message enable flags
  * @state: Device state number (%STATE_*). Serialised by the rtnl_lock.
  * @reset_pending: Bitmask for pending resets
@@ -862,6 +869,7 @@ struct vfdi_status;
  *	be held to modify it.
  * @port_initialized: Port initialized?
  * @net_dev: Operating system network device. Consider holding the rtnl lock
+ * @fixed_features: Features which cannot be turned off
  * @stats_buffer: DMA buffer for statistics
  * @phy_type: PHY type
  * @phy_op: PHY interface
@@ -933,8 +941,10 @@ struct efx_nic {
 
 	enum efx_int_mode interrupt_mode;
 	unsigned int timer_quantum_ns;
+	unsigned int timer_max_ns;
 	bool irq_rx_adaptive;
-	unsigned int irq_rx_moderation;
+	unsigned int irq_mod_step_us;
+	unsigned int irq_rx_moderation_us;
 	u32 msg_enable;
 
 	enum nic_state state;
@@ -956,6 +966,7 @@ struct efx_nic {
 	unsigned next_buffer_table;
 
 	unsigned int max_channels;
+	unsigned int max_tx_channels;
 	unsigned n_channels;
 	unsigned n_rx_channels;
 	unsigned rss_spread;
@@ -999,6 +1010,8 @@ struct efx_nic {
 	bool mc_bist_for_other_fn;
 	bool port_initialized;
 	struct net_device *net_dev;
+
+	netdev_features_t fixed_features;
 
 	struct efx_buffer stats_buffer;
 	u64 rx_nodesc_drops_total;
@@ -1259,8 +1272,9 @@ struct efx_nic_type {
 	void (*mcdi_read_response)(struct efx_nic *efx, efx_dword_t *pdu,
 				   size_t pdu_offset, size_t pdu_len);
 	int (*mcdi_poll_reboot)(struct efx_nic *efx);
+	void (*mcdi_reboot_detected)(struct efx_nic *efx);
 	void (*irq_enable_master)(struct efx_nic *efx);
-	void (*irq_test_generate)(struct efx_nic *efx);
+	int (*irq_test_generate)(struct efx_nic *efx);
 	void (*irq_disable_non_ev)(struct efx_nic *efx);
 	irqreturn_t (*irq_handle_msi)(int irq, void *dev_id);
 	irqreturn_t (*irq_handle_legacy)(int irq, void *dev_id);
@@ -1323,6 +1337,8 @@ struct efx_nic_type {
 	int (*ptp_set_ts_config)(struct efx_nic *efx,
 				 struct hwtstamp_config *init);
 	int (*sriov_configure)(struct efx_nic *efx, int num_vfs);
+	int (*vlan_rx_add_vid)(struct efx_nic *efx, __be16 proto, u16 vid);
+	int (*vlan_rx_kill_vid)(struct efx_nic *efx, __be16 proto, u16 vid);
 	int (*sriov_init)(struct efx_nic *efx);
 	void (*sriov_fini)(struct efx_nic *efx);
 	bool (*sriov_wanted)(struct efx_nic *efx);
@@ -1338,7 +1354,7 @@ struct efx_nic_type {
 	int (*sriov_set_vf_link_state)(struct efx_nic *efx, int vf_i,
 				       int link_state);
 	int (*sriov_get_phys_port_id)(struct efx_nic *efx,
-				      struct netdev_phys_port_id *ppid);
+				      struct netdev_phys_item_id *ppid);
 	int (*vswitching_probe)(struct efx_nic *efx);
 	int (*vswitching_restore)(struct efx_nic *efx);
 	void (*vswitching_remove)(struct efx_nic *efx);
@@ -1498,8 +1514,9 @@ static inline struct efx_rx_buffer *efx_rx_buffer(struct efx_rx_queue *rx_queue,
  * same cycle, the XMAC can miss the IPG altogether.  We work around
  * this by adding a further 16 bytes.
  */
+#define EFX_FRAME_PAD	16
 #define EFX_MAX_FRAME_LEN(mtu) \
-	((((mtu) + ETH_HLEN + VLAN_HLEN + 4/* FCS */ + 7) & ~7) + 16)
+	(ALIGN(((mtu) + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN + EFX_FRAME_PAD), 8))
 
 static inline bool efx_xmit_with_hwtstamp(struct sk_buff *skb)
 {
@@ -1508,6 +1525,18 @@ static inline bool efx_xmit_with_hwtstamp(struct sk_buff *skb)
 static inline void efx_xmit_hwtstamp_pending(struct sk_buff *skb)
 {
 	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+}
+
+/* Get all supported features.
+ * If a feature is not fixed, it is present in hw_features.
+ * If a feature is fixed, it does not present in hw_features, but
+ * always in features.
+ */
+static inline netdev_features_t efx_supported_features(const struct efx_nic *efx)
+{
+	const struct net_device *net_dev = efx->net_dev;
+
+	return net_dev->features | net_dev->hw_features;
 }
 
 #endif /* EFX_NET_DRIVER_H */

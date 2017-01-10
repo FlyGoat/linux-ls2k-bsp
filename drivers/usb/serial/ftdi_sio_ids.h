@@ -38,6 +38,9 @@
 
 #define FTDI_LUMEL_PD12_PID	0x6002
 
+/* Cyber Cortex AV by Fabulous Silicon (http://fabuloussilicon.com) */
+#define CYBER_CORTEX_AV_PID	0x8698
+
 /*
  * Marvell OpenRD Base, Client
  * http://www.open-rd.org
@@ -58,6 +61,7 @@
 #define TI_XDS100V2_PID		0xa6d0
 
 #define FTDI_NXTCAM_PID		0xABB8 /* NXTCam for Mindstorms NXT */
+#define FTDI_EV3CON_PID		0xABB9 /* Mindstorms EV3 Console Adapter */
 
 /* US Interface Navigator (http://www.usinterface.com/) */
 #define FTDI_USINT_CAT_PID	0xb810	/* Navigator CAT and 2nd PTT lines */
@@ -379,6 +383,12 @@
 /* Sprog II (Andrew Crosland's SprogII DCC interface) */
 #define FTDI_SPROG_II		0xF0C8
 
+/*
+ * Two of the Tagsys RFID Readers
+ */
+#define FTDI_TAGSYS_LP101_PID	0xF0E9	/* Tagsys L-P101 RFID*/
+#define FTDI_TAGSYS_P200X_PID	0xF0EE	/* Tagsys Medio P200x RFID*/
+
 /* an infrared receiver for user access control with IR tags */
 #define FTDI_PIEGROUP_PID	0xF208	/* Product Id */
 
@@ -558,6 +568,14 @@
  */
 #define FTDI_SYNAPSE_SS200_PID 0x9090 /* SS200 - SNAP Stick 200 */
 
+/*
+ * CustomWare / ShipModul NMEA multiplexers product ids (FTDI_VID)
+ */
+#define FTDI_CUSTOMWARE_MINIPLEX_PID	0xfd48	/* MiniPlex first generation NMEA Multiplexer */
+#define FTDI_CUSTOMWARE_MINIPLEX2_PID	0xfd49	/* MiniPlex-USB and MiniPlex-2 series */
+#define FTDI_CUSTOMWARE_MINIPLEX2WI_PID	0xfd4a	/* MiniPlex-2Wi */
+#define FTDI_CUSTOMWARE_MINIPLEX3_PID	0xfd4b	/* MiniPlex-3 series */
+
 
 /********************************/
 /** third-party VID/PID combos **/
@@ -597,6 +615,7 @@
  */
 #define RATOC_VENDOR_ID		0x0584
 #define RATOC_PRODUCT_ID_USB60F	0xb020
+#define RATOC_PRODUCT_ID_SCU18	0xb03a
 
 /*
  * Infineon Technologies
@@ -851,6 +870,14 @@
  */
 #define NOVITUS_VID			0x1a28
 #define NOVITUS_BONO_E_PID		0x6010
+
+/*
+ * ICPDAS I-756*U devices
+ */
+#define ICPDAS_VID			0x1b5c
+#define ICPDAS_I7560U_PID		0x0103
+#define ICPDAS_I7561U_PID		0x0104
+#define ICPDAS_I7563U_PID		0x0105
 
 /*
  * RT Systems programming cables for various ham radios
@@ -1355,7 +1382,7 @@
 #define FTDI_CTI_NANO_PID	0xF60B
 
 /*
- * ZeitControl cardsystems GmbH rfid-readers http://zeitconrol.de
+ * ZeitControl cardsystems GmbH rfid-readers http://zeitcontrol.de
  */
 /* TagTracer MIFARE*/
 #define FTDI_ZEITCONTROL_TAGTRACE_MIFARE_PID	0xF7C0
@@ -1438,3 +1465,23 @@
  */
 #define GE_HEALTHCARE_VID		0x1901
 #define GE_HEALTHCARE_NEMO_TRACKER_PID	0x0015
+
+/*
+ * Active Research (Actisense) devices
+ */
+#define ACTISENSE_NDC_PID		0xD9A8 /* NDC USB Serial Adapter */
+#define ACTISENSE_USG_PID		0xD9A9 /* USG USB Serial Adapter */
+#define ACTISENSE_NGT_PID		0xD9AA /* NGT NMEA2000 Interface */
+#define ACTISENSE_NGW_PID		0xD9AB /* NGW NMEA2000 Gateway */
+#define ACTISENSE_D9AC_PID		0xD9AC /* Actisense Reserved */
+#define ACTISENSE_D9AD_PID		0xD9AD /* Actisense Reserved */
+#define ACTISENSE_D9AE_PID		0xD9AE /* Actisense Reserved */
+#define ACTISENSE_D9AF_PID		0xD9AF /* Actisense Reserved */
+#define CHETCO_SEAGAUGE_PID		0xA548 /* SeaGauge USB Adapter */
+#define CHETCO_SEASWITCH_PID		0xA549 /* SeaSwitch USB Adapter */
+#define CHETCO_SEASMART_NMEA2000_PID	0xA54A /* SeaSmart NMEA2000 Gateway */
+#define CHETCO_SEASMART_ETHERNET_PID	0xA54B /* SeaSmart Ethernet Gateway */
+#define CHETCO_SEASMART_WIFI_PID	0xA5AC /* SeaSmart Wifi Gateway */
+#define CHETCO_SEASMART_DISPLAY_PID	0xA5AD /* SeaSmart NMEA2000 Display */
+#define CHETCO_SEASMART_LITE_PID	0xA5AE /* SeaSmart Lite USB Adapter */
+#define CHETCO_SEASMART_ANALOG_PID	0xA5AF /* SeaSmart Analog Adapter */

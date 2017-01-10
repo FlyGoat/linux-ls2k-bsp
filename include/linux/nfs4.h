@@ -43,12 +43,27 @@ struct nfs4_label {
 
 typedef struct { char data[NFS4_VERIFIER_SIZE]; } nfs4_verifier;
 
-struct nfs_stateid4 {
-	__be32 seqid;
-	char other[NFS4_STATEID_OTHER_SIZE];
-} __attribute__ ((packed));
+struct nfs4_stateid_struct {
+	union {
+		char data[NFS4_STATEID_SIZE];
+		struct {
+			__be32 seqid;
+			char other[NFS4_STATEID_OTHER_SIZE];
+		} __attribute__ ((packed));
+	};
 
-typedef struct nfs_stateid4 nfs4_stateid;
+	enum {
+		NFS4_INVALID_STATEID_TYPE = 0,
+		NFS4_SPECIAL_STATEID_TYPE,
+		NFS4_OPEN_STATEID_TYPE,
+		NFS4_LOCK_STATEID_TYPE,
+		NFS4_DELEGATION_STATEID_TYPE,
+		NFS4_LAYOUT_STATEID_TYPE,
+		NFS4_PNFS_DS_STATEID_TYPE,
+	} type;
+};
+
+typedef struct nfs4_stateid_struct nfs4_stateid;
 
 enum nfs_opnum4 {
 	OP_ACCESS = 3,
@@ -123,6 +138,7 @@ enum nfs_opnum4 {
 	OP_READ_PLUS = 68,
 	OP_SEEK = 69,
 	OP_WRITE_SAME = 70,
+	OP_CLONE = 71,
 
 	OP_ILLEGAL = 10044,
 };
@@ -414,6 +430,7 @@ enum lock_type4 {
 #define FATTR4_WORD2_LAYOUT_TYPES       (1UL << 0)
 #define FATTR4_WORD2_LAYOUT_BLKSIZE     (1UL << 1)
 #define FATTR4_WORD2_MDSTHRESHOLD       (1UL << 4)
+#define FATTR4_WORD2_CLONE_BLKSIZE	(1UL << 13)
 #define FATTR4_WORD2_SECURITY_LABEL     (1UL << 16)
 #define FATTR4_WORD2_CHANGE_SECURITY_LABEL \
 					(1UL << 17)
@@ -495,6 +512,8 @@ enum {
 	NFSPROC4_CLNT_SEEK,
 	NFSPROC4_CLNT_ALLOCATE,
 	NFSPROC4_CLNT_DEALLOCATE,
+	NFSPROC4_CLNT_LAYOUTSTATS,
+	NFSPROC4_CLNT_CLONE,
 };
 
 /* nfs41 types */
@@ -520,6 +539,7 @@ enum pnfs_layouttype {
 	LAYOUT_OSD2_OBJECTS = 2,
 	LAYOUT_BLOCK_VOLUME = 3,
 	LAYOUT_FLEX_FILES = 4,
+	LAYOUT_SCSI = 5,
 	LAYOUT_TYPE_MAX
 };
 
@@ -539,6 +559,42 @@ enum pnfs_iomode {
 enum pnfs_notify_deviceid_type4 {
 	NOTIFY_DEVICEID4_CHANGE = 1 << 1,
 	NOTIFY_DEVICEID4_DELETE = 1 << 2,
+};
+
+enum pnfs_block_volume_type {
+	PNFS_BLOCK_VOLUME_SIMPLE	= 0,
+	PNFS_BLOCK_VOLUME_SLICE		= 1,
+	PNFS_BLOCK_VOLUME_CONCAT	= 2,
+	PNFS_BLOCK_VOLUME_STRIPE	= 3,
+	PNFS_BLOCK_VOLUME_SCSI		= 4,
+};
+
+enum pnfs_block_extent_state {
+	PNFS_BLOCK_READWRITE_DATA	= 0,
+	PNFS_BLOCK_READ_DATA		= 1,
+	PNFS_BLOCK_INVALID_DATA		= 2,
+	PNFS_BLOCK_NONE_DATA		= 3,
+};
+
+/* on the wire size of a block layout extent */
+#define PNFS_BLOCK_EXTENT_SIZE \
+	(7 * sizeof(__be32) + NFS4_DEVICEID4_SIZE)
+
+/* on the wire size of a scsi commit range */
+#define PNFS_SCSI_RANGE_SIZE \
+	(4 * sizeof(__be32))
+
+enum scsi_code_set {
+	PS_CODE_SET_BINARY	= 1,
+	PS_CODE_SET_ASCII	= 2,
+	PS_CODE_SET_UTF8	= 3
+};
+
+enum scsi_designator_type {
+	PS_DESIGNATOR_T10	= 1,
+	PS_DESIGNATOR_EUI64	= 2,
+	PS_DESIGNATOR_NAA	= 3,
+	PS_DESIGNATOR_NAME	= 8
 };
 
 #define NFL4_UFLG_MASK			0x0000003F
@@ -563,6 +619,20 @@ struct nfs4_deviceid {
 enum data_content4 {
 	NFS4_CONTENT_DATA		= 0,
 	NFS4_CONTENT_HOLE		= 1,
+};
+
+enum pnfs_update_layout_reason {
+	PNFS_UPDATE_LAYOUT_UNKNOWN = 0,
+	PNFS_UPDATE_LAYOUT_NO_PNFS,
+	PNFS_UPDATE_LAYOUT_RD_ZEROLEN,
+	PNFS_UPDATE_LAYOUT_MDSTHRESH,
+	PNFS_UPDATE_LAYOUT_NOMEM,
+	PNFS_UPDATE_LAYOUT_BULK_RECALL,
+	PNFS_UPDATE_LAYOUT_IO_TEST_FAIL,
+	PNFS_UPDATE_LAYOUT_FOUND_CACHED,
+	PNFS_UPDATE_LAYOUT_RETURN,
+	PNFS_UPDATE_LAYOUT_BLOCKED,
+	PNFS_UPDATE_LAYOUT_SEND_LAYOUTGET,
 };
 
 #endif

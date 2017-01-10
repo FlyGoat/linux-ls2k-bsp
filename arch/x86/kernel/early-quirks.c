@@ -17,6 +17,7 @@
 #include <asm/dma.h>
 #include <asm/io_apic.h>
 #include <asm/apic.h>
+#include <asm/hpet.h>
 #include <asm/iommu.h>
 #include <asm/gart.h>
 #include <asm/irq_remapping.h>
@@ -243,7 +244,7 @@ static u32 __init intel_stolen_base(int num, int slot, int func, size_t stolen_s
 	return base;
 }
 
-#define KB(x)	((x) * 1024)
+#define KB(x)	((x) * 1024UL)
 #define MB(x)	(KB (KB (x)))
 #define GB(x)	(MB (KB (x)))
 
@@ -421,7 +422,7 @@ static size_t __init gen6_stolen_size(int num, int slot, int func)
 	return gmch_ctrl << 25; /* 32 MB units */
 }
 
-static size_t gen8_stolen_size(int num, int slot, int func)
+static size_t __init gen8_stolen_size(int num, int slot, int func)
 {
 	u16 gmch_ctrl;
 
@@ -431,48 +432,95 @@ static size_t gen8_stolen_size(int num, int slot, int func)
 	return gmch_ctrl << 25; /* 32 MB units */
 }
 
+static size_t __init chv_stolen_size(int num, int slot, int func)
+{
+	u16 gmch_ctrl;
+
+	gmch_ctrl = read_pci_config_16(num, slot, func, SNB_GMCH_CTRL);
+	gmch_ctrl >>= SNB_GMCH_GMS_SHIFT;
+	gmch_ctrl &= SNB_GMCH_GMS_MASK;
+
+	/*
+	 * 0x0  to 0x10: 32MB increments starting at 0MB
+	 * 0x11 to 0x16: 4MB increments starting at 8MB
+	 * 0x17 to 0x1d: 4MB increments start at 36MB
+	 */
+	if (gmch_ctrl < 0x11)
+		return gmch_ctrl << 25;
+	else if (gmch_ctrl < 0x17)
+		return (gmch_ctrl - 0x11 + 2) << 22;
+	else
+		return (gmch_ctrl - 0x17 + 9) << 22;
+}
 
 struct intel_stolen_funcs {
 	size_t (*size)(int num, int slot, int func);
 	u32 (*base)(int num, int slot, int func, size_t size);
 };
 
-static const struct intel_stolen_funcs i830_stolen_funcs = {
+static size_t __init gen9_stolen_size(int num, int slot, int func)
+{
+	u16 gmch_ctrl;
+
+	gmch_ctrl = read_pci_config_16(num, slot, func, SNB_GMCH_CTRL);
+	gmch_ctrl >>= BDW_GMCH_GMS_SHIFT;
+	gmch_ctrl &= BDW_GMCH_GMS_MASK;
+
+	if (gmch_ctrl < 0xf0)
+		return gmch_ctrl << 25; /* 32 MB units */
+	else
+		/* 4MB increments starting at 0xf0 for 4MB */
+		return (gmch_ctrl - 0xf0 + 1) << 22;
+}
+
+typedef size_t (*stolen_size_fn)(int num, int slot, int func);
+
+static const struct intel_stolen_funcs i830_stolen_funcs __initconst = {
 	.base = i830_stolen_base,
 	.size = i830_stolen_size,
 };
 
-static const struct intel_stolen_funcs i845_stolen_funcs = {
+static const struct intel_stolen_funcs i845_stolen_funcs __initconst = {
 	.base = i845_stolen_base,
 	.size = i830_stolen_size,
 };
 
-static const struct intel_stolen_funcs i85x_stolen_funcs = {
+static const struct intel_stolen_funcs i85x_stolen_funcs __initconst = {
 	.base = i85x_stolen_base,
 	.size = gen3_stolen_size,
 };
 
-static const struct intel_stolen_funcs i865_stolen_funcs = {
+static const struct intel_stolen_funcs i865_stolen_funcs __initconst = {
 	.base = i865_stolen_base,
 	.size = gen3_stolen_size,
 };
 
-static const struct intel_stolen_funcs gen3_stolen_funcs = {
+static const struct intel_stolen_funcs gen3_stolen_funcs __initconst = {
 	.base = intel_stolen_base,
 	.size = gen3_stolen_size,
 };
 
-static const struct intel_stolen_funcs gen6_stolen_funcs = {
+static const struct intel_stolen_funcs gen6_stolen_funcs __initconst = {
 	.base = intel_stolen_base,
 	.size = gen6_stolen_size,
 };
 
-static const struct intel_stolen_funcs gen8_stolen_funcs = {
+static const struct intel_stolen_funcs gen8_stolen_funcs __initconst = {
 	.base = intel_stolen_base,
 	.size = gen8_stolen_size,
 };
 
-static struct pci_device_id intel_stolen_ids[] __initdata = {
+static const struct intel_stolen_funcs gen9_stolen_funcs __initconst = {
+	.base = intel_stolen_base,
+	.size = gen9_stolen_size,
+};
+
+static const struct intel_stolen_funcs chv_stolen_funcs __initconst = {
+	.base = intel_stolen_base,
+	.size = chv_stolen_size,
+};
+
+static const struct pci_device_id intel_stolen_ids[] __initconst = {
 	INTEL_I830_IDS(&i830_stolen_funcs),
 	INTEL_I845G_IDS(&i845_stolen_funcs),
 	INTEL_I85X_IDS(&i85x_stolen_funcs),
@@ -498,7 +546,11 @@ static struct pci_device_id intel_stolen_ids[] __initdata = {
 	INTEL_HSW_D_IDS(&gen6_stolen_funcs),
 	INTEL_HSW_M_IDS(&gen6_stolen_funcs),
 	INTEL_BDW_M_IDS(&gen8_stolen_funcs),
-	INTEL_BDW_D_IDS(&gen8_stolen_funcs)
+	INTEL_BDW_D_IDS(&gen8_stolen_funcs),
+	INTEL_CHV_IDS(&chv_stolen_funcs),
+	INTEL_SKL_IDS(&gen9_stolen_funcs),
+	INTEL_BXT_IDS(&gen9_stolen_funcs),
+	INTEL_KBL_IDS(&gen9_stolen_funcs),
 };
 
 static void __init intel_graphics_stolen(int num, int slot, int func)
@@ -532,6 +584,15 @@ static void __init intel_graphics_stolen(int num, int slot, int func)
 		}
 	}
 }
+
+static void __init force_disable_hpet(int num, int slot, int func)
+{
+#ifdef CONFIG_HPET_TIMER
+	boot_hpet_disable = 1;
+	pr_info("x86/hpet: Will disable the HPET for this platform because it's not reliable\n");
+#endif
+}
+
 
 #define QFLAG_APPLY_ONCE 	0x1
 #define QFLAG_APPLIED		0x2
@@ -570,6 +631,16 @@ static struct chipset early_qrk[] __initdata = {
 	  PCI_BASE_CLASS_BRIDGE, 0, intel_remapping_check },
 	{ PCI_VENDOR_ID_INTEL, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA, PCI_ANY_ID,
 	  QFLAG_APPLY_ONCE, intel_graphics_stolen },
+	/*
+	 * HPET on the current version of the Baytrail platform has accuracy
+	 * problems: it will halt in deep idle state - so we disable it.
+	 *
+	 * More details can be found in section 18.10.1.3 of the datasheet:
+	 *
+	 *    http://www.intel.com/content/dam/www/public/us/en/documents/datasheets/atom-z8000-datasheet-vol-1.pdf
+	 */
+	{ PCI_VENDOR_ID_INTEL, 0x0f00,
+		PCI_CLASS_BRIDGE_HOST, PCI_ANY_ID, 0, force_disable_hpet},
 	{}
 };
 

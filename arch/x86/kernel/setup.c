@@ -112,6 +112,7 @@
 #include <asm/mce.h>
 #include <asm/alternative.h>
 #include <asm/prom.h>
+#include <asm/microcode.h>
 
 /*
  * max_low_pfn_mapped: highest direct mapped pfn under 4GB
@@ -309,6 +310,8 @@ static void __init reserve_brk(void)
 	_brk_start = 0;
 }
 
+u64 relocated_ramdisk;
+
 #ifdef CONFIG_BLK_DEV_INITRD
 
 static u64 __init get_ramdisk_image(void)
@@ -335,25 +338,24 @@ static void __init relocate_initrd(void)
 	u64 ramdisk_image = get_ramdisk_image();
 	u64 ramdisk_size  = get_ramdisk_size();
 	u64 area_size     = PAGE_ALIGN(ramdisk_size);
-	u64 ramdisk_here;
 	unsigned long slop, clen, mapaddr;
 	char *p, *q;
 
 	/* We need to move the initrd down into directly mapped mem */
-	ramdisk_here = memblock_find_in_range(0, PFN_PHYS(max_pfn_mapped),
-						 area_size, PAGE_SIZE);
+	relocated_ramdisk = memblock_find_in_range(0, PFN_PHYS(max_pfn_mapped),
+						   area_size, PAGE_SIZE);
 
-	if (!ramdisk_here)
+	if (!relocated_ramdisk)
 		panic("Cannot find place for new RAMDISK of size %lld\n",
-			 ramdisk_size);
+		      ramdisk_size);
 
 	/* Note: this includes all the mem currently occupied by
 	   the initrd, we rely on that fact to keep the data intact. */
-	memblock_reserve(ramdisk_here, area_size);
-	initrd_start = ramdisk_here + PAGE_OFFSET;
+	memblock_reserve(relocated_ramdisk, area_size);
+	initrd_start = relocated_ramdisk + PAGE_OFFSET;
 	initrd_end   = initrd_start + ramdisk_size;
 	printk(KERN_INFO "Allocated new RAMDISK: [mem %#010llx-%#010llx]\n",
-			 ramdisk_here, ramdisk_here + ramdisk_size - 1);
+	       relocated_ramdisk, relocated_ramdisk + ramdisk_size - 1);
 
 	q = (char *)initrd_start;
 
@@ -377,7 +379,7 @@ static void __init relocate_initrd(void)
 	printk(KERN_INFO "Move RAMDISK from [mem %#010llx-%#010llx] to"
 		" [mem %#010llx-%#010llx]\n",
 		ramdisk_image, ramdisk_image + ramdisk_size - 1,
-		ramdisk_here, ramdisk_here + ramdisk_size - 1);
+		relocated_ramdisk, relocated_ramdisk + ramdisk_size - 1);
 }
 
 static void __init early_reserve_initrd(void)
@@ -515,34 +517,34 @@ static void __init memblock_x86_reserve_range_setup_data(void)
 
 #ifdef CONFIG_KEXEC
 
+/* 16M alignment for crash kernel regions */
+#define CRASH_ALIGN            (16 << 20)
+
 /*
  * Keep the crash kernel below this limit.  On 32 bits earlier kernels
  * would limit the kernel to the low 512 MiB due to mapping restrictions.
  * On 64bit, old kexec-tools need to under 896MiB.
  */
 #ifdef CONFIG_X86_32
-# define CRASH_KERNEL_ADDR_LOW_MAX	(512 << 20)
-# define CRASH_KERNEL_ADDR_HIGH_MAX	(512 << 20)
+# define CRASH_ADDR_LOW_MAX	(512 << 20)
+# define CRASH_ADDR_HIGH_MAX	(512 << 20)
 #else
-# define CRASH_KERNEL_ADDR_LOW_MAX	(896UL<<20)
-# define CRASH_KERNEL_ADDR_HIGH_MAX	MAXMEM
+# define CRASH_ADDR_LOW_MAX	(896UL << 20)
+# define CRASH_ADDR_HIGH_MAX	MAXMEM
 #endif
 
-static void __init reserve_crashkernel_low(void)
+static int __init reserve_crashkernel_low(void)
 {
 #ifdef CONFIG_X86_64
-	const unsigned long long alignment = 16<<20;	/* 16M */
-	unsigned long long low_base = 0, low_size = 0;
+	unsigned long long base, low_base = 0, low_size = 0;
 	unsigned long total_low_mem;
-	unsigned long long base;
-	bool auto_set = false;
 	int ret;
 
-	total_low_mem = memblock_mem_size(1UL<<(32-PAGE_SHIFT));
+	total_low_mem = memblock_mem_size(1UL << (32 - PAGE_SHIFT));
+
 	/* crashkernel=Y,low */
-	ret = parse_crashkernel_low(boot_command_line, total_low_mem,
-						&low_size, &base);
-	if (ret != 0) {
+	ret = parse_crashkernel_low(boot_command_line, total_low_mem, &low_size, &base);
+	if (ret) {
 		/*
 		 * two parts from lib/swiotlb.c:
 		 * -swiotlb size: user-specified with swiotlb= or default.
@@ -552,52 +554,52 @@ static void __init reserve_crashkernel_low(void)
 		 * make sure we allocate enough extra low memory so that we
 		 * don't run out of DMA buffers for 32-bit devices.
 		 */
-		low_size = max(swiotlb_size_or_default() + (8UL<<20), 256UL<<20);
-		auto_set = true;
+		low_size = max(swiotlb_size_or_default() + (8UL << 20), 256UL << 20);
 	} else {
 		/* passed with crashkernel=0,low ? */
 		if (!low_size)
-			return;
+			return 0;
 	}
 
-	low_base = memblock_find_in_range(low_size, (1ULL<<32),
-					low_size, alignment);
-
+	low_base = memblock_find_in_range(low_size, 1ULL << 32, low_size, CRASH_ALIGN);
 	if (!low_base) {
-		if (!auto_set)
-			pr_info("crashkernel low reservation failed - No suitable area found.\n");
-
-		return;
+		pr_err("Cannot reserve %ldMB crashkernel low memory, please try smaller size.\n",
+		       (unsigned long)(low_size >> 20));
+		return -ENOMEM;
 	}
 
-	memblock_reserve(low_base, low_size);
+	ret = memblock_reserve(low_base, low_size);
+	if (ret) {
+		pr_err("%s: Error reserving crashkernel low memblock.\n", __func__);
+		return ret;
+	}
+
 	pr_info("Reserving %ldMB of low memory at %ldMB for crashkernel (System low RAM: %ldMB)\n",
-			(unsigned long)(low_size >> 20),
-			(unsigned long)(low_base >> 20),
-			(unsigned long)(total_low_mem >> 20));
+		(unsigned long)(low_size >> 20),
+		(unsigned long)(low_base >> 20),
+		(unsigned long)(total_low_mem >> 20));
+
 	crashk_low_res.start = low_base;
 	crashk_low_res.end   = low_base + low_size - 1;
 	insert_resource(&iomem_resource, &crashk_low_res);
 #endif
+	return 0;
 }
 
 static void __init reserve_crashkernel(void)
 {
-	const unsigned long long alignment = 16<<20;	/* 16M */
-	unsigned long long total_mem;
-	unsigned long long crash_size, crash_base;
+	unsigned long long crash_size, crash_base, total_mem;
 	bool high = false;
 	int ret;
 
 	total_mem = memblock_phys_mem_size();
 
 	/* crashkernel=XM */
-	ret = parse_crashkernel(boot_command_line, total_mem,
-			&crash_size, &crash_base);
+	ret = parse_crashkernel(boot_command_line, total_mem, &crash_size, &crash_base);
 	if (ret != 0 || crash_size <= 0) {
 		/* crashkernel=X,high */
 		ret = parse_crashkernel_high(boot_command_line, total_mem,
-				&crash_size, &crash_base);
+					     &crash_size, &crash_base);
 		if (ret != 0 || crash_size <= 0)
 			return;
 		high = true;
@@ -608,25 +610,25 @@ static void __init reserve_crashkernel(void)
 		/*
 		 *  kexec want bzImage is below CRASH_KERNEL_ADDR_MAX
 		 */
-		crash_base = memblock_find_in_range(alignment,
-					high ? CRASH_KERNEL_ADDR_HIGH_MAX :
-					       CRASH_KERNEL_ADDR_LOW_MAX,
-					crash_size, alignment);
+		crash_base = memblock_find_in_range(CRASH_ALIGN,
+						    high ? CRASH_ADDR_HIGH_MAX
+							 : CRASH_ADDR_LOW_MAX,
+						    crash_size, CRASH_ALIGN);
 #ifdef CONFIG_X86_64
 		/*
 		 * crashkernel=X reserve below 896M fails? Try below 4G
 		 */
 		if (!high && !crash_base)
-			crash_base = memblock_find_in_range(alignment,
+			crash_base = memblock_find_in_range(CRASH_ALIGN,
 						(1ULL << 32),
-						crash_size, alignment);
+						crash_size, CRASH_ALIGN);
 		/*
 		 * crashkernel=X reserve below 4G fails? Try MAXMEM
 		 */
 		if (!high && !crash_base)
-			crash_base = memblock_find_in_range(alignment,
-						CRASH_KERNEL_ADDR_HIGH_MAX,
-						crash_size, alignment);
+			crash_base = memblock_find_in_range(CRASH_ALIGN,
+						CRASH_ADDR_HIGH_MAX,
+						crash_size, CRASH_ALIGN);
 #endif
 		if (!crash_base) {
 			pr_info("crashkernel reservation failed - No suitable area found.\n");
@@ -637,26 +639,32 @@ static void __init reserve_crashkernel(void)
 		unsigned long long start;
 
 		start = memblock_find_in_range(crash_base,
-				 crash_base + crash_size, crash_size, 1<<20);
+					       crash_base + crash_size,
+					       crash_size, 1 << 20);
 		if (start != crash_base) {
 			pr_info("crashkernel reservation failed - memory is in use.\n");
 			return;
 		}
 	}
-	memblock_reserve(crash_base, crash_size);
+	ret = memblock_reserve(crash_base, crash_size);
+	if (ret) {
+		pr_err("%s: Error reserving crashkernel memblock.\n", __func__);
+		return;
+	}
 
-	printk(KERN_INFO "Reserving %ldMB of memory at %ldMB "
-			"for crashkernel (System RAM: %ldMB)\n",
-			(unsigned long)(crash_size >> 20),
-			(unsigned long)(crash_base >> 20),
-			(unsigned long)(total_mem >> 20));
+	if (crash_base >= (1ULL << 32) && reserve_crashkernel_low()) {
+		memblock_free(crash_base, crash_size);
+		return;
+	}
+
+	pr_info("Reserving %ldMB of memory at %ldMB for crashkernel (System RAM: %ldMB)\n",
+		(unsigned long)(crash_size >> 20),
+		(unsigned long)(crash_base >> 20),
+		(unsigned long)(total_mem >> 20));
 
 	crashk_res.start = crash_base;
 	crashk_res.end   = crash_base + crash_size - 1;
 	insert_resource(&iomem_resource, &crashk_res);
-
-	if (crash_base >= (1ULL<<32))
-		reserve_crashkernel_low();
 }
 #else
 static void __init reserve_crashkernel(void)
@@ -882,16 +890,22 @@ static void rh_check_supported(void)
 	if ((boot_cpu_data.x86_vendor == X86_VENDOR_INTEL) &&
 	    ((boot_cpu_data.x86 == 6))) {
 		switch (boot_cpu_data.x86_model) {
+		case 158: /* Kabylake-H/S */
+		case 142: /* Kabylake-U/Y */
+		case 95: /* Denverton */
 		case 94: /* Skylake-S */
 		case 87: /* Knights Landing */
 		case 86: /* Broadwell-DE SoC */
-		case 79: /* Broadwell-EP */
+		case 79: /* Broadwell-EP and EX */
 		case 78: /* Skylake-Y */
 		case 77: /* Atom Avoton */
 		case 71: /* Broadwell-H */
 		case 70: /* Crystal Well */
 		case 69: /* Haswell ULT */
 			break;
+		case 85: /* Purley 2S */
+			if (dmi_socket_count == 2)
+				break;
 		default:
 			if (boot_cpu_data.x86_model > 63) {
 				printk(KERN_CRIT
@@ -1025,6 +1039,8 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.end_data = (unsigned long) _edata;
 	init_mm.brk = _brk_end;
 
+	mpx_mm_init(&init_mm);
+
 	code_resource.start = __pa_symbol(_text);
 	code_resource.end = __pa_symbol(_etext)-1;
 	data_resource.start = __pa_symbol(_etext);
@@ -1125,6 +1141,8 @@ void __init setup_arch(char **cmdline_p)
 	if (mtrr_trim_uncached_memory(max_pfn))
 		max_pfn = e820_end_of_ram_pfn();
 
+	max_possible_pfn = max_pfn;
+
 #ifdef CONFIG_X86_32
 	/* max_low_pfn get updated here */
 	find_low_pfn_range();
@@ -1161,8 +1179,11 @@ void __init setup_arch(char **cmdline_p)
 
 	cleanup_highmap();
 
-	memblock.current_limit = ISA_END_ADDRESS;
+	memblock_set_current_limit(ISA_END_ADDRESS);
 	memblock_x86_fill();
+
+	if (efi_enabled(EFI_BOOT))
+		efi_find_mirror();
 
 	/*
 	 * The EFI specification says that boot service code won't be called
@@ -1194,7 +1215,7 @@ void __init setup_arch(char **cmdline_p)
 
 	setup_real_mode();
 
-	memblock.current_limit = get_max_mapped();
+	memblock_set_current_limit(get_max_mapped());
 	dma_contiguous_reserve(0);
 
 	/*

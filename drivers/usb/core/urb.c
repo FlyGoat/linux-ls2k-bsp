@@ -129,9 +129,8 @@ void usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor)
 	list_add_tail(&urb->anchor_list, &anchor->urb_list);
 	urb->anchor = anchor;
 
-	if (unlikely(anchor->poisoned)) {
+	if (unlikely(anchor->poisoned))
 		atomic_inc(&urb->reject);
-	}
 
 	spin_unlock_irqrestore(&anchor->lock, flags);
 }
@@ -402,7 +401,7 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		/* SuperSpeed isoc endpoints have up to 16 bursts of up to
 		 * 3 packets each
 		 */
-		if (dev->speed == USB_SPEED_SUPER) {
+		if (dev->speed >= USB_SPEED_SUPER) {
 			int     burst = 1 + ep->ss_ep_comp.bMaxBurst;
 			int     mult = USB_SS_MULT(ep->ss_ep_comp.bmAttributes);
 			max *= burst;
@@ -500,6 +499,7 @@ int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		}
 		/* too big? */
 		switch (dev->speed) {
+		case USB_SPEED_SUPER_PLUS:
 		case USB_SPEED_SUPER:	/* units are 125us */
 			/* Handle up to 2^(16-1) microframes */
 			if (urb->interval > (1 << 15))
@@ -832,7 +832,7 @@ EXPORT_SYMBOL_GPL(usb_unpoison_anchored_urbs);
  *
  * this allows all outstanding URBs to be unlinked starting
  * from the back of the queue. This function is asynchronous.
- * The unlinking is just tiggered. It may happen after this
+ * The unlinking is just triggered. It may happen after this
  * function has returned.
  *
  * This routine should not be called by a driver after its disconnect
