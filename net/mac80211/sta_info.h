@@ -562,27 +562,16 @@ struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 
 u32 sta_addr_hash(const void *key, u32 length, u32 seed);
 
-#if 0 /* Not in RHEL */
-#define _sta_bucket_idx(_tbl, _a)					\
-	rht_bucket_index(_tbl, sta_addr_hash(_a, ETH_ALEN, (_tbl)->hash_rnd))
-
-#define for_each_sta_info(local, tbl, _addr, _sta, _tmp)		\
-	rht_for_each_entry_rcu(_sta, _tmp, tbl, 			\
-			       _sta_bucket_idx(tbl, _addr),		\
-			       hash_node)				\
-	/* compare address and run code only if it matches */		\
-	if (ether_addr_equal(_sta->sta.addr, (_addr)))
-#else
-#define _sta_bucket_idx(_l, _tbl, _a)					\
-	_tbl->buckets[rhashtable_hashfn(&_l->sta_hash, _a, ETH_ALEN)]
+#define _sta_bucket_idx(_ht, _tbl, _a)					\
+	(_tbl)->buckets[sta_addr_hash(_a, ETH_ALEN, (_ht)->p.hash_rnd) & ((_tbl)->size - 1)]
 
 #define for_each_sta_info(local, tbl, _addr, _sta, _tmp)		\
 	(void) _tmp;  /* workaround unused variable error */		\
-	rht_for_each_entry_rcu(_sta, _sta_bucket_idx(local, tbl, _addr),\
+	rht_for_each_entry_rcu(_sta, _sta_bucket_idx(&(local)->sta_hash,\
+	                                             tbl, _addr),       \
 			       hash_node)				\
 	/* compare address and run code only if it matches */		\
 	if (ether_addr_equal(_sta->sta.addr, (_addr)))
-#endif
 
 /*
  * Get STA info by index, BROKEN!
