@@ -3783,18 +3783,34 @@ static bool check_boost_vol(struct hda_codec *codec, hda_nid_t nid,
 	return true;
 }
 
+#define MAX_CONNECTIONS	32
 /* look for a boost amp in a widget close to the pin */
 static unsigned int look_for_boost_amp(struct hda_codec *codec,
 				       struct nid_path *path)
 {
 	unsigned int val = 0;
-	hda_nid_t nid;
-	int depth;
+	int depth, head, cur, conn_len;
+	hda_nid_t nid, conn[MAX_CONNECTIONS];
 
 	for (depth = 0; depth < 3; depth++) {
 		if (depth >= path->depth - 1)
 			break;
 		nid = path->path[depth];
+
+		if (!depth)
+			head = nid;
+		else {
+			conn_len = snd_hda_get_connections(codec, nid, conn, MAX_CONNECTIONS);
+			if (conn_len > 1) {
+				cur = snd_hda_codec_read(codec, nid, 0, AC_VERB_GET_CONNECT_SEL, 0);
+				if (head != conn[cur]) {
+					snd_printk("hda_codec: BoostAmplifier mismatch "
+						   "(head=%x, def=%x).\n", head, conn[cur]);
+					break;
+				}
+			}
+		}
+
 		if (depth && check_boost_vol(codec, nid, HDA_OUTPUT, 0)) {
 			val = HDA_COMPOSE_AMP_VAL(nid, 3, 0, HDA_OUTPUT);
 			break;
