@@ -108,7 +108,7 @@
 	nor	a3, $0, a3
 	and	a2, a3
 	or	a2, t1
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 	or	a2, ST0_MM
 #endif
 	mtc0	a2, CP0_STATUS

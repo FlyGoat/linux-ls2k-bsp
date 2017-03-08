@@ -555,7 +555,7 @@
 #else
 		mfc0	t0, CP0_STATUS
 #endif
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 		li	t1, ST0_CU0 | ST0_MM | STATMASK
 #else
 		li	t1, ST0_CU0 | STATMASK
@@ -607,7 +607,7 @@
 #else
 		mfc0	t0, CP0_STATUS
 #endif
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CPU_LOONGSON2K)
 		li	t1, ST0_CU0 | ST0_MM | STATMASK
 #else
 		li	t1, ST0_CU0 | STATMASK
@@ -681,7 +681,7 @@
 		move	ra, t0
 #endif /* CONFIG_MIPS_MT_SMTC */
 		mfc0	t0, CP0_STATUS
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 		li	t1, ST0_CU0 | ST0_MM | (STATMASK & ~1)
 #else
 		li	t1, ST0_CU0 | (STATMASK & ~1)

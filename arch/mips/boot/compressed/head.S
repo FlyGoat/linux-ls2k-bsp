@@ -19,7 +19,7 @@
 	.cprestore
 	LEAF(start)
 start:
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 	mfc0    t0, CP0_STATUS
 	li	t1, ST0_CU
 	or      t0, t1

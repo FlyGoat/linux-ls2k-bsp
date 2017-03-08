@@ -300,6 +300,17 @@ config MACH_LOONGSON3
 	  Technology (ICT), Chinese Academy of Sciences (CAS) in the People's
 	  Republic of China. The chief architect is Professor Weiwu Hu.
 
+config MACH_LOONGSON2K
+	bool "Loongson 2K family of machines"
+	select SYS_SUPPORTS_ZBOOT
+	help
+	  This enables the support of Loongson 3 family of machines.
+
+	  Loongson 2K is a family of general-purpose MIPS64R2-compatible CPUs
+	  with multicore or SoC design developed at Institute of Computing
+	  Technology (ICT), Chinese Academy of Sciences (CAS) in the People's
+	  Republic of China. The chief architect is Professor Weiwu Hu.
+
 config MIPS_MALTA
 	bool "MIPS Malta board"
 	select ARCH_MAY_HAVE_PC_FDC
@@ -1585,6 +1596,21 @@ config CPU_LOONGSON3_GS464E
 	  The GS464E processor core implements the MIPS64R2 instruction set
 	  with Multicore design.
 
+config CPU_LOONGSON2K
+	bool "Loongson 2K CPU"
+	depends on SYS_HAS_CPU_LOONGSON2K
+	select CPU_SUPPORTS_32BIT_KERNEL
+	select CPU_SUPPORTS_64BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
+	select CPU_SUPPORTS_HUGEPAGES
+	select WEAK_ORDERING
+	select WEAK_REORDERING_BEYOND_LLSC
+	select CPU_HAS_PREFETCH
+	select GENERIC_GPIO
+	help
+		The Loongson 2k processor implements the MIPS III instruction set
+		with many extensions.
+
 config CPU_LOONGSON1
 	bool
 	select CPU_MIPS32
@@ -1612,6 +1638,9 @@ config SYS_HAS_CPU_LOONGSON2F
 	select CPU_SUPPORTS_UNCACHED_ACCELERATED
 
 config SYS_HAS_CPU_LOONGSON3
+	bool
+
+config SYS_HAS_CPU_LOONGSON2K
 	bool
 
 config SYS_HAS_CPU_LOONGSON1B

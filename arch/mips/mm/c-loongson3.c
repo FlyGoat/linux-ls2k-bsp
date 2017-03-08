@@ -362,7 +362,7 @@ static void __cpuinit r4k_blast_scache_setup(void)
 
 static inline void local_r4k___flush_cache_all(void * args)
 {
-#if defined(CONFIG_CPU_LOONGSON2)
+#if defined(CONFIG_CPU_LOONGSON2) || defined(CONFIG_CPU_LOONGSON2K)
 	r4k_blast_scache();
 	return;
 #endif
@@ -1007,6 +1007,7 @@ static void __cpuinit probe_pcache(void)
 		break;
 
 	case CPU_LOONGSON3:
+	case CPU_LOONGSON2K:
 		config1 = read_c0_config1();
 		if ((lsize = ((config1 >> 19) & 7)))
 			c->icache.linesz = 2 << lsize;
@@ -1294,7 +1295,9 @@ static void __init loongson3_sc_init(void)
 
 	c->scache.waysize = scache_size / c->scache.ways;
 	/* Loongson-3 has 4 cores, 1MB scache for each. scaches are shared */
+#ifdef CONFIG_CPU_LOONGSON3
 	scache_size *= 4;
+#endif
 	c->scache.waybit = 0;
 	pr_info("Unified secondary cache %ldkB %s, linesize %d bytes.\n",
 	       scache_size >> 10, way_string[c->scache.ways], c->scache.linesz);
@@ -1357,6 +1360,7 @@ static void __cpuinit setup_scache(void)
 		return;
 #endif
 	case CPU_LOONGSON3:
+	case CPU_LOONGSON2K:
 		loongson3_sc_init();
 		return;
 

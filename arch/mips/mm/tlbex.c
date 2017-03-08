@@ -619,6 +619,7 @@ static void __cpuinit build_tlb_write_entry(u32 **p, struct uasm_label **l,
 	case CPU_BMIPS5000:
 	case CPU_LOONGSON2:
 	case CPU_LOONGSON3:
+	case CPU_LOONGSON2K:
 	case CPU_R5500:
 		if (m4kc_tlbp_war())
 			uasm_i_nop(p);
@@ -893,8 +894,8 @@ build_get_pmde64(u32 **p, struct uasm_label **l, struct uasm_reloc **r,
 		if (cpu_has_ldpte)
 			UASM_i_MFC0(p, ptr, 5, 5);
 		else
-			UASM_i_MFC0(p, ptr, 31, pgd_reg);
 #endif
+			UASM_i_MFC0(p, ptr, 31, pgd_reg);
 	} else {
 		/*
 		 * &pgd << 11 stored in CONTEXT [23..63].
@@ -1919,8 +1920,8 @@ static void __cpuinit build_r4000_setup_pgd(void)
 		if (cpu_has_ldpte)
 			UASM_i_MTC0(&p, a0, 5, 5);
 		else
-			UASM_i_MTC0(&p, a0, 31, pgd_reg);
 #endif
+			UASM_i_MTC0(&p, a0, 31, pgd_reg);
 	}
 	if (p - tlbmiss_handler_setup_pgd_array > ARRAY_SIZE(tlbmiss_handler_setup_pgd_array))
 		panic("tlbmiss_handler_setup_pgd_array space exceeded");
