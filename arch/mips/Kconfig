@@ -879,6 +879,7 @@ source "arch/mips/cavium-octeon/Kconfig"
 source "arch/mips/loongson/Kconfig"
 source "arch/mips/loongson1/Kconfig"
 source "arch/mips/loongson3/Kconfig"
+source "arch/mips/loongson2/ls2k/Kconfig"
 source "arch/mips/netlogic/Kconfig"
 
 endmenu
@@ -2524,6 +2525,13 @@ config GENERIC_GPIO
 config LS2H_PCIE
 	bool "Loongson2H PCI-Express Controller"
 	depends on PCI && LS2H_SB
+	help
+	  Make use of the Loongson2H PCI-Express Controller.
+
+config LS2K_PCIE
+	bool "Loongson2K PCI-Express Controller"
+	depends on PCI && CPU_LOONGSON2K
+	default y
 	help
 	  Make use of the Loongson2H PCI-Express Controller.
 

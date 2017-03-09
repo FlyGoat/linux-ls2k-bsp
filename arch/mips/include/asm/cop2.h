@@ -11,7 +11,7 @@
 
 #include <linux/notifier.h>
 
-#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_LOONGSON_GUEST_OS)
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_LOONGSON_GUEST_OS) || defined(CONFIG_CPU_LOONGSON2K)
 
 #define cop2_save(r)
 #define cop2_restore(r)

@@ -16,6 +16,7 @@ platforms += lasat
 platforms += loongson
 platforms += loongson1
 platforms += loongson3
+platforms += loongson2/ls2k
 platforms += mti-malta
 platforms += mti-sead3
 platforms += netlogic

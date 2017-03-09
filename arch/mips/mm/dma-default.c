@@ -352,6 +352,10 @@ EXPORT_SYMBOL(dma_cache_sync);
 
 dma_addr_t mips_unity_phys_to_dma(struct device *dev, phys_addr_t paddr)
 {
+
+#ifdef CONFIG_CPU_LOONGSON2K
+	return paddr;
+#else
 	long nid;
 	dma_addr_t daddr;
 
@@ -364,10 +368,14 @@ dma_addr_t mips_unity_phys_to_dma(struct device *dev, phys_addr_t paddr)
 	daddr = ((nid << 44 ) ^ daddr) | (nid << 37);
 #endif
 	return daddr;
+#endif
 }
 
 phys_addr_t mips_unity_dma_to_phys(struct device *dev, dma_addr_t daddr)
 {
+#ifdef CONFIG_CPU_LOONGSON2K
+	return  daddr ;
+#else
 	long nid;
 
 	daddr = (daddr < 0x90000000 && daddr >= 0x80000000) ?
@@ -377,6 +385,7 @@ phys_addr_t mips_unity_dma_to_phys(struct device *dev, dma_addr_t daddr)
 	daddr = ((nid << 37 ) ^ daddr) | (nid << 44);
 #endif
 	return daddr;
+#endif
 }
 
 struct mips_dma_map_ops mips_default_dma_map_ops = {
