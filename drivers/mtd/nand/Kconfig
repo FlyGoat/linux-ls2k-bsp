@@ -99,6 +99,12 @@ config MTD_NAND_LS2H
 	help
           Support for NAND flash on Loongson2H SouthBridge and SoC.
 
+config MTD_NAND_LS2K
+	tristate "NAND Flash device on Loongson2K"
+	depends on MACH_LOONGSON2K
+	help
+          Support for NAND flash on Loongson2H SouthBridge and SoC.
+
 config MTD_NAND_OMAP_BCH
 	depends on MTD_NAND && MTD_NAND_OMAP2 && ARCH_OMAP3
 	tristate "Enable support for hardware BCH error correction"
