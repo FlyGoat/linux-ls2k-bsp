@@ -18,6 +18,7 @@
 #include <dma-coherence.h>
 #include <ls2h/ls2h.h>
 #include <loongson.h>
+#include <linux/msi.h>
 
 #define MEMSIZE_4G 0x100000000
 extern void ls2h_init_irq(void);
@@ -34,6 +35,8 @@ extern void ls2h_init_swiotlb(void);
 extern void ls2h_pcie_init(void);
 extern int ls2h_pcie_map_irq(struct pci_dev *dev, u8 slot, u8 pin);
 extern int ls2h_init_pcie_bios(struct pci_dev *pdev);
+extern int ls2h_setup_msi_irq(struct pci_dev *pdev, struct msi_desc *desc);
+extern void ls2h_teardown_msi_irq(unsigned int irq);
 #endif /* CONFIG_LS2H_PCIE */
 
 static void __init ls2h_early_config(void)
@@ -156,6 +159,10 @@ const struct south_bridge ls2h_south_bridge = {
 #endif
 	.sb_pcibios_init	= ls2h_init_pcie_bios,
 	.sb_pcibios_map_irq	= ls2h_pcie_map_irq,
+#ifdef CONFIG_PCI_MSI
+	.sb_setup_msi_irq	= ls2h_setup_msi_irq,
+	.sb_teardown_msi_irq	= ls2h_teardown_msi_irq,
+#endif
 #endif /* CONFIG_LS2H_PCIE */
 	.sb_arch_initcall	= ls2h_arch_initcall,
 	.sb_device_initcall	= ls2h_device_initcall,

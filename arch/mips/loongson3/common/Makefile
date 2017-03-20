@@ -34,3 +34,4 @@ obj-$(CONFIG_HOTPLUG_CPU)	+= cpuplug_war.o
 obj-$(CONFIG_NUMA)	+= numa.o
 
 obj-$(CONFIG_SUSPEND) += pm.o sleep.o acpi_init.o
+obj-$(CONFIG_PCI_MSI) += pci_msi.o

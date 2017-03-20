@@ -6,6 +6,9 @@ extern void rs780_init_irq(void);
 extern void rs780_irq_dispatch(unsigned int pending);
 extern int loongson_rtc_platform_init(void);
 extern u64 io_base_regs_addr;
+extern int rs780e_setup_msi_irq(struct pci_dev *pdev, struct msi_desc *desc);
+extern void rs780e_teardown_msi_irq(unsigned int irq);
+
 #ifdef CONFIG_SWIOTLB
 extern void rs780_plat_swiotlb_setup(void);
 #endif
@@ -89,4 +92,8 @@ const struct south_bridge rs780_south_bridge = {
 	.sb_irq_dispatch	= rs780_irq_dispatch,
 	.sb_arch_initcall	= rs780_arch_initcall,
 	.sb_device_initcall	= rs780_device_initcall,
+#ifdef CONFIG_PCI_MSI
+	.sb_setup_msi_irq	= rs780e_setup_msi_irq,
+	.sb_teardown_msi_irq	= rs780e_teardown_msi_irq,
+#endif
 };

@@ -59,6 +59,11 @@ static unsigned int cached_irq_mask = 0xffff;
 #define cached_master_mask	(cached_irq_mask)
 #define cached_slave_mask	(cached_irq_mask >> 8)
 
+#ifdef CONFIG_CPU_LOONGSON3
+extern int ht_irq_mask[8];
+#define HT_control_regs_base 0x90000EFDFB000000
+#define HT_irq_enable_reg0	*(volatile unsigned int *)(HT_control_regs_base + 0xA0)	
+#endif
 static void disable_8259A_irq(struct irq_data *d)
 {
 	unsigned int mask, irq = d->irq - I8259A_IRQ_BASE;
@@ -67,6 +72,10 @@ static void disable_8259A_irq(struct irq_data *d)
 	mask = 1 << irq;
 	raw_spin_lock_irqsave(&i8259A_lock, flags);
 	cached_irq_mask |= mask;
+#ifdef CONFIG_CPU_LOONGSON3
+	HT_irq_enable_reg0 = ht_irq_mask[0] = (HT_irq_enable_reg0&0xffff0000)|(~cached_irq_mask&0xffff);
+	HT_irq_enable_reg0;
+#endif
 	if (irq & 8)
 		outb(cached_slave_mask, PIC_SLAVE_IMR);
 	else
@@ -82,6 +91,10 @@ static void enable_8259A_irq(struct irq_data *d)
 	mask = ~(1 << irq);
 	raw_spin_lock_irqsave(&i8259A_lock, flags);
 	cached_irq_mask &= mask;
+#ifdef CONFIG_CPU_LOONGSON3
+	HT_irq_enable_reg0 = ht_irq_mask[0] = (HT_irq_enable_reg0&0xffff0000)|(~cached_irq_mask&0xffff);
+	HT_irq_enable_reg0;
+#endif
 	if (irq & 8)
 		outb(cached_slave_mask, PIC_SLAVE_IMR);
 	else
@@ -169,6 +182,10 @@ static void mask_and_ack_8259A(struct irq_data *d)
 		goto spurious_8259A_irq;
 	cached_irq_mask |= irqmask;
 
+#ifdef CONFIG_CPU_LOONGSON3
+	HT_irq_enable_reg0 = ht_irq_mask[0] = (HT_irq_enable_reg0&0xffff0000)|(~cached_irq_mask&0xffff);
+	HT_irq_enable_reg0;
+#endif
 handle_real_irq:
 	if (irq & 8) {
 		inb(PIC_SLAVE_IMR);	/* DUMMY - (do we need this?) */

@@ -10,3 +10,4 @@ obj-$(CONFIG_RS780_HPET) += hpet.o
 obj-$(CONFIG_SWIOTLB) += swiotlb.o
 
 obj-$(CONFIG_SUSPEND) += pm.o
+obj-$(CONFIG_PCI_MSI) += pci_msi.o

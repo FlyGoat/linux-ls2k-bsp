@@ -10,3 +10,4 @@ ifdef CONFIG_LS2H_PCIE
 obj-$(CONFIG_SWIOTLB) 	+= swiotlb.o
 endif
 obj-$(CONFIG_SUSPEND) += pm.o
+obj-$(CONFIG_PCI_MSI) += pci_msi.o

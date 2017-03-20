@@ -33,6 +33,7 @@ config LOONGSON_MACH3X
 	select SYNC_R4K
 	select LOONGSON_MC146818
 	select ARCH_REQUIRE_GPIOLIB
+	select ARCH_SUPPORTS_MSI
 	help
 		Generic Loongson 3 family machines utilize the 3A/3B revision of
 		Loongson processor and RS780/SBX00/2H chipset.
@@ -103,5 +104,10 @@ config LOONGSON_DMA_NONCOHERENT
 	bool "Loongson dma noncoherent"
 	select DMA_NONCOHERENT
 	default n
+
+config PCI_MSI_IRQ_BALANCE
+        bool "pci msi irq balance"
+        depends on PCI_MSI
+        default y
 
 endif # MACH_LOONGSON3
