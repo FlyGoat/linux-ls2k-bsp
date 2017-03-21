@@ -274,6 +274,8 @@ static bool radeon_msi_ok(struct radeon_device *rdev)
 	return true;
 }
 
+extern void radeon_recover_callback(struct work_struct *work);
+
 /**
  * radeon_irq_kms_init - init driver interrupt info
  *
@@ -315,6 +317,9 @@ int radeon_irq_kms_init(struct radeon_device *rdev)
 		flush_delayed_work(&rdev->hotplug_work);
 		return r;
 	}
+
+	rdev->need_recover = 0;
+	INIT_DEFERRABLE_WORK(&rdev->recover_work, radeon_recover_callback);
 
 	DRM_INFO("radeon: irq initialized.\n");
 	return 0;
