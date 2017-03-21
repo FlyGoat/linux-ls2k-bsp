@@ -652,6 +652,7 @@ int hibernate(void)
 	sys_sync();
 	printk("done.\n");
 
+	system_state = SYSTEM_SUSPEND_DISK;
 	error = freeze_processes();
 	if (error)
 		goto Exit;
@@ -688,10 +689,12 @@ int hibernate(void)
 	}
 
  Free_bitmaps:
+	system_state = SYSTEM_RUNNING;
 	free_basic_memory_bitmaps();
  Thaw:
 	unlock_device_hotplug();
 	thaw_processes();
+	system_state = SYSTEM_RUNNING;
 
 	/* Don't bother checking whether freezer_test_done is true */
 	freezer_test_done = false;
