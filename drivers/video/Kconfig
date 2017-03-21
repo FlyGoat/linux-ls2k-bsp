@@ -2016,6 +2016,15 @@ config LS2H_GPU_SB
 	depends on (LS2H_SB && LS2H_GPU)
 	default y
 
+config FB_LS2K
+	tristate "Loongson2K Frame Buffer Support"
+	depends on FB && MACH_LOONGSON2K
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	---help---
+	  Frame buffer driver for the 2H Southbridge.
+
 config FB_SH_MOBILE_LCDC
 	tristate "SuperH Mobile LCDC framebuffer support"
 	depends on FB && (SUPERH || ARCH_SHMOBILE) && HAVE_CLK
