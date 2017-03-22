@@ -1734,7 +1734,9 @@ struct task_struct {
 	#ifdef CONFIG_SMP
 		struct rb_node pushable_dl_tasks;
 	#endif
+	#ifdef CONFIG_SCHEDSTATS
 	struct sched_statistics statistics;
+	#endif
 #endif /* __GENKSYMS__ */
 };
 

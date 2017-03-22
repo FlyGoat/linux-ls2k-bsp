@@ -7536,10 +7536,12 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 		if (!se)
 			goto err_free_rq;
 
+#ifdef CONFIG_SCHEDSTATS
 		se->statistics = kzalloc_node(sizeof(struct sched_statistics),
 					      GFP_KERNEL, cpu_to_node(i));
 		if (!se->statistics)
 			goto err_free_se;
+#endif
 
 		init_cfs_rq(cfs_rq);
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
