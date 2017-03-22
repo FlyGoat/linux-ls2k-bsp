@@ -59,6 +59,7 @@
 #else
 
 #if IS_BUILTIN(CONFIG_RH_KABI_SIZE_ALIGN_CHECKS)
+#ifndef CONFIG_MACH_LOONGSON
 #define __RH_KABI_CHECK_SIZE_ALIGN(_orig, _new)				\
 	union {								\
 		_Static_assert(sizeof(struct{_new;}) <= sizeof(struct{_orig;}), \
@@ -66,6 +67,7 @@
 		_Static_assert(__alignof__(struct{_new;}) <= __alignof__(struct{_orig;}), \
 			       "kabi alignof test panic");		\
 	}
+#endif
 #else
 #define __RH_KABI_CHECK_SIZE_ALIGN(_orig, _new)
 #endif

@@ -213,10 +213,12 @@ struct nf_bridge_info {
 #else
 #define OLD_PHYSOUTDEV_OFFSET 12
 #endif
+#ifndef CONFIG_MACH_LOONGSON
 _Static_assert(offsetof(struct nf_bridge_info, physindev) == 8,
 	       "KABI breakage: physindev changed position");
 _Static_assert(offsetof(struct nf_bridge_info, physoutdev) == OLD_PHYSOUTDEV_OFFSET,
 	       "KABI breakage: physoutdev changed position");
+#endif
 #endif
 
 #endif
