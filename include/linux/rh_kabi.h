@@ -70,6 +70,17 @@
 #define __RH_KABI_CHECK_SIZE_ALIGN(_orig, _new)
 #endif
 
+#ifdef CONFIG_MACH_LOONGSON
+# define _RH_KABI_REPLACE(_orig, _new)		_new
+# define _RH_KABI_REPLACE_UNSAFE(_orig, _new)	_new
+# define _RH_KABI_DEPRECATE(_type, _orig)	_type rh_reserved_##_orig
+# define _RH_KABI_DEPRECATE_FN(_type, _orig, _args...) \
+	_type (* rh_reserved_##_orig)(_args)
+
+# define RH_KABI_EXTEND(_new)			_new;
+# define RH_KABI_FILL_HOLE(_new)		_new;
+# define RH_KABI_RENAME(_orig, _new)		_new
+#else
 # define _RH_KABI_REPLACE(_orig, _new)			\
 	union {						\
 		_new;					\
@@ -90,6 +101,7 @@
 /* Warning, only use if a hole exists for _all_ arches. Use pahole to verify */
 # define RH_KABI_FILL_HOLE(_new)       	_new;
 # define RH_KABI_RENAME(_orig, _new)		_new
+#endif /* CONFIG_MACH_LOONGSON */
 
 #endif /* __GENKSYMS__ */
 
