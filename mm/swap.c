@@ -972,8 +972,10 @@ void release_pages(struct page **pages, int nr, bool cold)
 		if (!put_page_testzero(page))
 			continue;
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 		VM_BUG_ON_PAGE(check_mmu_gather &&
 			       trans_huge_mmu_gather_count(page), page);
+#endif
 
 		if (PageLRU(page)) {
 			if (!was_thp)
