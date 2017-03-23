@@ -1315,6 +1315,8 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		ahci_pci_bar = AHCI_PCI_BAR_STA2X11;
 	else if (pdev->vendor == 0x1c44 && pdev->device == 0x8000)
 		ahci_pci_bar = AHCI_PCI_BAR_ENMOTUS;
+	else if (pdev->vendor == PCI_VENDOR_ID_LOONGSON && pdev->device == PCI_DEVICE_ID_LOONGSON_SATA)
+		ahci_pci_bar = 0;
 
 	/* acquire resources */
 	rc = pcim_enable_device(pdev);
