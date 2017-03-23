@@ -353,7 +353,7 @@ struct ls2k_nand_plat_data {
 	u32 csrdy;
 };
 
-struct ls2k_gpu_plat_data {
+struct ls2h_gpu_plat_data {
         u32     chip_ver;
         u32     vram_kind; /*gpu vram kind, 0x01: vram in 2H DDR; 0x02: vram in 3A DDR */
         u32     board_kind; /*gpu board kind, 0x01: 2HSOC; 0x02: 3A2H */
