@@ -2953,6 +2953,8 @@ static void __mem_cgroup_commit_charge(struct mem_cgroup *memcg,
 	memcg_check_events(memcg, page);
 }
 
+static DEFINE_MUTEX(memcg_limit_mutex);
+
 #ifdef CONFIG_MEMCG_KMEM
 static inline bool memcg_can_account_kmem(struct mem_cgroup *memcg)
 {
@@ -3426,8 +3428,6 @@ out:
 	mutex_unlock(&memcg_cache_mutex);
 	return new_cachep;
 }
-
-static DEFINE_MUTEX(memcg_limit_mutex);
 
 void kmem_cache_destroy_memcg_children(struct kmem_cache *s)
 {
