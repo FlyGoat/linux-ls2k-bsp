@@ -49,9 +49,16 @@
 #include <linux/timer.h>
 #include <sound/core.h>
 #include <sound/initval.h>
+#include <linux/pci.h>
 #include "hda_codec.h"
 
+#ifdef CONFIG_MACH_LOONGSON2K
+#include <ls2k.h>
+#define LS2H_VER3 LS2K_VER3
+#define LS2H_VER2 LS2K_VER2
+#else
 #include <ls2h/ls2h.h>
+#endif
 /* ls2h: enable rirb interrupt. */
 #define EN_RIRBINT 0
 
@@ -73,7 +80,7 @@
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static char *model[SNDRV_CARDS];
 static int position_fix[SNDRV_CARDS];
 static int bdl_pos_adj[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = -1 };
@@ -2667,6 +2674,14 @@ static int azx_probe(struct platform_device *devptr)
 		ls_writew = writew;
 		ls_writeb = writeb;
 	}
+#else
+		ls_readl = readl;
+		ls_readw = readw;
+		ls_readb = readb;
+
+		ls_writel = writel;
+		ls_writew = writew;
+		ls_writeb = writeb;
 #endif
 
 	if (dev >= SNDRV_CARDS)
@@ -2764,3 +2779,88 @@ static void __exit alsa_card_azx_exit(void)
 
 module_init(alsa_card_azx_init)
 module_exit(alsa_card_azx_exit)
+
+/*
+ * HD Audio
+ */
+static struct generic_plat_data ls2h_hda_data = {
+	.chip_ver = LS2H_VER3,
+};
+
+static struct resource ls2k_audio_resources[] = {
+	[0] = {
+		.flags = IORESOURCE_MEM,
+	},
+	[1] = {
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device ls2k_audio_device = {
+	.name           = "ls2h-audio",
+	.id             = 0,
+	.num_resources  = ARRAY_SIZE(ls2k_audio_resources),
+	.resource       = ls2k_audio_resources,
+	.dev		= {
+		.platform_data = &ls2h_hda_data,
+	}
+};
+
+/* PCI IDs */
+static DEFINE_PCI_DEVICE_TABLE(azx_ids) = {
+	/* CPT */
+	{ PCI_DEVICE(PCI_VENDOR_ID_LOONGSON, PCI_DEVICE_ID_LOONGSON_HDA), },
+	{ 0, }
+};
+MODULE_DEVICE_TABLE(pci, azx_ids);
+
+static int ls2k_hda_probe(struct pci_dev *pdev,
+		     const struct pci_device_id *pci_id)
+{
+	int ret;
+
+	
+	/* Enable device in PCI config */
+	ret = pci_enable_device(pdev);
+	if (ret < 0) {
+		printk(KERN_ERR "ls2k hda (%s): Cannot enable PCI device\n",
+		       pci_name(pdev));
+		goto err_out;
+	}
+
+	/* request the mem regions */
+	ret = pci_request_region(pdev, 0, "ls2k hda io");
+	if (ret < 0) {
+		printk( KERN_ERR "ls2k hda (%s): cannot request region 0.\n",
+			pci_name(pdev));
+		goto err_out;
+	}
+
+	ls2k_audio_resources[0].start = pci_resource_start (pdev, 0);
+	ls2k_audio_resources[0].end = pci_resource_end(pdev, 0);
+	ls2k_audio_resources[1].start = pdev->irq;
+	ls2k_audio_resources[1].end = pdev->irq;
+
+
+	platform_device_register(&ls2k_audio_device);
+
+
+	return 0;
+err_out:
+	return ret;
+}
+
+static void ls2k_hda_remove(struct pci_dev *pdev)
+{
+	pci_release_region(pdev, 0);
+}
+
+/* pci_driver definition */
+static struct pci_driver azx_driver = {
+	.name = KBUILD_MODNAME,
+	.id_table = azx_ids,
+	.probe = ls2k_hda_probe,
+	.remove = ls2k_hda_remove,
+};
+
+module_pci_driver(azx_driver);
