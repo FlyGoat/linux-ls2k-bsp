@@ -36,7 +36,11 @@
 #endif
 
 #include "ls2hgpu_driver.h"
+#ifdef CONFIG_MACH_LOONGSON2K
+#include <ls2k.h>
+#else
 #include <ls2h/ls2h.h>
+#endif
 
 #define ALL_IN_2H
 

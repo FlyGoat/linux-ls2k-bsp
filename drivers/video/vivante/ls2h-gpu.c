@@ -60,7 +60,7 @@ static struct pci_device_id ls2k_gpu_devices[] = {
 /*
  * GPU
  */
-static struct ls2k_gpu_plat_data ls2k_gpu_data = {
+static struct ls2h_gpu_plat_data ls2k_gpu_data = {
 	.chip_ver = LS2H_VER3,
 	.vram_kind = LS2H_VRAM_2H_DDR,
 	.board_kind = LS3A_2H_GPU,
