@@ -14,6 +14,7 @@
 #include <asm/mipsregs.h>
 #include <asm/processor.h>
 #include <asm/prom.h>
+#include <asm/mmzone.h>
 
 unsigned int vced_count, vcei_count;
 extern void increase_cores(int cur_cpus);
