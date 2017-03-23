@@ -2510,7 +2510,7 @@ source "drivers/video/exynos/Kconfig"
 source "drivers/video/mmp/Kconfig"
 source "drivers/video/backlight/Kconfig"
 
-if LS2H_SB
+if LS2H_SB || MACH_LOONGSON2K
 source "drivers/video/vivante/Kconfig"
 endif
 
