@@ -1128,6 +1128,7 @@ static struct gadget_wrapper *alloc_wrapper(
 	d->gadget.is_otg = dwc_otg_pcd_is_otg(otg_dev->pcd);
 
 	d->driver = 0;
+#if 0
 	/* Register the gadget device */
 	retval = device_register(&d->gadget.dev);
 	if (retval != 0) {
@@ -1135,6 +1136,7 @@ static struct gadget_wrapper *alloc_wrapper(
 		DWC_FREE(d);
 		return NULL;
 	}
+#endif
 
 	return d;
 }
