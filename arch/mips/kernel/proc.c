@@ -30,7 +30,9 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 
 #ifdef CONFIG_SMP
 	if (!cpu_online(n)) {
+#ifdef CONFIG_CPU_LOONGSON3
 		if (!((nr_cpus_online <= n) && (n < nr_cpus_loongson)))
+#endif
 			return 0;
 	}
 #endif

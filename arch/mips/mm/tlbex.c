@@ -2741,7 +2741,7 @@ void __cpuinit build_tlb_refill_handler(void)
 	 * needed once.
 	 */
 	static int run_once = 0;
-	bool cpu_has_fasttlb;
+	bool cpu_has_fasttlb = 0;
 #ifdef CONFIG_CPU_LOONGSON3
 	if (cpu_has_ldpte)
 		cpu_has_fasttlb = 1;
