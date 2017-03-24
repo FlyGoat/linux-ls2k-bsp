@@ -246,11 +246,11 @@ int nvme_submit_user_cmd(struct request_queue *q, struct nvme_command *cmd,
 
 int nvme_identify_ctrl(struct nvme_ctrl *dev, struct nvme_id_ctrl **id)
 {
-	struct nvme_command c = {
-		.identify.opcode = nvme_admin_identify,
-		.identify.cns = cpu_to_le32(1),
-	};
+	struct nvme_command c = { };
 	int error;
+
+	c.identify.opcode = nvme_admin_identify;
+	c.identify.cns = cpu_to_le32(1);
 
 	*id = kmalloc(sizeof(struct nvme_id_ctrl), GFP_KERNEL);
 	if (!*id)
@@ -276,11 +276,11 @@ static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned nsid, __le32 *n
 int nvme_identify_ns(struct nvme_ctrl *dev, unsigned nsid,
 		struct nvme_id_ns **id)
 {
-	struct nvme_command c = {
-		.identify.opcode = nvme_admin_identify,
-		.identify.nsid = cpu_to_le32(nsid),
-	};
+	struct nvme_command c = { };
 	int error;
+
+	c.identify.opcode = nvme_admin_identify;
+	c.identify.nsid = cpu_to_le32(nsid);
 
 	*id = kmalloc(sizeof(struct nvme_id_ns), GFP_KERNEL);
 	if (!*id)
@@ -323,15 +323,14 @@ int nvme_set_features(struct nvme_ctrl *dev, unsigned fid, unsigned dword11,
 
 int nvme_get_log_page(struct nvme_ctrl *dev, struct nvme_smart_log **log)
 {
-	struct nvme_command c = {
-		.common.opcode = nvme_admin_get_log_page,
-		.common.nsid = cpu_to_le32(0xFFFFFFFF),
-		.common.cdw10[0] = cpu_to_le32(
-			(((sizeof(struct nvme_smart_log) / 4) - 1) << 16) |
-			 NVME_LOG_SMART),
-	};
+	struct nvme_command c = { };
 	int error;
 
+	c.common.opcode = nvme_admin_get_log_page;
+	c.common.nsid = cpu_to_le32(0xFFFFFFFF);
+	c.common.cdw10[0] = cpu_to_le32(
+			(((sizeof(struct nvme_smart_log) / 4) - 1) << 16) |
+			 NVME_LOG_SMART);
 	*log = kmalloc(sizeof(struct nvme_smart_log), GFP_KERNEL);
 	if (!*log)
 		return -ENOMEM;
