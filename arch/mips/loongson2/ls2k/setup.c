@@ -12,6 +12,8 @@
 #include <asm/wbflush.h>
 
 #include <loongson.h>
+#include <linux/spinlock.h>
+DEFINE_SPINLOCK(ls2k_io_lock);
 
 #ifdef CONFIG_VT
 #include <linux/console.h>
