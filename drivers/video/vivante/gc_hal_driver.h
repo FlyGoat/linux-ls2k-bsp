@@ -47,6 +47,7 @@ extern "C" {
 
 #define LS2H_SOC_GPU 	0x01
 #define LS3A_2H_GPU	0x02
+#define LS2K_SOC_GPU 	0x03
 
 extern unsigned int chip_version;
 extern unsigned int vram_kind;

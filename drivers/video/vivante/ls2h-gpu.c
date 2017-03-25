@@ -63,7 +63,7 @@ static struct pci_device_id ls2k_gpu_devices[] = {
 static struct ls2h_gpu_plat_data ls2k_gpu_data = {
 	.chip_ver = LS2H_VER3,
 	.vram_kind = LS2H_VRAM_2H_DDR,
-	.board_kind = LS3A_2H_GPU,
+	.board_kind = LS2K_SOC_GPU,
 };
 
 static struct resource ls2k_gpu_resources[] = {
@@ -77,8 +77,8 @@ static struct resource ls2k_gpu_resources[] = {
 	},
 	[2] = {
 		.name	= "gpu_mem",
-		.start	= 0xe0004000000,
-		.end	= 0xe000bffffff,
+		.start	= 0x0000a000000,
+		.end	= 0x0000cffffff,
 		.flags	= IORESOURCE_MEM,
 	},
 };

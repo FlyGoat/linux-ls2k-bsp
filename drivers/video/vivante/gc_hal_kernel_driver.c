@@ -1030,7 +1030,8 @@ int  ls2hgpu_gpu_probe(struct platform_device *pdev)
     }
 
     registerMemBase = res->start;
-    registerMemSize = res->end - res->start + 1;
+//    registerMemSize = res->end - res->start + 1;
+    registerMemSize = 0x800;
 
     res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "gpu_mem");
     if (!res)
@@ -1056,6 +1057,8 @@ int  ls2hgpu_gpu_probe(struct platform_device *pdev)
     if((LS3A_2H_GPU == board_kind) && (LS2H_VRAM_3A_DDR == vram_kind))
     	device_addr = (bus_addr & 0xffffffff) | 0x40000000;
     if((LS3A_2H_GPU == board_kind) && (LS2H_VRAM_2H_DDR == vram_kind))
+    	device_addr = bus_addr & 0xffffffff;
+    if(LS2K_SOC_GPU == board_kind)
     	device_addr = bus_addr & 0xffffffff;
 
 #ifdef ALL_IN_2H

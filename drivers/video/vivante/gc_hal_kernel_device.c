@@ -389,7 +389,7 @@ gckGALDEVICE_Construct(
         /* Set up register memory region. */
         if (physical != 0)
         {
-            mem_region = request_mem_region(
+/*            mem_region = request_mem_region(
                 physical, device->requestedRegisterMemSizes[i], "galcore register region"
                 );
 
@@ -404,7 +404,7 @@ gckGALDEVICE_Construct(
 
                 gcmkONERROR(gcvSTATUS_OUT_OF_RESOURCES);
             }
-
+*/
             device->registerBases[i] = (gctPOINTER) ioremap_nocache(
                 physical, device->requestedRegisterMemSizes[i]);
 
@@ -850,7 +850,7 @@ gckGALDEVICE_Construct(
             else
             {
 /*hb, 3a2h mod, gpu mem allocate in 2H ddr, so we cannot request mem region*/
-	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind )
+	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind)
 	{
                 mem_region = request_mem_region(
                     ContiguousBase, ContiguousSize, "galcore managed memory"
