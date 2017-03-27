@@ -77,7 +77,7 @@ SUBSYS(perf)
 
 /* */
 
-#ifdef ENABLE_NETPRIO_NOW
+#ifdef CONFIG_NETPRIO_CGROUP
 SUBSYS(net_prio)
 #endif
 
