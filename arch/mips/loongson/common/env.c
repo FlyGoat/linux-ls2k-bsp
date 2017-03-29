@@ -74,6 +74,8 @@ extern struct platform_controller_hub rs780_pch;
 
 u32 cpu_clock_freq;
 EXPORT_SYMBOL(cpu_clock_freq);
+EXPORT_SYMBOL(loongson_ec_sci_irq);
+EXPORT_SYMBOL(loongson_pch);
 
 #define parse_even_earlier(res, option, p)				\
 do {									\
