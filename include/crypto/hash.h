@@ -37,6 +37,11 @@ struct ahash_request {
 	void *__ctx[] CRYPTO_MINALIGN_ATTR;
 };
 
+#define AHASH_REQUEST_ON_STACK(name, ahash) \
+	char __##name##_desc[sizeof(struct ahash_request) + \
+		crypto_ahash_reqsize(ahash)] CRYPTO_MINALIGN_ATTR; \
+	struct ahash_request *name = (void *)__##name##_desc
+
 struct ahash_alg {
 	int (*init)(struct ahash_request *req);
 	int (*update)(struct ahash_request *req);
@@ -233,6 +238,12 @@ static inline struct ahash_request *ahash_request_alloc(
 static inline void ahash_request_free(struct ahash_request *req)
 {
 	kzfree(req);
+}
+
+static inline void ahash_request_zero(struct ahash_request *req)
+{
+	memzero_explicit(req, sizeof(*req) +
+			      crypto_ahash_reqsize(crypto_ahash_reqtfm(req)));
 }
 
 static inline struct ahash_request *ahash_request_cast(
