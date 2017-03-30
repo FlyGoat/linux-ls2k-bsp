@@ -23,6 +23,13 @@
 #include <asm/war.h>
 
 /*
+ * clear_bit() doesn't provide any barrier for the compiler.
+ */
+#define smp_mb__before_clear_bit()	smp_mb__before_llsc()
+#define smp_mb__after_clear_bit()	smp_llsc_mb()
+
+
+/*
  * These are the "slower" versions of the functions and are in bitops.c.
  * These functions call raw_local_irq_{save,restore}().
  */
