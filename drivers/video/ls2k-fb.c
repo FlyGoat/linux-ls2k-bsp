@@ -43,9 +43,9 @@
 #define CUR_HEIGHT_SIZE		32
 #define DEFAULT_BITS_PER_PIXEL	16
 
-#define DEFAULT_CURSOR_MEM	0x900000000ef00000
+#define DEFAULT_CURSOR_MEM	0x980000000ef00000
 #define DEFAULT_CURSOR_DMA	0x0ef00000
-#define DEFAULT_FB_MEM		0x900000000e000000
+#define DEFAULT_FB_MEM		0x980000000e000000
 #define DEFAULT_PHY_ADDR	0x0e000000
 #define DEFAULT_FB_DMA		0x0e000000
 
@@ -381,25 +381,45 @@ static int ls2k_init_regs(struct fb_info *info)
 	case 24:
 		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO1_REG);
+		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO1_REG);
 		break;
 	case 16:
 		ls2k_writel(0x00100103, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls2k_writel(0x00100103, base + LS2K_FB_CFG_DVO1_REG);
+		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO1_REG);
 		break;
 	case 15:
 		ls2k_writel(0x00100102, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls2k_writel(0x00100102, base + LS2K_FB_CFG_DVO1_REG);
+		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO1_REG);
 		break;
 	case 12:
 		ls2k_writel(0x00100101, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls2k_writel(0x00100101, base + LS2K_FB_CFG_DVO1_REG);
+		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO1_REG);
 		break;
 	default:
 		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO1_REG);
+		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO1_REG);
 		break;
 	}
 
+/* cursor */
+	/* Select full color ARGB mode */
+	ls2k_writel(0x00050212, base + LS2K_FB_CUR_CFG_REG);
+	ls2k_writel(cursor_dma, base + LS2K_FB_CUR_ADDR_REG);
+	ls2k_writel(0x00060122, base + LS2K_FB_CUR_LOC_ADDR_REG);
+	ls2k_writel(0x00eeeeee, base + LS2K_FB_CUR_BACK_REG);
+	ls2k_writel(0x00aaaaaa, base + LS2K_FB_CUR_FORE_REG);
+	ls2k_reset_cursor_image();
+/* enable interupt */
+	ls2k_writel(0x280 << 16, base + LS2K_FB_INT_REG);
 	return 0;
 }
 
@@ -774,9 +794,12 @@ static irqreturn_t ls2hfb_irq(int irq, void *dev_id)
 	val = ls2k_readl(base + LS2K_FB_INT_REG);
 	ls2k_writel(val & (0xffff << 16), base + LS2K_FB_INT_REG);
 
+	cfg = ls2k_readl(base + LS2K_FB_CFG_DVO0_REG);
 	cfg = ls2k_readl(base + LS2K_FB_CFG_DVO1_REG);
 	/* if underflow, reset VGA */
 	if (val & 0x280) {
+		ls2k_writel(0, base + LS2K_FB_CFG_DVO0_REG);
+		ls2k_writel(cfg, base + LS2K_FB_CFG_DVO0_REG);
 		ls2k_writel(0, base + LS2K_FB_CFG_DVO1_REG);
 		ls2k_writel(cfg, base + LS2K_FB_CFG_DVO1_REG);
 	}

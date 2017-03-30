@@ -91,8 +91,7 @@ const char * _PLATFORM = "\n\0$PLATFORM$Linux$\n";
 #endif
 
 #ifdef CONFIG_MACH_LOONGSON2K
-#define gcmkIOREMAP                 ioremap_nocache
-#define gcmkNONPAGED_MEMROY_PROT(x) pgprot_noncached(x)
+#define gcmkNONPAGED_MEMROY_PROT(x) pgprot_writecombine(x)
 #endif
 
 #if gcdSUPPRESS_OOM_MESSAGE
@@ -749,7 +748,7 @@ _FreeAllNonPagedMemoryCache(
 #ifndef NO_DMA_COHERENT
 /*    dma_free_coherent(gcvNULL, */
 
- 	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind)
+ 	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind||LS2K_SOC_GPU == board_kind)
 	{
 		dma_free_coherent(GPU_DEV,
 	                    cache->size,
@@ -1629,7 +1628,7 @@ gckOS_MapMemory(
             return gcvSTATUS_OUT_OF_RESOURCES;
         }
 	#else
-	if((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind)||LS2K_SOC_GPU == board_kind)
+	if((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind))
 	{
         	mdlMap->vma->vm_page_prot = pgprot_noncached(mdlMap->vma->vm_page_prot);
 //	#if !gcdPAGED_MEMORY_CACHEABLE
@@ -1662,7 +1661,7 @@ gckOS_MapMemory(
 				/* 2h gpu device addr 0x0000_0000 */
 			res_tmp =remap_pfn_range(mdlMap->vma,
 					mdlMap->vma->vm_start,
-					(mdl->dmaHandle & 0x0fffffff ) >> PAGE_SHIFT,
+					(mdl->dmaHandle & 0xffffffff ) >> PAGE_SHIFT,
 					mdl->numPages*PAGE_SIZE,
 					mdlMap->vma->vm_page_prot);
 	}
@@ -2037,7 +2036,7 @@ gckOS_AllocateNonPagedMemory(
                 GFP_KERNEL | gcdNOWARN);
 
        /*add by hb, add hardware cache coherent mod*/
-	if(LS2H_SOC_GPU  == board_kind || LS2H_VRAM_3A_DDR == vram_kind)
+	if(LS2H_SOC_GPU  == board_kind || LS2H_VRAM_3A_DDR == vram_kind ||LS2K_SOC_GPU  == board_kind )
 	{
       		 if(addr != gcvNULL)
       		         addr = (gctSTRING)((gctUINT64)addr | 0x9800000000000000ULL);
@@ -2184,7 +2183,7 @@ gckOS_AllocateNonPagedMemory(
             gcmkONERROR(gcvSTATUS_OUT_OF_RESOURCES);
         }
 	#else
-	if ((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind)||LS2K_SOC_GPU == board_kind){
+	if ((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind)){
 	    mdlMap->vma->vm_page_prot = gcmkNONPAGED_MEMROY_PROT(mdlMap->vma->vm_page_prot);
             mdlMap->vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND | VM_RESERVED;
 	}
@@ -2216,7 +2215,7 @@ gckOS_AllocateNonPagedMemory(
 			/* 2h gpu device addr 0x0000_0000 */
 			res_tmp =remap_pfn_range(mdlMap->vma,
 					mdlMap->vma->vm_start,
-					(mdl->dmaHandle & 0x0fffffff ) >> PAGE_SHIFT,
+					(mdl->dmaHandle & 0xffffffff ) >> PAGE_SHIFT,
 					mdl->numPages*PAGE_SIZE,
 					mdlMap->vma->vm_page_prot);
 	}
@@ -2410,7 +2409,7 @@ gceSTATUS gckOS_FreeNonPagedMemory(
     {
 
 	/*dma_free_coherent(gcvNULL,*/
-	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind)
+	if(LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind||LS2K_SOC_GPU == board_kind)
 	{
 		dma_free_coherent(GPU_DEV,
 	                mdl->numPages * PAGE_SIZE,
@@ -2419,7 +2418,7 @@ gceSTATUS gckOS_FreeNonPagedMemory(
        		         mdl->dmaHandle);
 	}
 
-	if((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind)||LS2K_SOC_GPU == board_kind)
+	if((LS3A_2H_GPU == board_kind && LS2H_VRAM_2H_DDR == vram_kind))
 	{
 		dma_free_coherent(GPU_DEV,
 	                mdl->numPages * PAGE_SIZE,
@@ -4473,7 +4472,7 @@ gckOS_LockPages(
         if (Cacheable == gcvFALSE)
         {
             /* Make this mapping non-cached. */
-		if( LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind)
+		if( LS2H_SOC_GPU == board_kind || LS2H_VRAM_3A_DDR == vram_kind||LS2K_SOC_GPU == board_kind)
 		{
 	            mdlMap->vma->vm_page_prot = pgprot_writecombine(mdlMap->vma->vm_page_prot);
 		}else{

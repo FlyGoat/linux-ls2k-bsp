@@ -78,7 +78,7 @@ static struct resource ls2k_gpu_resources[] = {
 	[2] = {
 		.name	= "gpu_mem",
 		.start	= 0x0000a000000,
-		.end	= 0x0000cffffff,
+		.end	= 0x0000dffffff,
 		.flags	= IORESOURCE_MEM,
 	},
 };
