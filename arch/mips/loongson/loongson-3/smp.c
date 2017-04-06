@@ -32,6 +32,7 @@
 #include "smp.h"
 
 DEFINE_PER_CPU(int, cpu_state);
+extern int hpet_enabled;
 
 static void *ipi_set0_regs[16];
 static void *ipi_clear0_regs[16];

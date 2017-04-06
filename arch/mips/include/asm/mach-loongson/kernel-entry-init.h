@@ -14,7 +14,7 @@
  * Override macros used in arch/mips/kernel/head.S.
  */
 	.macro	kernel_entry_setup
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_CPU_LOONGSON3
 	.set	push
 	.set	mips64
 	/* Set LPA on LOONGSON3 config3 */
@@ -40,7 +40,7 @@
  * Do SMP slave processor setup.
  */
 	.macro	smp_slave_setup
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_CPU_LOONGSON3
 	.set	push
 	.set	mips64
 	/* Set LPA on LOONGSON3 config3 */
