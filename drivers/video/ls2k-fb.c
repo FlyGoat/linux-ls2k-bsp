@@ -43,11 +43,19 @@
 #define CUR_HEIGHT_SIZE		32
 #define DEFAULT_BITS_PER_PIXEL	16
 
+#ifdef CONFIG_DMA_NONCOHERENT
+#define DEFAULT_CURSOR_MEM	0x900000000ef00000
+#define DEFAULT_CURSOR_DMA	0x0ef00000
+#define DEFAULT_FB_MEM		0x900000000e000000
+#define DEFAULT_PHY_ADDR	0x0e000000
+#define DEFAULT_FB_DMA		0x0e000000
+#else
 #define DEFAULT_CURSOR_MEM	0x980000000ef00000
 #define DEFAULT_CURSOR_DMA	0x0ef00000
 #define DEFAULT_FB_MEM		0x980000000e000000
 #define DEFAULT_PHY_ADDR	0x0e000000
 #define DEFAULT_FB_DMA		0x0e000000
+#endif
 
 #define LO_OFF	0
 #define HI_OFF	8
@@ -412,7 +420,7 @@ static int ls2k_init_regs(struct fb_info *info)
 
 /* cursor */
 	/* Select full color ARGB mode */
-	ls2k_writel(0x00050212, base + LS2K_FB_CUR_CFG_REG);
+	ls2k_writel(0x00050202, base + LS2K_FB_CUR_CFG_REG);
 	ls2k_writel(cursor_dma, base + LS2K_FB_CUR_ADDR_REG);
 	ls2k_writel(0x00060122, base + LS2K_FB_CUR_LOC_ADDR_REG);
 	ls2k_writel(0x00eeeeee, base + LS2K_FB_CUR_BACK_REG);
@@ -561,7 +569,7 @@ static void ls2k_enable_cursor(int mode, unsigned long base)
 {
 	unsigned int tmp = ls2k_readl(base + LS2K_FB_CUR_CFG_REG);
 	tmp &= ~0xff;
-	ls2k_writel(mode ? (tmp | 0x12) : (tmp | 0x10),
+	ls2k_writel(mode ? (tmp | 0x02) : (tmp | 0x00),
 			base + LS2K_FB_CUR_CFG_REG);
 }
 
