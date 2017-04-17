@@ -249,21 +249,39 @@ static struct platform_device ls2k_rtc_device = {
 /*
  * GPIO-I2C
  */
-static struct i2c_gpio_platform_data pdata = {
-	.sda_pin                = LS2K_GPIO_PIN_5,
+static struct i2c_gpio_platform_data dvo0_pdata = {
+	.sda_pin                = LS2K_GPIO_PIN_1,
 	.sda_is_open_drain      = 0,
-	.scl_pin                = LS2K_GPIO_PIN_4,
+	.scl_pin                = LS2K_GPIO_PIN_0,
 	.scl_is_open_drain      = 0,
 	.udelay                 = 100,
 };
 
-static struct platform_device ls2k_gpio_i2c_device = {
+static struct platform_device ls2k_dvo0_gpio_i2c_device = {
 	.name                   = "i2c-gpio",
 	.id                     = 2,
 	.num_resources          = 0,
 	.resource               = NULL,
 	.dev                    = {
-		.platform_data  = &pdata,
+		.platform_data  = &dvo0_pdata,
+	},
+};
+
+static struct i2c_gpio_platform_data dvo1_pdata = {
+	.sda_pin                = LS2K_GPIO_PIN_32,
+	.sda_is_open_drain      = 0,
+	.scl_pin                = LS2K_GPIO_PIN_33,
+	.scl_is_open_drain      = 0,
+	.udelay                 = 100,
+};
+
+static struct platform_device ls2k_dvo1_gpio_i2c_device = {
+	.name                   = "i2c-gpio",
+	.id                     = 3,
+	.num_resources          = 0,
+	.resource               = NULL,
+	.dev                    = {
+		.platform_data  = &dvo1_pdata,
 	},
 };
 
@@ -442,23 +460,19 @@ static struct platform_device *ls2k_platform_devices[] = {
 	&ls2k_nand_device,
 	&ls2k_i2c0_device,
 	&ls2k_i2c1_device,
+	&ls2k_dvo0_gpio_i2c_device,
+	&ls2k_dvo1_gpio_i2c_device,
 	&ls2k_rtc_device,
 };
 
-static struct platform_device *ls2k_i2c_gpio_platform_devices[] = {
-	&ls2k_gpio_i2c_device,
+
+
+const struct i2c_board_info __initdata ls2k_dvo0_eep_info = {
+	I2C_BOARD_INFO("dvo0-eeprom-edid", 0x50),
 };
 
-const struct i2c_board_info __initdata ls2k_gmac_eep_info = {
-	I2C_BOARD_INFO("eeprom-mac", 0x50),
-};
-
-const struct i2c_board_info __initdata ls2k_fb_eep_info = {
-	I2C_BOARD_INFO("eeprom-edid", 0x50),
-};
-
-const struct i2c_board_info __initdata ls2k_dvi_fb_eep_info = {
-	I2C_BOARD_INFO("dvi-eeprom-edid", 0x50),
+const struct i2c_board_info __initdata ls2k_dvo1_eep_info = {
+	I2C_BOARD_INFO("dvo1-eeprom-edid", 0x50),
 };
 
 int ls2k_platform_init(void)
@@ -466,20 +480,9 @@ int ls2k_platform_init(void)
 
 #define I2C_BUS_0 0
 #define I2C_BUS_1 1
+	i2c_register_board_info(2, &ls2k_dvo0_eep_info, 1);
+	i2c_register_board_info(3, &ls2k_dvo1_eep_info, 1);
 
-if(0)
-{
-	i2c_register_board_info(I2C_BUS_0, &ls2k_gmac_eep_info, 1);
-	i2c_register_board_info(I2C_BUS_1, &ls2k_fb_eep_info, 1);
-
-	i2c_register_board_info(2, &ls2k_dvi_fb_eep_info, 1);
-
-	/* This register is zero in 2h3, !zero in 2h2 */
-	ls2k_nand_parts.chip_ver = LS2K_VER3;
-
-	platform_add_devices(ls2k_i2c_gpio_platform_devices,
-			ARRAY_SIZE(ls2k_i2c_gpio_platform_devices));
-}
 	/*sdio use dma1*/
 	ls2k_writel((ls2k_readl(LS2K_APBDMA_CONFIG_REG)&~(7<<15))|(1<<15), LS2K_APBDMA_CONFIG_REG);
 	/*enable can pin*/
@@ -487,7 +490,7 @@ if(0)
 
 	spi_register_board_info(ls2h_spi_devices, ARRAY_SIZE(ls2h_spi_devices));
 	return platform_add_devices(ls2k_platform_devices,
-			/*ARRAY_SIZE(ls2k_platform_devices)*/6);
+			ARRAY_SIZE(ls2k_platform_devices));
 }
 
 device_initcall(ls2k_platform_init);
