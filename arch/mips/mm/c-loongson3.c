@@ -1595,7 +1595,7 @@ void __cpuinit r4k_cache_init(void)
 	coherency_setup();
 	board_cache_error_setup = r4k_cache_error_setup;
 
-	if (current_cpu_type() == CPU_LOONGSON3) {
+	if (current_cpu_type() == CPU_LOONGSON3 || current_cpu_type() == CPU_LOONGSON2K) {
 		/* Loongson-3 maintains cache coherency by hardware */
 		__flush_cache_all	= cache_noop;
 		__flush_cache_vmap	= cache_noop;
