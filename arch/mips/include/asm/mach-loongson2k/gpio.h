@@ -1,8 +1,4 @@
 /*
- * STLS2F GPIO Support
- *
- * Copyright (c) 2008  Richard Liu, STMicroelectronics <richard.liu@st.com>
- * Copyright (c) 2008-2010  Arnaud Patard <apatard@mandriva.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,26 +6,90 @@
  * (at your option) any later version.
  */
 
-#ifndef __STLS2F_GPIO_H
-#define __STLS2F_GPIO_H
+#ifndef __LS2K_GPIO_H
+#define __LS2K_GPIO_H
+
+#ifndef gpio_to_irq
+#define gpio_to_irq				__gpio_to_irq
+#endif
+
+static inline int irq_to_gpio(unsigned irq)
+{
+	return -EINVAL;
+}
 
 #include <asm-generic/gpio.h>
 
-extern void gpio_set_value(unsigned gpio, int value);
-extern int gpio_get_value(unsigned gpio);
-extern int gpio_cansleep(unsigned gpio);
+enum ls2k_gpio {
 
-/* The chip can do interrupt
- * but it has not been tested and doc not clear
- */
-static inline int gpio_to_irq(int gpio)
-{
-	return -EINVAL;
-}
+	LS2K_GPIO_PIN_0,
+	LS2K_GPIO_PIN_1,
+	LS2K_GPIO_PIN_2,
+	LS2K_GPIO_PIN_3,
+	LS2K_GPIO_PIN_4,
+	LS2K_GPIO_PIN_5,
+	LS2K_GPIO_PIN_6,
+	LS2K_GPIO_PIN_7,
+	LS2K_GPIO_PIN_8,
+	LS2K_GPIO_PIN_9,
+	LS2K_GPIO_PIN_10,
+	LS2K_GPIO_PIN_11,
+	LS2K_GPIO_PIN_12,
+	LS2K_GPIO_PIN_13,
+	LS2K_GPIO_PIN_14,
 
-static inline int irq_to_gpio(int gpio)
-{
-	return -EINVAL;
-}
+	LS2K_GPIO_PIN_16 = 16,
+	LS2K_GPIO_PIN_17,
+	LS2K_GPIO_PIN_18,
+	LS2K_GPIO_PIN_19,
+	LS2K_GPIO_PIN_20,
+	LS2K_GPIO_PIN_21,
+	LS2K_GPIO_PIN_22,
+	LS2K_GPIO_PIN_23,
+	LS2K_GPIO_PIN_24,
+	LS2K_GPIO_PIN_25,
+	LS2K_GPIO_PIN_26,
+	LS2K_GPIO_PIN_27,
+	LS2K_GPIO_PIN_28,
+	LS2K_GPIO_PIN_29,
+	LS2K_GPIO_PIN_30,
+	LS2K_GPIO_PIN_31,
 
-#endif				/* __STLS2F_GPIO_H */
+	LS2K_GPIO_PIN_32 = 32,
+	LS2K_GPIO_PIN_33,
+	LS2K_GPIO_PIN_34,
+	LS2K_GPIO_PIN_35,
+	LS2K_GPIO_PIN_36,
+	LS2K_GPIO_PIN_37,
+	LS2K_GPIO_PIN_38,
+	LS2K_GPIO_PIN_39,
+	LS2K_GPIO_PIN_40,
+	LS2K_GPIO_PIN_41,
+
+	LS2K_GPIO_PIN_44 = 44 ,
+	LS2K_GPIO_PIN_45,
+	LS2K_GPIO_PIN_46,
+	LS2K_GPIO_PIN_47,
+	LS2K_GPIO_PIN_48,
+	LS2K_GPIO_PIN_49,
+	LS2K_GPIO_PIN_50,
+	LS2K_GPIO_PIN_51,
+	LS2K_GPIO_PIN_52,
+	LS2K_GPIO_PIN_53,
+	LS2K_GPIO_PIN_54,
+	LS2K_GPIO_PIN_55,
+	LS2K_GPIO_PIN_56,
+	LS2K_GPIO_PIN_57,
+	LS2K_GPIO_PIN_58,
+	LS2K_GPIO_PIN_59,
+	LS2K_GPIO_PIN_60,
+	LS2K_GPIO_PIN_61,
+	LS2K_GPIO_PIN_62,
+	LS2K_GPIO_PIN_63,
+
+};
+
+
+int gpio_get_value(unsigned gpio);
+void gpio_set_value(unsigned int gpio, int value);
+#endif				

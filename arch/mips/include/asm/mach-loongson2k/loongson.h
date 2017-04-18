@@ -59,6 +59,7 @@ extern void mach_irq_dispatch(unsigned int pending);
 #define INT_router_regs_ahci			*(volatile unsigned char *)(IO_base_regs_addr + 0x1413)
 #define INT_router_regs_ohci			*(volatile unsigned char *)(IO_base_regs_addr + 0x1453)
 
+
 #define IO_control_regs_Intisr			*(volatile unsigned int *)(IO_base_regs_addr + 0x1420)
 #define IO_control_regs_Inten			*(volatile unsigned int *)(IO_base_regs_addr + 0x1424)
 #define IO_control_regs_Intenset		*(volatile unsigned int *)(IO_base_regs_addr + 0x1428)
@@ -95,6 +96,12 @@ UART4_7,
 
 void loongson_suspend_lowlevel(void);
 
+
+#define CONF_BASE		(int)(0xbfe10000)
+#define LS2K_GPIO_OE_REG	(CONF_BASE + 0x0500)
+#define LS2K_GPIO_OUT_REG	(CONF_BASE + 0x0510)
+#define LS2K_GPIO_IN_REG	(CONF_BASE + 0x0520)
+#define LS2K_GPIO_INT_REG	(CONF_BASE + 0x0530)
 
 
 #endif /* __ASM_MACH_LOONGSON3_LOONGSON_H */

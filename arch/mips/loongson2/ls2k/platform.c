@@ -28,6 +28,7 @@
 #include <linux/dma-mapping.h>
 
 #include <ls2k.h>
+#include <asm/gpio.h>
 #include <ls2k_int.h>
 #include <linux/i2c-gpio.h>
 #include <linux/mtd/spinand.h>
