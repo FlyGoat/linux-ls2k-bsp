@@ -668,6 +668,7 @@ struct cursor_req {
 #define CURIOLOAD_ARGB		0x4609
 #define CURIOLOAD_IMAGE		0x460A
 #define CURIOHIDE_SHOW		0x460B
+#define FBEDID_GET		0x860C
 
 static int ls2k_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		                        unsigned long arg)
@@ -698,6 +699,14 @@ static int ls2k_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	case CURIOHIDE_SHOW:
 		LS2K_DEBUG("CURIOHIDE_SHOW:%s\n", arg ? "show" : "hide");
 		ls2k_enable_cursor(arg, base);
+		break;
+	case FBEDID_GET:
+		LS2K_DEBUG("FBEDID GET\n");
+		if(par->edid != NULL)
+		{
+			if (copy_to_user(argp, par->edid, EDID_LENGTH))
+				return -EFAULT;
+		}
 		break;
 	default:
 		return -ENOTTY;
@@ -834,6 +843,8 @@ static unsigned char *ls2k_fb_i2c_connector(struct ls2k_fb_par *fb_par)
 	}
 
 	for(i = 0; i < 2; i++) {
+		if(!dvo_client[i])
+			continue;
 		edid = fb_do_probe_ddc_edid(dvo_client[i]);
 
 		if (edid) {
