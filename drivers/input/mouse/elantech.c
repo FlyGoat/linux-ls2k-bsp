@@ -1549,12 +1549,11 @@ static int elantech_set_properties(struct elantech_data *etd)
 		case 5:
 			etd->hw_version = 3;
 			break;
-		case 6:
-		case 7:
-		case 8:
-		case 9:
-		case 10:
-		case 13:
+#ifdef CONFIG_LOONGSON_LAPTOP
+		case 6 ... 14:
+#else
+ 		case 6:
+#endif
 			etd->hw_version = 4;
 			break;
 		default:
