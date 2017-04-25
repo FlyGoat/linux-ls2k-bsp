@@ -72,6 +72,16 @@ struct platform_controller_hub *loongson_pch;
 extern struct platform_controller_hub ls2h_pch;
 extern struct platform_controller_hub rs780_pch;
 
+struct board_devices *eboard;
+struct interface_info *einter;
+struct loongson_special_attribute *especial;
+
+extern char *bios_vendor;
+extern char *bios_release_date;
+extern char *board_manufacturer;
+extern char _bios_info[];
+extern char _board_info[];
+
 u32 cpu_clock_freq;
 EXPORT_SYMBOL(cpu_clock_freq);
 EXPORT_SYMBOL(loongson_ec_sci_irq);
@@ -89,6 +99,8 @@ void __init prom_init_env(void)
 {
 	/* pmon passes arguments in 32bit pointers */
 	unsigned int processor_id;
+        char *bios_info;
+        char *board_info;
 
 #ifndef CONFIG_UEFI_FIRMWARE_INTERFACE
 	int *_prom_envp;
@@ -119,7 +131,9 @@ void __init prom_init_env(void)
 	ecpu	= (struct efi_cpuinfo_loongson *)((u64)loongson_p + loongson_p->cpu_offset);
 	emap	= (struct efi_memory_map_loongson *)((u64)loongson_p + loongson_p->memory_offset);
 	eboard	= (struct board_devices *)((u64)loongson_p + loongson_p->boarddev_table_offset);
+	einter	= (struct interface_info *)((u64)loongson_p + loongson_p->interface_offset);
 	eirq_source = (struct irq_source_routing_table *)((u64)loongson_p + loongson_p->irq_offset);
+	especial = (struct loongson_special_attribute *)((u64)loongson_p + loongson_p->special_offset);
 
 	cputype = ecpu->cputype;
 	switch (cputype) {
@@ -206,6 +220,21 @@ void __init prom_init_env(void)
 		loongson_pch = &rs780_pch;
 		loongson_ec_sci_irq = 0x07;
 	}
+
+        /* parse bios info */
+        strcpy(_bios_info, einter->description);
+        bios_info = _bios_info;
+        bios_vendor = strsep(&bios_info, "-");
+        strsep(&bios_info, "-");
+        strsep(&bios_info, "-");
+        bios_release_date = strsep(&bios_info, "-");
+        if (!bios_release_date)
+                bios_release_date = especial->special_name;
+
+        /* parse board info */
+        strcpy(_board_info, eboard->name);
+        board_info = _board_info;
+        board_manufacturer = strsep(&board_info, "-");
 
 	poweroff_addr = boot_p->reset_system.Shutdown;
 	restart_addr = boot_p->reset_system.ResetWarm;
