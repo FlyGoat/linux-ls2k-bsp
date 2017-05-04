@@ -25,12 +25,10 @@
 	mfc0	t0, $5, 1
 	or	t0, (0x1 << 29)
 	mtc0	t0, $5, 1
-#ifdef CONFIG_LOONGSON3_ENHANCEMENT
 	/* Enable STFill Buffer */
 	mfc0	t0, $16, 6
 	or	t0, 0x100
 	mtc0	t0, $16, 6
-#endif
 	_ehb
 	.set	pop
 #endif
@@ -51,12 +49,10 @@
 	mfc0	t0, $5, 1
 	or	t0, (0x1 << 29)
 	mtc0	t0, $5, 1
-#ifdef CONFIG_LOONGSON3_ENHANCEMENT
 	/* Enable STFill Buffer */
 	mfc0	t0, $16, 6
 	or	t0, 0x100
 	mtc0	t0, $16, 6
-#endif
 	_ehb
 	.set	pop
 #endif
