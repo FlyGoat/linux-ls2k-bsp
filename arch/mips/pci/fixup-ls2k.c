@@ -150,6 +150,8 @@ int __init pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 	return LS2K_IRQ_BASE+irq;
 }
 
+extern struct mips_dma_map_ops mips_default_dma_map_ops;
+
 /* Do platform specific device initialization at pci_enable_device() time */
 int pcibios_plat_dev_init(struct pci_dev *dev)
 {
@@ -193,6 +195,7 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
 	pr_info("pci %s: set Max_Payload_Size & Max_Read_Request_Size to %03x\n",
 	       pci_name(dev), max_payload_spt);
 
+	dev->dev.archdata.dma_ops = &mips_default_dma_map_ops;
 
 	return 0;
 }
