@@ -75,6 +75,7 @@ extern void mach_irq_dispatch(unsigned int pending);
 #define IO_control_regs_CORE1_INTISR_HI		*(volatile unsigned int *)(IO_base_regs_addr + 0x1148)
 
 struct ls2k_int_ctrl_regs {
+	volatile unsigned char int_entry[32];
 	volatile unsigned int int_isr;
 	volatile unsigned int int_en;
 	volatile unsigned int int_set;
@@ -83,7 +84,6 @@ struct ls2k_int_ctrl_regs {
 	volatile unsigned int int_edge;
 	volatile unsigned int int_bounce;
 	volatile unsigned int int_auto;
-	int unused[8];
 };
 
 enum {

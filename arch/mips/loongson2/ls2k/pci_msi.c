@@ -19,6 +19,7 @@ xx为向量号
 void enable_ls2k_board_irq(struct irq_data *d);
 void disable_ls2k_board_irq(struct irq_data *d);
 void ack_ls2k_board_irq(struct irq_data *d);
+int ls2k_set_irq_affinity(struct irq_data *d, const struct cpumask *affinity, bool force);
 
 #define IRQ_LS2H_MSI_0 (LS2K_IRQ_OFF)
 #define LS2H_NUM_MSI_IRQS 64
@@ -100,6 +101,7 @@ static struct irq_chip ls2k_msi_chip = {
 	.irq_mask	= disable_ls2k_msi_irq,
 	.irq_unmask	= enable_ls2k_msi_irq,
 	.irq_eoi	= enable_ls2k_msi_irq,
+	.irq_set_affinity	= ls2k_set_irq_affinity,
 };
 
 
