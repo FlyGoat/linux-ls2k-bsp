@@ -45,6 +45,21 @@
 #define DMA_CUR_RX_BUF_ADDR	0x00001054	/* Current Host Rx Buffer */
 #define DMA_HW_FEATURE		0x00001058	/* HW Feature Register */
 
+#define DMA_NEWFUNC_CONFIG	0x00001080	/*[0] Enables the Tx watchdog function [8] Enables the 64bit-width address function*/
+#define DMA_TRAN_INT_DOG_CNT	0x00001084	/* [15: 0] Tx interrupt counter [23:16] Tx interrupt timer，the real time is 256x[23:16] */
+#define DMA_RCV_BASE_ADDR64_LO	0x00001090	/*the start of the Receive Descriptor list*/
+#define DMA_RCV_BASE_ADDR64_HI	0x00001094
+#define DMA_TX_BASE_ADDR64_LO	0x00001098	/*the start of the Receive Descriptor list*/
+#define DMA_TX_BASE_ADDR64_HI	0x0000109c
+#define DMA_CUR_TX_DESC64_LO	0x000010a0
+#define DMA_CUR_TX_DESC64_HI	0x000010a4
+#define DMA_CUR_RX_DESC64_LO	0x000010a8
+#define DMA_CUR_RX_DESC64_HI	0x000010ac
+#define DMA_CUR_TX_BUF_ADDR64_LO	0x000010b0	/* Current Host Tx Buffer */
+#define DMA_CUR_TX_BUF_ADDR64_HI	0x000010b4	/* Current Host Tx Buffer */
+#define DMA_CUR_RX_BUF_ADDR64_LO	0x000010b8	/* Current Host Tx Buffer */
+#define DMA_CUR_RX_BUF_ADDR64_HI	0x000010bc	/* Current Host Tx Buffer */
+
 /* DMA Control register defines */
 #define DMA_CONTROL_ST		0x00002000	/* Start/Stop Transmission */
 #define DMA_CONTROL_SR		0x00000002	/* Start/Stop Receive */
