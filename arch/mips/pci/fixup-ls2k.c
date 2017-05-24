@@ -165,6 +165,9 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
 	 * keep the smaller MPSSPT in the child's register
 	 */
 	if (!(dev->bus->parent)) {
+		/*gmac can support 64bit dma*/
+		if(PCI_SLOT(dev->devfn) == 3) dev->dev.archdata.dma_ops = &mips_default_dma_map_ops;
+
 		pos = pci_find_capability(dev, PCI_CAP_ID_EXP);
 		if (!pos) return 0;
 		pci_read_config_word(dev, pos + PCI_EXP_DEVCAP,
