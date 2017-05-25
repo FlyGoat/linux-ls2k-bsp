@@ -24,7 +24,7 @@ config LOONGSON_MACH2K
 	select UEFI_FIRMWARE_INTERFACE
 	select SYS_SUPPORTS_HOTPLUG_CPU
 	select SYNC_R4K
-	select DMA_NONCOHERENT
+	#select DMA_NONCOHERENT
 	#select ARCH_REQUIRE_GPIOLIB
 	select NEED_SG_DMA_LENGTH
 	select ARCH_SUPPORTS_MSI
@@ -39,6 +39,11 @@ config SWIOTLB
 	select IOMMU_HELPER
 	select NEED_SG_DMA_LENGTH
 	select NEED_DMA_MAP_STATE
+
+config LOONGSON_DMA_NONCOHERENT
+	bool "Loongson dma noncoherent"
+	select DMA_NONCOHERENT
+	default n
 
 config NEED_SG_DMA_LENGTH
 	bool
