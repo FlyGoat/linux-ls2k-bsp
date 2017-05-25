@@ -876,6 +876,14 @@ static int ls2k_fb_probe(struct platform_device *dev)
 	}
 
 	par->reg_base = r->start;
+	
+	if(!ls2k_fb_enable)
+	{
+		ls2k_writel(ls2k_readl(par->reg_base  + LS2K_FB_CFG_DVO0_REG)&~0x100, par->reg_base  + LS2K_FB_CFG_DVO0_REG);
+		ls2k_writel(ls2k_readl(par->reg_base  + LS2K_FB_CFG_DVO1_REG)&~0x100, par->reg_base  + LS2K_FB_CFG_DVO1_REG);
+		return 0;
+	}
+	
 	ls2k_find_init_mode(info);
 
 	if (!videomemorysize) {
