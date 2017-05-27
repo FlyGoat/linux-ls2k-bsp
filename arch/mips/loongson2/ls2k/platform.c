@@ -25,6 +25,7 @@
 #include <linux/stmmac.h>
 #include <linux/i2c.h>
 #include <linux/phy.h>
+#include <linux/dma-mapping.h>
 
 #include <ls2k.h>
 #include <ls2k_int.h>
@@ -264,9 +265,44 @@ static struct platform_device ls2k_gpio_i2c_device = {
 	},
 };
 
+/*** sdio ***/
+static struct resource ls2k_sdio_resources[] = { 
+	[0] = {
+		.start = LS2K_SDIO_REG_BASE,
+		.end   = (LS2K_SDIO_REG_BASE + 0xfff),
+		.flags = IORESOURCE_MEM,
+	},
+	[1] = {
+		.start = LS2K_SDIO_IRQ,
+		.end   = LS2K_SDIO_IRQ,
+		.flags = IORESOURCE_IRQ,
+	},
+	[2] = {
+		.start      = LS2K_DMA_ORDER_REG+0x10,
+		.end        = LS2K_DMA_ORDER_REG+0x10,
+		.flags      = IORESOURCE_MEM,
+	},
+};
+
+
+static struct platform_device ls2k_sdio_device = {
+	.name           = "ls2k_sdio",
+	.id             = 0,
+	.dev = {
+		.dma_mask = &ls2k_sdio_device.dev.coherent_dma_mask,
+		.coherent_dma_mask	= DMA_BIT_MASK(32),
+		.platform_data = 0,
+	},
+	.num_resources  = ARRAY_SIZE(ls2k_sdio_resources),
+	.resource       = ls2k_sdio_resources,
+};
+
+
+
 static struct platform_device *ls2k_platform_devices[] = {
 	&uart8250_device,
 	&ls2k_nand_device,
+	&ls2k_sdio_device,
 	&ls2k_i2c0_device,
 	&ls2k_i2c1_device,
 	&ls2k_rtc_device,
@@ -307,8 +343,10 @@ if(0)
 	platform_add_devices(ls2k_i2c_gpio_platform_devices,
 			ARRAY_SIZE(ls2k_i2c_gpio_platform_devices));
 }
+	/*sdio use dma1*/
+	ls2k_writel((ls2k_readl(LS2K_APBDMA_CONFIG_REG)&~(7<<15))|(1<<15), LS2K_APBDMA_CONFIG_REG);
 	return platform_add_devices(ls2k_platform_devices,
-			/*ARRAY_SIZE(ls2k_platform_devices)*/2);
+			/*ARRAY_SIZE(ls2k_platform_devices)*/3);
 }
 
 device_initcall(ls2k_platform_init);
