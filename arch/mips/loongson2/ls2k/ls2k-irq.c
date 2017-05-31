@@ -159,6 +159,7 @@ static struct irq_chip ls2k_board_irq_chip = {
 	.name		= "LS2K BOARD",
 	.irq_ack		= ack_ls2k_board_irq,
 	.irq_mask		= disable_ls2k_board_irq,
+	.irq_disable		= disable_ls2k_board_irq,
 	.irq_mask_ack	= disable_ls2k_board_irq,
 	.irq_unmask		= enable_ls2k_board_irq,
 	.irq_eoi		= enable_ls2k_board_irq,
