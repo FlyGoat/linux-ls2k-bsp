@@ -556,4 +556,18 @@ config MTD_NAND_XWAY
 	  Enables support for NAND Flash chips on Lantiq XWAY SoCs. NAND is attached
 	  to the External Bus Unit (EBU).
 
+config MTD_SNAND_MT29F
+	tristate "SPINAND Device Support for Micron & GigaDevice"
+	depends on MTD
+	select SPI
+	help
+	  This enables support for accessing Micron SPI NAND flash
+	  devices.
+	  If you have Micron SPI NAND chip say yes.
+
+	  If unsure, say no here.
+
+config MTD_SNAND_MT29F_CONLY
+	bool "c version only"
+        depends on MTD_SNAND_MT29F
 endif # MTD_NAND

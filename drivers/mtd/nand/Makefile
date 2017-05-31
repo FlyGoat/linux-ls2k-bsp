@@ -52,5 +52,10 @@ obj-$(CONFIG_MTD_NAND_JZ4740)		+= jz4740_nand.o
 obj-$(CONFIG_MTD_NAND_GPMI_NAND)	+= gpmi-nand/
 obj-$(CONFIG_MTD_NAND_XWAY)		+= xway_nand.o
 obj-$(CONFIG_MTD_NAND_BCM47XXNFLASH)	+= bcm47xxnflash/
+ifdef CONFIG_MTD_SNAND_MT29F_CONLY
+obj-$(CONFIG_MTD_SNAND_MT29F)		+= spinand_mt29f.o
+else
+obj-$(CONFIG_MTD_SNAND_MT29F)		+= spinand_lld.o
+endif
 
 nand-objs := nand_base.o nand_bbt.o
