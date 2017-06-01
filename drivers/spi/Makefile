@@ -74,4 +74,8 @@ obj-$(CONFIG_SPI_TOPCLIFF_PCH)		+= spi-topcliff-pch.o
 obj-$(CONFIG_SPI_TXX9)			+= spi-txx9.o
 obj-$(CONFIG_SPI_XCOMM)		+= spi-xcomm.o
 obj-$(CONFIG_SPI_XILINX)		+= spi-xilinx.o
+ifdef SPI_LS2K_NEW
+obj-$(CONFIG_SPI_LS2K) 			+= ls2k-spi.o
+else
 obj-$(CONFIG_SPI_LS2K) 			+= spi-ls2k.o
+endif

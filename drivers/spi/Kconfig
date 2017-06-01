@@ -537,6 +537,13 @@ config SPI_LS2K
 	help
 	  This is the driver for Loongson SPI master controller.
 
+config SPI_LS2K_NEW
+	tristate "loongson ls2k new spi driver"
+	depends on SPI_LS2K
+	select SPI_BITBANG
+	help
+	  This is the driver for Loongson SPI master controller.
+
 #
 # Add new SPI protocol masters in alphabetical order above this line
 #
