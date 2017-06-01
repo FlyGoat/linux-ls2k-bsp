@@ -129,7 +129,7 @@ struct sci_device
 const char *version = "1.11";
 
 extern void prom_printf(char *fmt, ...);
-extern int ec_query_get_event_num(void);
+extern int ec985x_query_get_event_num(void);
 /* SCI device object */
 static struct sci_device *loongson_sci_device = NULL;
 static int loongson_sci_event_probe(struct platform_device *);
@@ -298,7 +298,7 @@ void loongson_sci_hotkey_handler(int event)
 	sep = (struct sci_event*)&(se[event]);
 	if(0 != sep->index)
 	{
-		status = ec_read(sep->index);
+		status = ec985x_read(sep->index);
 	}
 	if(NULL != sep->handler)
 	{
@@ -329,16 +329,16 @@ static irqreturn_t loongson_sci_int_routine(int irq, void *dev_id)
 		return IRQ_NONE;
 
 	/* Clean sci irq */
-	clean_ec_event_status();
+	clean_ec985x_event_status();
 
-	event = ec_query_get_event_num();
+	event = ec985x_query_get_event_num();
 	if ((SCI_EVENT_NUM_AC > event) || (SCI_EVENT_NUM_POWERBTN < event))
 		goto exit_event_action;
 	loongson_sci_hotkey_handler(event);
 	return IRQ_HANDLED;
 
 exit_event_action:
-	clean_ec_event_status();
+	clean_ec985x_event_status();
 	return IRQ_HANDLED;
 }
 
@@ -370,7 +370,7 @@ static int sci_pci_init(void)
 		goto out_pdev;
 	}
 
-	clean_ec_event_status();
+	clean_ec985x_event_status();
 
 	/* Regist pci irq */
 	ret = request_irq(loongson_sci_device->irq, loongson_sci_int_routine,
@@ -423,7 +423,7 @@ static int loongson_set_brightness(struct backlight_device * pdev)
 		level = 0;
 	}
 
-	ec_write(INDEX_DISPLAY_BRIGHTNESS, level);
+	ec985x_write(INDEX_DISPLAY_BRIGHTNESS, level);
 
 	return 0;
 }
@@ -432,7 +432,7 @@ static int loongson_set_brightness(struct backlight_device * pdev)
 static int loongson_get_brightness(struct backlight_device * pdev)
 {
 	/* Read level from ec */
-	return ec_read(INDEX_DISPLAY_BRIGHTNESS);
+	return ec985x_read(INDEX_DISPLAY_BRIGHTNESS);
 }
 
 /* Update battery information handle function. */
@@ -444,50 +444,50 @@ static void loongson_power_battery_info_update(unsigned char bat_reg_flag)
 		/* Update power_info->temperature value */
 		case BAT_REG_TEMP_FLAG:
 			loongson_power_info_power_status_update();
-			bat_info_value = (ec_read(INDEX_BATTERY_TEMP_HIGH) << 8) | ec_read(INDEX_BATTERY_TEMP_LOW);
+			bat_info_value = (ec985x_read(INDEX_BATTERY_TEMP_HIGH) << 8) | ec985x_read(INDEX_BATTERY_TEMP_LOW);
 			power_info->temperature = (power_info->bat_in) ? (bat_info_value / 10 - 273) : 0;
 			break;
 		/* Update power_info->voltage value */
 		case BAT_REG_VOLTAGE_FLAG:
 			loongson_power_info_power_status_update();
-			bat_info_value = (ec_read(INDEX_BATTERY_VOL_HIGH) << 8) | ec_read(INDEX_BATTERY_VOL_LOW);
+			bat_info_value = (ec985x_read(INDEX_BATTERY_VOL_HIGH) << 8) | ec985x_read(INDEX_BATTERY_VOL_LOW);
 			power_info->voltage_now = (power_info->bat_in) ? bat_info_value : 0;
 			break;
 		/* Update power_info->current_now value */
 		case BAT_REG_CURRENT_FLAG:
 			loongson_power_info_power_status_update();
-			bat_info_value = (ec_read(INDEX_BATTERY_CURRENT_HIGH) << 8) | ec_read(INDEX_BATTERY_CURRENT_LOW);
+			bat_info_value = (ec985x_read(INDEX_BATTERY_CURRENT_HIGH) << 8) | ec985x_read(INDEX_BATTERY_CURRENT_LOW);
 			power_info->current_now = (power_info->bat_in) ? bat_info_value : 0;
 			break;
 		/* Update power_info->current_avg value */
 		case BAT_REG_AC_FLAG:
 			loongson_power_info_power_status_update();
-			bat_info_value = (ec_read(INDEX_BATTERY_AC_HIGH) << 8) | ec_read(INDEX_BATTERY_AC_LOW);
+			bat_info_value = (ec985x_read(INDEX_BATTERY_AC_HIGH) << 8) | ec985x_read(INDEX_BATTERY_AC_LOW);
 			power_info->current_average = (power_info->bat_in) ? bat_info_value : 0;
 			break;
 		/* Update power_info->remain_capacity value */
 		case BAT_REG_RC_FLAG:
-			power_info->remain_capacity = (ec_read(INDEX_BATTERY_RC_HIGH) << 8) | ec_read(INDEX_BATTERY_RC_LOW);
+			power_info->remain_capacity = (ec985x_read(INDEX_BATTERY_RC_HIGH) << 8) | ec985x_read(INDEX_BATTERY_RC_LOW);
 			break;
 		/* Update power_info->full_charged_capacity value */
 		case BAT_REG_FCC_FLAG:
-			power_info->full_charged_capacity = (ec_read(INDEX_BATTERY_FCC_HIGH) << 8) | ec_read(INDEX_BATTERY_FCC_LOW);
+			power_info->full_charged_capacity = (ec985x_read(INDEX_BATTERY_FCC_HIGH) << 8) | ec985x_read(INDEX_BATTERY_FCC_LOW);
 			break;
 		/* Update power_info->remain_time value */
 		case BAT_REG_ATTE_FLAG:
-			power_info->remain_time = (ec_read(INDEX_BATTERY_ATTE_HIGH) << 8) | ec_read(INDEX_BATTERY_ATTE_LOW);
+			power_info->remain_time = (ec985x_read(INDEX_BATTERY_ATTE_HIGH) << 8) | ec985x_read(INDEX_BATTERY_ATTE_LOW);
 			break;
 		/* Update power_info->fullchg_time value */
 		case BAT_REG_ATTF_FLAG:
-			power_info->fullchg_time = (ec_read(INDEX_BATTERY_ATTF_HIGH) << 8) | ec_read(INDEX_BATTERY_ATTF_LOW);
+			power_info->fullchg_time = (ec985x_read(INDEX_BATTERY_ATTF_HIGH) << 8) | ec985x_read(INDEX_BATTERY_ATTF_LOW);
 			break;
 		/* Update power_info->curr_cap value */
 		case BAT_REG_RSOC_FLAG:
-			power_info->remain_capacity_percent = ec_read(INDEX_BATTERY_CAPACITY);
+			power_info->remain_capacity_percent = ec985x_read(INDEX_BATTERY_CAPACITY);
 			break;
 		/* Update power_info->cycle_count value */
 		case BAT_REG_CYCLCNT_FLAG:
-			power_info->cycle_count = (ec_read(INDEX_BATTERY_CYCLECNT_HIGH) << 8) | ec_read(INDEX_BATTERY_CYCLECNT_LOW);
+			power_info->cycle_count = (ec985x_read(INDEX_BATTERY_CYCLECNT_HIGH) << 8) | ec985x_read(INDEX_BATTERY_CYCLECNT_LOW);
 			break;
 
 		default:
@@ -540,14 +540,14 @@ static void loongson_power_info_battery_static_update(void)
 
 	power_info->technology = POWER_SUPPLY_TECHNOLOGY_LION;
 
-	bat_serial_number = (ec_read(INDEX_BATTERY_SN_HIGH) << 8) | ec_read(INDEX_BATTERY_SN_LOW);
+	bat_serial_number = (ec985x_read(INDEX_BATTERY_SN_HIGH) << 8) | ec985x_read(INDEX_BATTERY_SN_LOW);
 	snprintf(power_info->serial_number, 8, "%x", bat_serial_number);
 
-	power_info->cell_count = ((ec_read(INDEX_BATTERY_CV_HIGH) << 8) | ec_read(INDEX_BATTERY_CV_LOW)) / 4200;
+	power_info->cell_count = ((ec985x_read(INDEX_BATTERY_CV_HIGH) << 8) | ec985x_read(INDEX_BATTERY_CV_LOW)) / 4200;
 
-	power_info->design_capacity = (ec_read(INDEX_BATTERY_DC_HIGH) << 8) | ec_read(INDEX_BATTERY_DC_LOW);
-	power_info->design_voltage = (ec_read(INDEX_BATTERY_DV_HIGH) << 8) | ec_read(INDEX_BATTERY_DV_LOW);
-	power_info->full_charged_capacity = (ec_read(INDEX_BATTERY_FCC_HIGH) << 8) | ec_read(INDEX_BATTERY_FCC_LOW);
+	power_info->design_capacity = (ec985x_read(INDEX_BATTERY_DC_HIGH) << 8) | ec985x_read(INDEX_BATTERY_DC_LOW);
+	power_info->design_voltage = (ec985x_read(INDEX_BATTERY_DV_HIGH) << 8) | ec985x_read(INDEX_BATTERY_DV_LOW);
+	power_info->full_charged_capacity = (ec985x_read(INDEX_BATTERY_FCC_HIGH) << 8) | ec985x_read(INDEX_BATTERY_FCC_LOW);
 	printk(KERN_INFO "DesignCapacity: %dmAh, DesignVoltage: %dmV, FullChargeCapacity: %dmAh\n",
 		power_info->design_capacity, power_info->design_voltage, power_info->full_charged_capacity);
 }
@@ -557,13 +557,13 @@ static void loongson_power_info_power_status_update(void)
 {
 	unsigned int power_status = 0;
 
-	power_status = ec_read(INDEX_POWER_STATUS);
+	power_status = ec985x_read(INDEX_POWER_STATUS);
 
 	power_info->ac_in = (power_status & MASK(BIT_POWER_ACPRES)) ?
 					APM_AC_ONLINE : APM_AC_OFFLINE;
 
 	power_info->bat_in = (power_status & MASK(BIT_POWER_BATPRES)) ? 1 : 0;
-	if( power_info->bat_in && ((ec_read(INDEX_BATTERY_DC_LOW) | (ec_read(INDEX_BATTERY_DC_HIGH) << 8)) == 0) )
+	if( power_info->bat_in && ((ec985x_read(INDEX_BATTERY_DC_LOW) | (ec985x_read(INDEX_BATTERY_DC_HIGH) << 8)) == 0) )
 		power_info->bat_in = 0;
 
 	power_info->health = (power_info->bat_in) ?	POWER_SUPPLY_HEALTH_GOOD :
@@ -589,9 +589,9 @@ static void loongson_bat_get_string(unsigned char index, unsigned char *bat_stri
 {
 	unsigned char length, i;
 
-	length = ec_read(index);
+	length = ec985x_read(index);
 	for (i = 0; i < length; i++) {
-		*bat_string++ = ec_read(++index);
+		*bat_string++ = ec985x_read(++index);
 	}
 	*bat_string = '\0';
 }
@@ -811,7 +811,7 @@ static int loongson_laptop_resume(struct platform_device * pdev)
 	 *
 	 * Clear all SCI events when suspend
 	 */
-	clean_ec_event_status();
+	clean_ec985x_event_status();
 
 	return 0;
 }
@@ -841,7 +841,7 @@ static int loongson_sci_event_probe(struct platform_device *dev)
 		goto fail_backlight_device_register;
 	}
 	loongson_backlight_dev->props.max_brightness = 10;
-	loongson_backlight_dev->props.brightness = ec_read(INDEX_DISPLAY_BRIGHTNESS);
+	loongson_backlight_dev->props.brightness = ec985x_read(INDEX_DISPLAY_BRIGHTNESS);
 	backlight_update_status(loongson_backlight_dev);
 
 	if (loongson_hotkey_init()) {

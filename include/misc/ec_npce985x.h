@@ -293,19 +293,19 @@ extern unsigned char app_access_ec_flag;
 typedef int (*sci_handler)(int status);
 
 /* The general ec index-io port read action */
-extern unsigned char ec_read(unsigned char index);
-extern unsigned char ec_read_all(unsigned char command, unsigned char index);
-extern unsigned char ec_read_noindex(unsigned char command);
+extern unsigned char ec985x_read(unsigned char index);
+extern unsigned char ec985x_read_all(unsigned char command, unsigned char index);
+extern unsigned char ec985x_read_noindex(unsigned char command);
 
 /* The general ec index-io port write action */
-extern int ec_write(unsigned char index, unsigned char data);
-extern int ec_write_all(unsigned char command, unsigned char index, unsigned char data);
-extern int ec_write_noindex(unsigned char command, unsigned char data);
+extern int ec985x_write(unsigned char index, unsigned char data);
+extern int ec985x_write_all(unsigned char command, unsigned char index, unsigned char data);
+extern int ec985x_write_noindex(unsigned char command, unsigned char data);
 
 /* Query sequence of 62/66 port access routine. */
 extern int ec_query_seq(unsigned char command);
-extern int ec_get_event_num(void);
+extern int ec985x_get_event_num(void);
 
-extern void clean_ec_event_status(void);
+extern void clean_ec985x_event_status(void);
 
 #endif /* __EC_NPCE985X_H__ */

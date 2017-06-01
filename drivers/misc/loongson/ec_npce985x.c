@@ -15,7 +15,7 @@
 /* This spinlock is dedicated for 62&66 ports and super io port access. */
 extern spinlock_t i8042_lock;
 #define index_access_lock i8042_lock
-DEFINE_SPINLOCK(port_access_lock);
+DEFINE_SPINLOCK(port985x_access_lock);
 
 static int send_ec_command(unsigned char command)
 {
@@ -75,17 +75,17 @@ skip_data:
 	return data;
 }
 
-void clean_ec_event_status(void)
+void clean_ec985x_event_status(void)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&port_access_lock, flags);
+	spin_lock_irqsave(&port985x_access_lock, flags);
 	outl(0x404000, 0x810);
-	spin_unlock_irqrestore(&port_access_lock, flags);
+	spin_unlock_irqrestore(&port985x_access_lock, flags);
 }
-EXPORT_SYMBOL(clean_ec_event_status);
+EXPORT_SYMBOL(clean_ec985x_event_status);
 
-unsigned char ec_read(unsigned char index)
+unsigned char ec985x_read(unsigned char index)
 {
 	unsigned char value = 0;
 	unsigned long flags;
@@ -112,9 +112,9 @@ out:
 
 	return value;
 }
-EXPORT_SYMBOL(ec_read);
+EXPORT_SYMBOL(ec985x_read);
 
-unsigned char ec_read_all(unsigned char command, unsigned char index)
+unsigned char ec985x_read_all(unsigned char command, unsigned char index)
 {
 	unsigned char value = 0;
 	unsigned long flags;
@@ -139,9 +139,9 @@ out:
 
 	return value;
 }
-EXPORT_SYMBOL(ec_read_all);
+EXPORT_SYMBOL(ec985x_read_all);
 
-unsigned char ec_read_noindex(unsigned char command)
+unsigned char ec985x_read_noindex(unsigned char command)
 {
 	unsigned char value = 0;
 	unsigned long flags;
@@ -160,9 +160,9 @@ out:
 
 	return value;
 }
-EXPORT_SYMBOL(ec_read_noindex);
+EXPORT_SYMBOL(ec985x_read_noindex);
 
-int ec_write(unsigned char index, unsigned char data)
+int ec985x_write(unsigned char index, unsigned char data)
 {
 	int ret = 0;
 	unsigned long flags;
@@ -191,9 +191,9 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL(ec_write);
+EXPORT_SYMBOL(ec985x_write);
 
-int ec_write_all(unsigned char command, unsigned char index, unsigned char data)
+int ec985x_write_all(unsigned char command, unsigned char index, unsigned char data)
 {
 	unsigned long flags;
 
@@ -205,9 +205,9 @@ int ec_write_all(unsigned char command, unsigned char index, unsigned char data)
 
 	return 0;
 }
-EXPORT_SYMBOL(ec_write_all);
+EXPORT_SYMBOL(ec985x_write_all);
 
-int ec_write_noindex(unsigned char command, unsigned char data)
+int ec985x_write_noindex(unsigned char command, unsigned char data)
 {
 	unsigned long flags;
 
@@ -218,9 +218,9 @@ int ec_write_noindex(unsigned char command, unsigned char data)
 
 	return 0;
 }
-EXPORT_SYMBOL(ec_write_noindex);
+EXPORT_SYMBOL(ec985x_write_noindex);
 
-int ec_query_get_event_num(void)
+int ec985x_query_get_event_num(void)
 {
 	unsigned char value = 0;
 	unsigned long flags;
@@ -251,4 +251,4 @@ out:
 
 	return value;
 }
-EXPORT_SYMBOL(ec_query_get_event_num);
+EXPORT_SYMBOL(ec985x_query_get_event_num);
