@@ -945,8 +945,8 @@ static int spinand_probe(struct spi_device *spi_nand)
 	if(info->gd_ctype == 1) {
 		spinand_driver_strength(info->spi);
 //		chip->ecc.layout = &spinand_oob_128;
-		chip->ecc.size = 4096;
-		chip->ecc.bytes = 48;
+		chip->ecc.size = 256;
+		chip->ecc.bytes = 3;
 	} else {
 		chip->ecc.layout = &spinand_oob_64;
 		chip->ecc.size = 256;
