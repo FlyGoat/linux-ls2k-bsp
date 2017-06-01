@@ -30,6 +30,7 @@
 #include <ls2k.h>
 #include <ls2k_int.h>
 #include <linux/i2c-gpio.h>
+#include <linux/mtd/spinand.h>
 
 /*
  * UART
@@ -297,10 +298,91 @@ static struct platform_device ls2k_sdio_device = {
 	.resource       = ls2k_sdio_resources,
 };
 
+static struct resource ls2k_spi0_resources[]={
+	[0]={
+		.start      =   LS2K_SPI_REG_BASE,
+		.end        =   LS2K_SPI_REG_BASE+6,
+		.flags      =   IORESOURCE_MEM,
+	},  
+};
+
+static struct platform_device ls2k_spi0_device={
+	.name   =   "ls2k-spi",
+	.id     =       0,
+	.num_resources  =ARRAY_SIZE(ls2k_spi0_resources),
+	.resource       =ls2k_spi0_resources,
+};
+
+
+static struct mtd_partition ls2h_spi_parts[] = {
+	[0] = {
+		.name		= "spinand0",
+		.offset		= 0,
+		.size		= 32 * 1024 * 1024,
+	},
+	[1] = {
+		.name		= "spinand1",
+		.offset		= 32 * 1024 * 1024,
+		.size		= 0,	
+	},
+};
+
+struct spi_nand_platform_data ls2h_spi_nand = {
+	.name		= "LS_Nand_Flash",
+	.parts		= ls2h_spi_parts,
+	.nr_parts	= ARRAY_SIZE(ls2h_spi_parts),
+};
+
+
+static struct mtd_partition partitions[] = {
+	[0] = {
+#if 1
+		.name		= "pmon",
+		.offset		= 0,//512 * 1024,
+		.size		= 1024 * 1024,	//512KB
+	//	.mask_flags	= MTD_WRITEABLE,
+	},
+	[1] = {
+#endif
+		.name		= "data",
+		.offset		= 1024 * 1024,
+		.size		= 14 * 1024 * 1024,	//3.5MB
+	//	.mask_flags	= MTD_WRITEABLE,
+	},
+};
+
+static struct flash_platform_data flash = {
+	.name		= "m25p80",
+	.parts		= partitions,
+	.nr_parts	= ARRAY_SIZE(partitions),
+	.type		= "gd25q128",
+};
+
+
+
+static struct spi_board_info ls2h_spi_devices[] = {
+	{	/* spi nand Flash chip */
+		.modalias	= "mt29f",	
+		.bus_num 		= 0,
+		.chip_select	= 1,
+		.max_speed_hz	= 60000000,
+		.platform_data	= &ls2h_spi_nand,
+	},
+
+	{	/* DataFlash chip */
+		.modalias	= "m25p80",		//"m25p80",
+		.bus_num 		= 0,
+		.chip_select	= 0,
+		.max_speed_hz	= 60000000,
+		.platform_data	= &flash,
+	},
+};
+
 
 
 static struct platform_device *ls2k_platform_devices[] = {
 	&uart8250_device,
+	&ls2k_spi0_device,
 	&ls2k_nand_device,
 	&ls2k_sdio_device,
 	&ls2k_i2c0_device,
@@ -345,8 +427,10 @@ if(0)
 }
 	/*sdio use dma1*/
 	ls2k_writel((ls2k_readl(LS2K_APBDMA_CONFIG_REG)&~(7<<15))|(1<<15), LS2K_APBDMA_CONFIG_REG);
+
+	spi_register_board_info(ls2h_spi_devices, ARRAY_SIZE(ls2h_spi_devices));
 	return platform_add_devices(ls2k_platform_devices,
-			/*ARRAY_SIZE(ls2k_platform_devices)*/3);
+			/*ARRAY_SIZE(ls2k_platform_devices)*/2);
 }
 
 device_initcall(ls2k_platform_init);
