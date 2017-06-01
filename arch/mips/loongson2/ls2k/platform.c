@@ -351,7 +351,7 @@ static struct mtd_partition partitions[] = {
 	},
 };
 
-static struct flash_platform_data flash = {
+struct flash_platform_data flash = {
 	.name		= "m25p80",
 	.parts		= partitions,
 	.nr_parts	= ARRAY_SIZE(partitions),
@@ -365,7 +365,7 @@ static struct spi_board_info ls2h_spi_devices[] = {
 		.modalias	= "mt29f",	
 		.bus_num 		= 0,
 		.chip_select	= 1,
-		.max_speed_hz	= 60000000,
+		.max_speed_hz	= 20000000,
 		.platform_data	= &ls2h_spi_nand,
 	},
 
@@ -373,8 +373,8 @@ static struct spi_board_info ls2h_spi_devices[] = {
 		.modalias	= "m25p80",		//"m25p80",
 		.bus_num 		= 0,
 		.chip_select	= 0,
-		.max_speed_hz	= 60000000,
-		.platform_data	= &flash,
+		.max_speed_hz	= 40000000,
+	//	.platform_data	= &flash,
 	},
 };
 
