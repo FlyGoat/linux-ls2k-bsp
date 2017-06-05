@@ -573,6 +573,10 @@ config I2C_LS2H
 	  If you say yes to this option, support will be included for the
 	  I2C interface on the 2H SouthBridge
 
+config I2C_LS2K
+	tristate "Loongson-2K I2C adapter"
+	depends on CPU_LOONGSON2K
+
 config I2C_PASEMI
 	tristate "PA Semi SMBus interface"
 	depends on PPC_PASEMI && PCI
