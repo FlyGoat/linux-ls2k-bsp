@@ -31,6 +31,7 @@
 #include <ls2k_int.h>
 #include <linux/i2c-gpio.h>
 #include <linux/mtd/spinand.h>
+#include <linux/can/platform/sja1000.h>
 
 /*
  * UART
@@ -378,13 +379,67 @@ static struct spi_board_info ls2h_spi_devices[] = {
 	},
 };
 
+/*
+ * CAN
+ */
+static struct resource ls2k_can0_resources[] = {
+	{
+		.start   = LS2K_CAN0_REG_BASE,
+		.end     = LS2K_CAN0_REG_BASE+0xff,
+		.flags   = IORESOURCE_MEM,
+	}, {
+		.start   = LS2K_CAN0_IRQ,
+		.end     = LS2K_CAN0_IRQ,
+		.flags   = IORESOURCE_IRQ,
+	},
+};
+static struct resource ls2k_can1_resources[] = {
+	{
+		.start   = LS2K_CAN1_REG_BASE,
+		.end     = LS2K_CAN1_REG_BASE+0xff,
+		.flags   = IORESOURCE_MEM,
+	}, {
+		.start   = LS2K_CAN1_IRQ,
+		.end     = LS2K_CAN1_IRQ,
+		.flags   = IORESOURCE_IRQ,
+	},
+};
+
+struct sja1000_platform_data ls2k_sja1000_platform_data = {
+	.osc_freq	= 125000000,
+	.ocr		= 0x40 | 0x18,
+	.cdr		= 0x40,
+};
+
+static struct platform_device ls2k_can0_device = {
+	.name = "sja1000_platform",
+	.id = 1,
+	.dev = {
+		.platform_data = &ls2k_sja1000_platform_data,
+	},
+	.resource = ls2k_can0_resources,
+	.num_resources = ARRAY_SIZE(ls2k_can0_resources),
+};
+static struct platform_device ls2k_can1_device = {
+	.name = "sja1000_platform",
+	.id = 2,
+	.dev = {
+		.platform_data = &ls2k_sja1000_platform_data,
+	},
+	.resource = ls2k_can1_resources,
+	.num_resources = ARRAY_SIZE(ls2k_can1_resources),
+};
+
+
 
 
 static struct platform_device *ls2k_platform_devices[] = {
 	&uart8250_device,
+	&ls2k_can0_device,
+	&ls2k_can1_device,
 	&ls2k_spi0_device,
-	&ls2k_nand_device,
 	&ls2k_sdio_device,
+	&ls2k_nand_device,
 	&ls2k_i2c0_device,
 	&ls2k_i2c1_device,
 	&ls2k_rtc_device,
@@ -427,10 +482,12 @@ if(0)
 }
 	/*sdio use dma1*/
 	ls2k_writel((ls2k_readl(LS2K_APBDMA_CONFIG_REG)&~(7<<15))|(1<<15), LS2K_APBDMA_CONFIG_REG);
+	/*enable can pin*/
+	ls2k_writel(ls2k_readl(LS2K_GEN_CONFIG0_REG)|(3<<16), LS2K_GEN_CONFIG0_REG);
 
 	spi_register_board_info(ls2h_spi_devices, ARRAY_SIZE(ls2h_spi_devices));
 	return platform_add_devices(ls2k_platform_devices,
-			/*ARRAY_SIZE(ls2k_platform_devices)*/2);
+			/*ARRAY_SIZE(ls2k_platform_devices)*/6);
 }
 
 device_initcall(ls2k_platform_init);
