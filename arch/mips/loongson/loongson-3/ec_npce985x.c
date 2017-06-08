@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/delay.h>
-#include <misc/ec_npce985x.h>
+#include <ec_npce985x.h>
 
 /* This spinlock is dedicated for 62&66 ports and super io port access. */
 extern spinlock_t i8042_lock;

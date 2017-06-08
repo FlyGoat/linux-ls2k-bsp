@@ -15,7 +15,7 @@
 #include <linux/miscdevice.h>
 #include <asm/bootinfo.h>
 #include <linux/module.h>
-#include <misc/ec_npce985x.h>
+#include <ec_npce985x.h>
 
 #define DRIVER_NAME "ls_pm_hotkey"
 #define EC_SCI_DEV	"sci"

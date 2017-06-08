@@ -288,6 +288,34 @@ enum
 #define SCI_EVENT_NUM_START		SCI_EVENT_NUM_WLAN
 #define SCI_EVENT_NUM_END		SCI_EVENT_NUM_POWER
 
+#define EC_TouchPad_STSCTRL          0x78
+#define BIT_ECCFG_TPSWITCH_ON      (0 << 1)    /* Fn+F5 TouchPad switch ON*/
+#define BIT_ECCFG_TPSWITCH_OFF     (1 << 1)    /* Fn+F5 TouchPad switch OFF*/
+enum
+{
+    BIT_ECCFG_TPSWITCH = 2, /* Fn+F5 TouchPad status: 0 = close, 1 = open */
+};
+
+#define EC_BackLight_STSCTRL          0x52
+#define BIT_ECCFG_BRIGHTNESS_ON       (1 << 3)    /* Fn+F3, LCD backlight brightness on */
+#define BIT_ECCFG_BRIGHTNESS_OFF      (0 << 3)    /* Fn+F3, LCD backlight brightness off*/
+#define BIT_ECCFG_BRIGHKEYBOARD_ON    (1 << 4)    /* Fn+F8, KEYBOARD backlight on */
+#define BIT_ECCFG_BRIGHKEYBOARD_OFF   (0 << 4)    /* Fn+F8, KEYBOARD backlight off*/
+enum
+{
+    BIT_ECCFG_BRIGHTNESS = 3,       /* Fn+F3, LCD backlight brightness status: 0 = close, 1 = open */
+    BIT_ECCFG_BRIGHKEYBOARD = 4,    /* Fn+F8, KEYBOARD backlight status:  0 = close, 1 = open */
+};
+
+
+#define EC_WLAN_STSCTRL          0xD1
+#define BIT_ECCFG_WLAN_ON		(1 << 3)	/* Fn+F6 WLAN switch ON */
+#define BIT_ECCFG_WLAN_OFF		(0 << 3)	/* Fn+F6 WLAN switch OFF */
+enum
+{
+    BIT_ECCFG_WLAN = 3,            /* Fn+F6, WLAN status: 0 = close , 1 = open  */
+};
+
 extern unsigned char app_access_ec_flag;
 
 typedef int (*sci_handler)(int status);
