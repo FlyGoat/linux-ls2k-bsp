@@ -449,6 +449,27 @@ static struct platform_device ls2k_can1_device = {
 	.num_resources = ARRAY_SIZE(ls2k_can1_resources),
 };
 
+/*
+ * I2S_UDA1342
+ */
+#ifdef CONFIG_SOUND_LS2K_UDA1342
+static struct resource ls2k_uda1342_resource[] = {
+       [0]={
+               .start  = LS2K_I2S_REG_BASE,
+               .end    = (LS2K_I2S_REG_BASE + 0x10),
+               .flags  = IORESOURCE_MEM,
+       },
+};
+
+static struct platform_device ls2k_audio_device = {
+       .name           = "ls2k-audio",
+       .id             = -1,
+       .num_resources  = ARRAY_SIZE(ls2k_uda1342_resource),
+       .resource       = ls2k_uda1342_resource,
+};
+#endif
+
+
 
 
 
@@ -464,6 +485,9 @@ static struct platform_device *ls2k_platform_devices[] = {
 	&ls2k_dvo0_gpio_i2c_device,
 	&ls2k_dvo1_gpio_i2c_device,
 	&ls2k_rtc_device,
+#ifdef CONFIG_SOUND_LS2K_UDA1342
+        &ls2k_audio_device,
+#endif
 };
 
 
