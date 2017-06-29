@@ -813,6 +813,9 @@ static int loongson_laptop_resume(struct platform_device * pdev)
 	 */
 	clean_ec985x_event_status();
 
+	/* Update the power statu when resume */
+	power_supply_changed(&loongson_ac);
+
 	return 0;
 }
 #else
