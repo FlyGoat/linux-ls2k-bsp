@@ -51,7 +51,7 @@ static int bus_id = 1;
 	plat_dat->mdio_bus_data = mdio_data;
 
 	dma_cfg->pbl = 32;
-	dma_cfg->burst_len = DMA_AXI_BLEN_256;
+	dma_cfg->burst_len = 0x330000|DMA_AXI_BLEN_256;
 	plat_dat->dma_cfg = dma_cfg;
 	return plat_dat;
 }
