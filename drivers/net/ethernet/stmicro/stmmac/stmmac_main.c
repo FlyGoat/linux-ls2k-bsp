@@ -2768,6 +2768,7 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 	/* To use the chained or ring mode */
 	if (chain_mode) {
 		priv->hw->chain = priv->extend_desc?&chain_mode64_ops:&chain_mode_ops;
+		priv->hw->ring = priv->extend_desc?&ring_mode64_ops:&ring_mode_ops;
 		pr_info(" Chain mode enabled\n");
 		priv->mode = STMMAC_CHAIN_MODE;
 	} else {
