@@ -1006,7 +1006,7 @@ static void stmmac_clear_descriptors(struct stmmac_priv *priv)
 
 	/* Clear the Rx/Tx descriptors */
 	for (i = 0; i < rxsize; i++)
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			priv->hw->desc->init_rx_desc(&priv->dma_erx[i].basic,
 						     priv->use_riwt, priv->mode,
 						     (i == rxsize - 1));
@@ -1015,7 +1015,7 @@ static void stmmac_clear_descriptors(struct stmmac_priv *priv)
 						     priv->use_riwt, priv->mode,
 						     (i == rxsize - 1));
 	for (i = 0; i < txsize; i++)
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			priv->hw->desc->init_tx_desc(&priv->dma_etx[i].basic,
 						     priv->mode,
 						     (i == txsize - 1));
@@ -1081,7 +1081,7 @@ static void init_dma_desc_rings(struct net_device *dev)
 	DBG(probe, INFO, "stmmac: txsize %d, rxsize %d, bfsize %d\n",
 	    txsize, rxsize, bfsize);
 
-	if (priv->extend_desc || priv->extend_desc64) {
+	if (priv->extend_desc) {
 		priv->dma_erx = dma_alloc_coherent(priv->device, rxsize *
 						   sizeof(struct
 							  dma_extended_desc),
@@ -1123,7 +1123,7 @@ static void init_dma_desc_rings(struct net_device *dev)
 	DBG(probe, INFO, "stmmac: SKB addresses:\nskb\t\tskb data\tdma data\n");
 	for (i = 0; i < rxsize; i++) {
 		struct dma_desc *p;
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			p = &((priv->dma_erx + i)->basic);
 		else
 			p = priv->dma_rx + i;
@@ -1141,7 +1141,7 @@ static void init_dma_desc_rings(struct net_device *dev)
 
 	/* Setup the chained descriptor addresses */
 	if (priv->mode == STMMAC_CHAIN_MODE) {
-		if (priv->extend_desc || priv->extend_desc64) {
+		if (priv->extend_desc) {
 			priv->hw->chain->init(priv->dma_erx, priv->dma_rx_phy,
 					      rxsize, 1);
 			priv->hw->chain->init(priv->dma_etx, priv->dma_tx_phy,
@@ -1157,7 +1157,7 @@ static void init_dma_desc_rings(struct net_device *dev)
 	/* TX INITIALIZATION */
 	for (i = 0; i < txsize; i++) {
 		struct dma_desc *p;
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			p = &((priv->dma_etx + i)->basic);
 		else
 			p = priv->dma_tx + i;
@@ -1199,7 +1199,7 @@ static void dma_free_tx_skbufs(struct stmmac_priv *priv)
 	for (i = 0; i < priv->dma_tx_size; i++) {
 		if (priv->tx_skbuff[i] != NULL) {
 			struct dma_desc *p;
-			if (priv->extend_desc || priv->extend_desc64)
+			if (priv->extend_desc)
 				p = &((priv->dma_etx + i)->basic);
 			else
 				p = priv->dma_tx + i;
@@ -1223,7 +1223,7 @@ static void free_dma_desc_resources(struct stmmac_priv *priv)
 	dma_free_tx_skbufs(priv);
 
 	/* Free DMA regions of consistent memory previously allocated */
-	if (!priv->extend_desc && !priv->extend_desc64) {
+	if (!priv->extend_desc) {
 		dma_free_coherent(priv->device,
 				  priv->dma_tx_size * sizeof(struct dma_desc),
 				  priv->dma_tx, priv->dma_tx_phy);
@@ -1309,7 +1309,7 @@ static void stmmac_tx_clean(struct stmmac_priv *priv)
 		unsigned int dma_cur = stmmac_get_dma_cur(priv);
 		unsigned int dif = (dma_cur + txsize - entry) % txsize;
 
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			p = (struct dma_desc *)(priv->dma_etx + entry);
 		else
 			p = priv->dma_tx + entry;
@@ -1399,7 +1399,7 @@ static void stmmac_tx_err(struct stmmac_priv *priv)
 	priv->hw->dma->stop_tx(priv->ioaddr);
 	dma_free_tx_skbufs(priv);
 	for (i = 0; i < txsize; i++)
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			priv->hw->desc->init_tx_desc(&priv->dma_etx[i].basic,
 						     priv->mode,
 						     (i == txsize - 1));
@@ -1568,6 +1568,7 @@ static void stmmac_selec_desc_mode(struct stmmac_priv *priv)
 	else if (priv->plat->enh_desc == 2) {
 		pr_info(" Enhanced/Alternate descriptors\n");
 		priv->extend_desc64 = 1;
+		priv->extend_desc = 1;
 		priv->hw->desc = &enh_desc64_ops;
 	} else {
 		pr_info(" Normal descriptors\n");
@@ -1976,7 +1977,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	csum_insertion = (skb->ip_summed == CHECKSUM_PARTIAL);
 
-	if (priv->extend_desc || priv->extend_desc64)
+	if (priv->extend_desc)
 		desc = (struct dma_desc *)(priv->dma_etx + entry);
 	else
 		desc = priv->dma_tx + entry;
@@ -2022,7 +2023,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 		int len = skb_frag_size(frag);
 
 		entry = (++priv->cur_tx) % txsize;
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			desc = (struct dma_desc *)(priv->dma_etx + entry);
 		else
 			desc = priv->dma_tx + entry;
@@ -2121,7 +2122,7 @@ static inline void stmmac_rx_refill(struct stmmac_priv *priv)
 		unsigned int entry = priv->dirty_rx % rxsize;
 		struct dma_desc *p;
 
-		if (priv->extend_desc|| priv->extend_desc64)
+		if (priv->extend_desc)
 			p = (struct dma_desc *)(priv->dma_erx + entry);
 		else
 			p = priv->dma_rx + entry;
@@ -2182,7 +2183,7 @@ static int stmmac_rx(struct stmmac_priv *priv, int limit)
 		int status;
 		struct dma_desc *p;
 
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			p = (struct dma_desc *)(priv->dma_erx + entry);
 		else
 			p = priv->dma_rx + entry;
@@ -2193,7 +2194,7 @@ static int stmmac_rx(struct stmmac_priv *priv, int limit)
 		count++;
 
 		next_entry = (++priv->cur_rx) % rxsize;
-		if (priv->extend_desc || priv->extend_desc64)
+		if (priv->extend_desc)
 			prefetch(priv->dma_erx + next_entry);
 		else
 			prefetch(priv->dma_rx + next_entry);

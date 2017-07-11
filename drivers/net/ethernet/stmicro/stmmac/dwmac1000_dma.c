@@ -77,10 +77,8 @@ static int dwmac1000_dma_init(void __iomem *ioaddr, int pbl, int fb, int mb,
 	value |= DMA_BUS_MODE_DA;	/* Rx has priority over tx */
 #endif
 
-	if (atds&1)
+	if (atds)
 		value |= DMA_BUS_MODE_ATDS;
-	if(atds&2)
-		value |= DMA_BUS_MODE_DSL_EXTRA(16);
 
 	stmmac_writel(value, ioaddr + DMA_BUS_MODE);
 
