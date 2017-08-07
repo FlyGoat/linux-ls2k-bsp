@@ -67,6 +67,7 @@ u32 loongson_nr_uarts;
 struct uart_device loongson_uarts[MAX_UARTS];
 u32 loongson_nr_sensors;
 struct sensor_device loongson_sensors[MAX_SENSORS];
+u32 loongson_hwmon;
 
 struct platform_controller_hub *loongson_pch;
 extern struct platform_controller_hub ls2h_pch;
@@ -219,6 +220,11 @@ void __init prom_init_env(void)
 		eirq_source->dma_noncoherent = 0;
 	if (strstr(arcs_cmdline, "uncached"))
 		eirq_source->dma_noncoherent = 1;
+
+	if (strstr(arcs_cmdline, "hwmon"))
+		loongson_hwmon = 1;
+	else
+		loongson_hwmon = 0;
 
 	hw_coherentio = !eirq_source->dma_noncoherent;
 

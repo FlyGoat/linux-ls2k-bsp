@@ -14,7 +14,7 @@ int __weak fixup_cpu_temp(int cpu, int cputemp)
 {
 	return cputemp;
 }
-
+extern u32 loongson_hwmon;
 /*
  * Loongson-3 series cpu has two sensors inside,
  * each of them from 0 to 255,
@@ -164,7 +164,7 @@ static struct delayed_work thermal_work;
 static void do_thermal_timer(struct work_struct *work)
 {
 	int value = loongson3_cpu_temp(0);
-	if (value <= CPU_THERMAL_THRESHOLD)
+	if ((value <= CPU_THERMAL_THRESHOLD)|| (loongson_hwmon == 0))
 		schedule_delayed_work(&thermal_work, msecs_to_jiffies(5000));
 	else
 		orderly_poweroff(true);
