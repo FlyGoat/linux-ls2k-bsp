@@ -335,6 +335,7 @@ static void finalize_request(struct ls2k_mci_host *host)
 			    host->dma_complete);
 			return;
 		}
+		dma_unmap_sg(mmc_dev(host->mmc), cmd->data->sg, cmd->data->sg_len, cmd->data->flags & MMC_DATA_WRITE ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 	}
 	/* Read response from controller. */
 	cmd->resp[0] = readl(host->base + SDIRSP0);
