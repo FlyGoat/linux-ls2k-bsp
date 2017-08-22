@@ -1445,6 +1445,41 @@ static void stmmac_dma_interrupt(struct stmmac_priv *priv)
 		stmmac_tx_err(priv);
 }
 
+static char ether_addr[6];
+static int  ether_inited;
+
+
+static int __init get_ethernet_addr(u8 *macaddr)
+{
+	if(ether_inited)
+	{
+	 memcpy(macaddr, ether_addr, 6);
+	 ether_addr[5]++;
+	}
+	else random_ether_addr(macaddr);
+
+	return 0;
+}
+
+/*
+ * Saves at boot time configured settings for any netdevice.
+ */
+static int __init set_ethernet_addr(char *str)
+{
+	int i;
+	char *p = str;
+
+	for(i = 0; i < 6; i++) {
+		ether_addr[i] = simple_strtoul(p,&p,16);
+		p++;
+	}
+
+	ether_inited = 1;
+	return 0;
+}
+
+__setup("ethaddr=", set_ethernet_addr);
+
 #if defined(CONFIG_LS2H_SB)
 static int stmmac_eep_get_mac_addr(struct stmmac_priv *priv, unsigned char *buf)
 {
@@ -1644,6 +1679,11 @@ static int stmmac_get_hw_features(struct stmmac_priv *priv)
 static void stmmac_check_ether_addr(struct stmmac_priv *priv)
 {
 	if (!is_valid_ether_addr(priv->dev->dev_addr)) {
+
+	if(ether_inited)
+	 get_ethernet_addr(priv->dev->dev_addr);
+	else
+	{
 #if defined(CONFIG_LS2H_SB)
 	stmmac_eep_get_mac_addr(priv, priv->dev->dev_addr);
 #else
@@ -1651,6 +1691,7 @@ static void stmmac_check_ether_addr(struct stmmac_priv *priv)
 					     priv->dev->base_addr,
 					     priv->dev->dev_addr, 0);
 #endif
+	}
 		if (!is_valid_ether_addr(priv->dev->dev_addr))
 			eth_hw_addr_random(priv->dev);
 	}
