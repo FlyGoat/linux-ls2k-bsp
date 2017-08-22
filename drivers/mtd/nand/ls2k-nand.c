@@ -538,9 +538,7 @@ static int ls2k_nand_probe(struct platform_device *pdev)
 	struct resource *r;
 	int ret = 0, irq;
 
-#ifdef CONFIG_MTD_CMDLINE_PARTS
 	const char *part_probes[] = { "cmdlinepart", NULL };
-#endif
 	struct mtd_partition *partitions = NULL;
 	int num_partitions = 0;
 
@@ -644,15 +642,10 @@ static int ls2k_nand_probe(struct platform_device *pdev)
 		ret = -ENXIO;
 		goto fail_free_io;
 	}
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-	mtd->name = "mtd0";
-	num_partitions = parse_mtd_partitions(mtd, part_probes, &partitions, 0);
-#endif
-	if (num_partitions <= 0) {
-		partitions = pdata->parts;
-		num_partitions = pdata->nr_parts;
-	}
-	return mtd_device_parse_register(mtd, NULL, NULL, partitions, num_partitions);
+	mtd->name = "nand-flash";
+	partitions = pdata->parts;
+	num_partitions = pdata->nr_parts;
+	return mtd_device_parse_register(mtd, part_probes, NULL, partitions, num_partitions);
 
 fail_free_io:
 	iounmap(info->mmio_base);
