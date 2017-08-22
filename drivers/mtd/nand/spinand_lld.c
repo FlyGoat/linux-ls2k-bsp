@@ -884,9 +884,7 @@ static int spinand_probe(struct spi_device *spi_nand)
 	int ret;
 #else
 	struct spi_nand_platform_data *plat = spi_nand->dev.platform_data;
-#ifdef CONFIG_MTD_CMDLINE_PARTS
 	const char *part_probes[] = { "cmdlinepart", NULL };
-#endif
 	struct mtd_partition *partitions = NULL;
 	int nr_parts = 0;
 	int ret;
@@ -990,17 +988,10 @@ static int spinand_probe(struct spi_device *spi_nand)
 
 	return ret;
 #endif
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-	nr_parts = parse_mtd_partitions(mtd, part_probes,
-					      &partitions, 0);
-#endif
-	if (nr_parts <= 0 )
-	{
-		partitions = plat->parts;
-		nr_parts = plat->nr_parts;
+	partitions = plat->parts;
+	nr_parts = plat->nr_parts;
 		
-	}
-	return mtd_device_parse_register(mtd, NULL, NULL, partitions, nr_parts);
+	return mtd_device_parse_register(mtd, part_probes, NULL, partitions, nr_parts);
 }
 
 /**
