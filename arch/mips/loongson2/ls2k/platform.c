@@ -510,19 +510,21 @@ static struct platform_device *ls2k_platform_devices[] = {
 #endif
 };
 
-
-
-const struct i2c_board_info __initdata ls2k_dvo0_eep_info = {
-	I2C_BOARD_INFO("dvo0-eeprom-edid", 0x50),
+const struct i2c_board_info __initdata ls2k_fb_eep_info = {
+	I2C_BOARD_INFO("eeprom-edid", 0x50),
 };
 
-const struct i2c_board_info __initdata ls2k_dvo1_eep_info = {
-	I2C_BOARD_INFO("dvo1-eeprom-edid", 0x50),
+const struct i2c_board_info __initdata ls2k_dvi_fb_eep_info = {
+	I2C_BOARD_INFO("dvi-eeprom-edid", 0x50),
 };
 
 
 const struct i2c_board_info __initdata ls2k_codec_uda1342_info = {
 	I2C_BOARD_INFO("codec_uda1342", 0x1a),
+};
+
+const struct i2c_board_info __initdata ls2k_ds1338_info = {
+	I2C_BOARD_INFO("ds1338", 0x68),
 };
 
 
@@ -531,9 +533,10 @@ int ls2k_platform_init(void)
 
 #define I2C_BUS_0 0
 #define I2C_BUS_1 1
-	i2c_register_board_info(2, &ls2k_dvo0_eep_info, 1);
-	i2c_register_board_info(3, &ls2k_dvo1_eep_info, 1);
 
+	i2c_register_board_info(I2C_BUS_0, &ls2k_ds1338_info, 1);
+	i2c_register_board_info(I2C_BUS_1, &ls2k_fb_eep_info, 1);
+	i2c_register_board_info(2, &ls2k_dvi_fb_eep_info, 1);
 	/*sdio use dma1*/
 	ls2k_writel((ls2k_readl(LS2K_APBDMA_CONFIG_REG)&~(7<<15))|(1<<15), LS2K_APBDMA_CONFIG_REG);
 	/*enable can pin*/
