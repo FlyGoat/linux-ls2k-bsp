@@ -63,11 +63,16 @@ struct ls2k_i2c_dev {
 
 static void ls2k_i2c_stop(struct ls2k_i2c_dev *dev)
 {
-again:
-        ls2k_i2c_writeb(CR_STOP, LS2K_I2C_CR_REG);
-        ls2k_i2c_readb(LS2K_I2C_SR_REG);
-        while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_BUSY)
-                goto again;
+	int timeout;
+	do {
+		timeout = 100;
+		ls2k_i2c_writeb(CR_STOP, LS2K_I2C_CR_REG);
+		while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_BUSY)
+		{
+			timeout--;
+			if(timeout<10) udelay(1);
+		}
+	} while (!timeout);
 }
 
 static int ls2k_i2c_start(struct ls2k_i2c_dev *dev,
@@ -78,7 +83,6 @@ static int ls2k_i2c_start(struct ls2k_i2c_dev *dev,
 	addr |= (flags & I2C_M_RD)? 1:0;
 
 start:
-	mdelay(1);
 	ls2k_i2c_writeb(addr, LS2K_I2C_TXR_REG);
 	ls2k_i2c_debug("%s <line%d>: i2c device address: 0x%x\n",
 			__func__, __LINE__, addr);
@@ -87,9 +91,10 @@ start:
 
 	if (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_NOACK) {
 		ls2k_i2c_stop(dev);
+		mdelay(1);
 		while (retry--)
 			goto start;
-		pr_info("There is no i2c device ack\n");
+		//pr_info("There is no i2c device ack\n");
 		return 0;
 	}
 	return 1;
@@ -155,16 +160,14 @@ static int ls2k_i2c_doxfer(struct ls2k_i2c_dev *dev,
 	for(i = 0; i < num; i++) {
 		if (!ls2k_i2c_start(dev, m->addr, m->flags)) {
 			spin_unlock_irqrestore(&dev->lock, flags);
-			return 0;
+			return -ENODEV;
 		}
 		if (m->flags & I2C_M_RD)
-		{
 			ls2k_i2c_read(dev, m->buf, m->len);
-		}
 		else
-		{
-			ls2k_i2c_write(dev, m->buf, m->len);
-		}
+			if(ls2k_i2c_write(dev, m->buf, m->len) != m->len)
+				break;
+
 		++m;
 	}
 
