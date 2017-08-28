@@ -534,7 +534,7 @@ int ls2k_platform_init(void)
 #define I2C_BUS_0 0
 #define I2C_BUS_1 1
 
-	i2c_register_board_info(I2C_BUS_0, &ls2k_ds1338_info, 1);
+	i2c_register_board_info(I2C_BUS_1, &ls2k_ds1338_info, 1);
 	i2c_register_board_info(I2C_BUS_1, &ls2k_fb_eep_info, 1);
 	i2c_register_board_info(2, &ls2k_dvi_fb_eep_info, 1);
 	/*sdio use dma1*/
