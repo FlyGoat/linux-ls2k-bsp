@@ -261,6 +261,17 @@
 #define ls2h_writeb(val, addr)		*(volatile u8 *)CKSEG1ADDR(addr) = (val)
 #define ls2h_writew(val, addr)		*(volatile u16 *)CKSEG1ADDR(addr) = (val)
 #define ls2h_writel(val, addr)		*(volatile u32 *)CKSEG1ADDR(addr) = (val)
+/* Board Version Number */
+enum {
+	LS2H_BOARD_VER_2_2 = 0x4,
+	LS2H_BOARD_VER_OLD = 0xf,
+};
+
+enum {
+	LS3A2H_BOARD_VER_2_2 = 0x4,
+	LS3A2H_BOARD_VER_OLD = 0xf,
+};
+
 
 #define LS2H_PCIE_PORT0             0
 #define LS2H_PCIE_PORT1             1

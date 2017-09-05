@@ -23,6 +23,7 @@
 #include <loongson.h>
 #include <boot_param.h>
 #include <workarounds.h>
+#include <loongson-pch.h>
 
 struct boot_params *boot_p;
 struct loongson_params *loongson_p;
@@ -209,6 +210,7 @@ void __init prom_init_env(void)
 	pci_mem_end_addr = eirq_source->pci_mem_end_addr;
 	loongson_pciio_base = eirq_source->pci_io_start_addr;
 	loongson_dma_mask_bits = eirq_source->dma_mask_bits;
+
 	if (loongson_dma_mask_bits < 32 || loongson_dma_mask_bits > 64)
 		loongson_dma_mask_bits = 32;
 
@@ -229,6 +231,16 @@ void __init prom_init_env(void)
 	hw_coherentio = !eirq_source->dma_noncoherent;
 
 	if (strstr(eboard->name,"2H")) {
+		int ls2h_board_ver;
+
+                ls2h_board_ver = ls2h_readl(LS2H_GPIO_IN_REG);
+                ls2h_board_ver = (ls2h_board_ver >> 8) & 0xf;
+
+                if (ls2h_board_ver == LS3A2H_BOARD_VER_2_2)
+                        loongson_pciio_base = 0x1bf00000;
+                else
+                        loongson_pciio_base = 0x1ff00000;
+
 		loongson_pch = &ls2h_pch;
 		loongson_ec_sci_irq = 0x80;
 	}
