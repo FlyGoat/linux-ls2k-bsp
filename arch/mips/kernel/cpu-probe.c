@@ -39,7 +39,21 @@ static int __init fpu_disable(char *s)
 
 __setup("nofpu", fpu_disable);
 
-int __cpuinitdata mips_dsp_disabled;
+#ifdef CONFIG_CPU_LOONGSON3
+int __cpuinitdata mips_dsp_disabled = 1;
+
+static int __init dsp_enable(char *s)
+{
+	cpu_data[0].ases |= (MIPS_ASE_DSP | MIPS_ASE_DSP2P);
+	mips_dsp_disabled = 0;
+
+	return 1;
+}
+
+__setup("dsp", dsp_enable);
+#else
+int __cpuinitdata mips_dsp_disabled = 0;
+#endif
 
 static int __init dsp_disable(char *s)
 {
