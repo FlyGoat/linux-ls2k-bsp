@@ -109,6 +109,9 @@ int ls2k_set_irq_affinity(struct irq_data *d, const struct cpumask *affinity,
 	off = (irq_nr & 0x1f);
 	sel = (irq_nr >> 5);
 
+	if(irq_nr == 19)
+	return IRQ_SET_MASK_OK_NOCOPY;
+
 	cpumask_copy(&tmask, affinity);
 
 	for_each_cpu(cpu, affinity) {
@@ -220,6 +223,12 @@ void _ls2k_init_irq(u32 irq_base)
 	{	if((1<<(i - irq_base)) & LS2K_IRQ_MASK)
 		irq_set_chip_and_handler(i, &ls2k_board_irq_chip,
 					 handle_level_irq);
+#if 0
+		{
+			const DECLARE_BITMAP(cpumask, NR_CPUS) = {1};
+			__irq_set_affinity(i, to_cpumask(cpumask),  1);
+		}
+#endif
 	}
 
 	/*config msi window*/
