@@ -557,13 +557,6 @@ struct mips_abi mips_abi_32 = {
 	.rt_signal_return_offset =
 		offsetof(struct mips_vdso, o32_rt_signal_trampoline),
 	.restart	= __NR_O32_restart_syscall,
-#ifdef __BIG_ENDIAN
-	.audit_arch	= AUDIT_ARCH_MIPS,
-#elif defined(__LITTLE_ENDIAN)
-	.audit_arch	= AUDIT_ARCH_MIPSEL,
-#else
-# error "Neither big nor little endian ???"
-#endif
 };
 
 static int signal32_init(void)

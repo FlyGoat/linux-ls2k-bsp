@@ -491,8 +491,7 @@ asmlinkage void syscall_trace_enter(struct pt_regs *regs)
 	}
 
 out:
-	audit_syscall_entry(current->thread.abi->audit_arch,
-			    regs->regs[4], regs->regs[5],
+	audit_syscall_entry(regs->regs[2], regs->regs[4], regs->regs[5],
 			    regs->regs[6], regs->regs[7]);
 }
 
