@@ -1024,8 +1024,8 @@ static int ls2k_mci_probe(struct platform_device *pdev)
 	if (ls2k_mci_host_usedma(host)) {
 		host->dma = 0;//dbg-yg ??? 
 	}
-	host->sg_cpu = dma_alloc_coherent(&pdev->dev, 0x100*28, &host->sg_dma, GFP_KERNEL);
-	memset(host->sg_cpu, 0 , 0x100*28);
+	host->sg_cpu = dma_alloc_coherent(&pdev->dev, 0x100*sizeof(struct ls2k_dma_desc), &host->sg_dma, GFP_KERNEL);
+	memset(host->sg_cpu, 0 , 0x100*sizeof(struct ls2k_dma_desc));
 
 	host->clk_rate = 144000000;  //sdram rate
 	mmc->ops 	= &ls2k_mci_ops;

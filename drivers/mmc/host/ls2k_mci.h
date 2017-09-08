@@ -229,6 +229,7 @@ typedef struct ls2k_dma_desc{
 	volatile u32 step_length;
 	volatile u32 step_times;
 	volatile u32 cmd;
+	volatile u32 stats;
 	volatile u32 order_addr_hi;
 	volatile u32 saddr_hi;
 }ls2k_dma_desc;
