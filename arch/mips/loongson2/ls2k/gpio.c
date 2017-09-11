@@ -77,11 +77,11 @@ static inline int ls2k_gpio_get_value(struct gpio_chip *chip, unsigned gpio)
 static inline void ls2k_gpio_set_value(struct gpio_chip *chip, unsigned gpio, int value)
 {
 	unsigned long gpio_out = LS2K_GPIO_OUT_REG;
-	unsigned tmp;
+	unsigned long tmp;
 
 	tmp = ls2k_readq(gpio_out) & ~(1 << gpio);
 	if (value)
-		tmp |= 1 << gpio;
+		tmp |= 1ULL << gpio;
 	ls2k_writeq(tmp, gpio_out);
 }
 
@@ -92,7 +92,7 @@ static inline int ls2k_gpio_direction_input(struct gpio_chip *chip, unsigned gpi
 	if (gpio >= LS2K_GPIO_MAX)
 		return -EINVAL;
 
-	ls2k_writeq(ls2k_readq(gpio_dir) | (1 << gpio), gpio_dir);
+	ls2k_writeq(ls2k_readq(gpio_dir) | (1ULL << gpio), gpio_dir);
 
 	return 0;
 }
@@ -104,7 +104,7 @@ static inline int ls2k_gpio_direction_output(struct gpio_chip *chip, unsigned gp
 	if (gpio >= LS2K_GPIO_MAX)
 		return -EINVAL;
 
-	ls2k_writeq(ls2k_readq(gpio_dir) & ~(1 << gpio), gpio_dir);
+	ls2k_writeq(ls2k_readq(gpio_dir) & ~(1ULL << gpio), gpio_dir);
 
 	return 0;
 }
