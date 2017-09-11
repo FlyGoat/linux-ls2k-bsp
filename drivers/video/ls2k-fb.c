@@ -83,6 +83,8 @@ static dma_addr_t cursor_dma;
 
 static u_long videomemorysize = 0;
 module_param(videomemorysize, ulong, 0);
+static int clockpol;
+module_param(clockpol, int, 0);
 DEFINE_SPINLOCK(fb_lock);
 static void config_pll(unsigned long pll_base, struct pix_pll *pll_cfg);
 static struct fb_var_screeninfo ls2k_fb_default __initdata = {
@@ -366,8 +368,8 @@ static int ls2k_init_regs(struct fb_info *info)
 	ls2k_writel(0, base + LS2K_FB_DITTAB_LO_DVO1_REG);
 	ls2k_writel(0, base + LS2K_FB_DITTAB_HI_DVO0_REG);
 	ls2k_writel(0, base + LS2K_FB_DITTAB_HI_DVO1_REG);
-	ls2k_writel(0x80001311, base + LS2K_FB_PANCFG_DVO0_REG);
-	ls2k_writel(0x80001311, base + LS2K_FB_PANCFG_DVO1_REG);
+	ls2k_writel(clockpol&1?0x80001111:0x80001311, base + LS2K_FB_PANCFG_DVO0_REG);
+	ls2k_writel(clockpol&2?0x80001111:0x80001311, base + LS2K_FB_PANCFG_DVO1_REG);
 	ls2k_writel(0x00000000, base + LS2K_FB_PANTIM_DVO0_REG);//mtf add
 	ls2k_writel(0x00000000, base + LS2K_FB_PANTIM_DVO1_REG);//mtf add
 
