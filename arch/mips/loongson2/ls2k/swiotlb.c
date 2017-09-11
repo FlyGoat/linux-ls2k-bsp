@@ -70,7 +70,7 @@ static void loongson_dma_free_coherent(struct device *dev, size_t size,
 
 	if (!plat_device_is_coherent(dev)) {
 		vaddr = CAC_ADDR(vaddr);
-		dma_cache_sync(NULL, dma_addr_to_virt(dev,
+		dma_cache_sync(dev, dma_addr_to_virt(dev,
 				dma_handle), size, DMA_FROM_DEVICE);
 	}
 
@@ -85,7 +85,7 @@ static dma_addr_t loongson_dma_map_page(struct device *dev, struct page *page,
 	dma_addr_t daddr = swiotlb_map_page(dev, page, offset, size,
 					dir, attrs);
 	if (!plat_device_is_coherent(dev)) {
-		dma_cache_sync(NULL, dma_addr_to_virt(dev,
+		dma_cache_sync(dev, dma_addr_to_virt(dev,
 				daddr), size, dir);
 	}
 	mb();
@@ -97,7 +97,7 @@ static void loongson_dma_unmap_page(struct device *hwdev, dma_addr_t dev_addr,
 			struct dma_attrs *attrs)
 {
 	if (!plat_device_is_coherent(hwdev))
-		dma_cache_sync(NULL, dma_addr_to_virt(hwdev, dev_addr), size,
+		dma_cache_sync(hwdev, dma_addr_to_virt(hwdev, dev_addr), size,
 				dir);
 	swiotlb_unmap_page(hwdev, dev_addr, size, dir, attrs);
 }
@@ -113,7 +113,7 @@ static int loongson_dma_map_sg(struct device *dev, struct scatterlist *sgl,
 	if (!plat_device_is_coherent(dev))
 	{
 		for_each_sg(sgl, sg, nents, i) {
-			dma_cache_sync(NULL, dma_addr_to_virt(dev,
+			dma_cache_sync(dev, dma_addr_to_virt(dev,
 					sg->dma_address), sg->length, dir);
 		}
 	}
@@ -131,7 +131,7 @@ static void loongson_dma_unmap_sg_attrs(struct device *hwdev, struct scatterlist
 	if (!plat_device_is_coherent(hwdev) &&
 			dir != DMA_TO_DEVICE) {
 		for_each_sg(sgl, sg, nelems, i) {
-				dma_cache_sync(NULL, dma_addr_to_virt(hwdev,
+				dma_cache_sync(hwdev, dma_addr_to_virt(hwdev,
 						sg->dma_address),sg->length, dir);
 		}
 	}
@@ -143,7 +143,7 @@ static void loongson_dma_sync_single_for_cpu(struct device *hwdev, dma_addr_t de
 			    size_t size, enum dma_data_direction dir)
 {
 	if (!plat_device_is_coherent(hwdev))
-		dma_cache_sync(NULL, dma_addr_to_virt(hwdev, dev_addr), size, dir);
+		dma_cache_sync(hwdev, dma_addr_to_virt(hwdev, dev_addr), size, dir);
 	swiotlb_sync_single_for_cpu(hwdev, dev_addr, size, dir);
 }
 
@@ -153,7 +153,7 @@ static void loongson_dma_sync_single_for_device(struct device *dev,
 {
 	swiotlb_sync_single_for_device(dev, dma_handle, size, dir);
 	if (!plat_device_is_coherent(dev))
-		dma_cache_sync(NULL, dma_addr_to_virt(dev, dma_handle), size, dir);
+		dma_cache_sync(dev, dma_addr_to_virt(dev, dma_handle), size, dir);
 	mb();
 }
 
@@ -166,7 +166,7 @@ static void loongson_dma_sync_sg_for_cpu(struct device *hwdev, struct scatterlis
 	if (!plat_device_is_coherent(hwdev))
 	{
 		for_each_sg(sgl, sg, nelems, i) {
-			dma_cache_sync(NULL, dma_addr_to_virt(hwdev,
+			dma_cache_sync(hwdev, dma_addr_to_virt(hwdev,
 					sg->dma_address), sg->length, dir);
 		}
 	}
@@ -185,7 +185,7 @@ static void loongson_dma_sync_sg_for_device(struct device *dev,
 	if (!plat_device_is_coherent(dev))
 	{
 		for_each_sg(sgl, sg, nents, i) {
-			dma_cache_sync(NULL, dma_addr_to_virt(dev,
+			dma_cache_sync(dev, dma_addr_to_virt(dev,
 					sg->dma_address), sg->length, dir);
 		}
 	}
