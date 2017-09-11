@@ -47,14 +47,18 @@ void mips_set_clock_mode(enum clock_event_mode mode,
 DEFINE_PER_CPU(struct clock_event_device, mips_clockevent_device);
 int cp0_timer_irq_installed;
 
+extern void loongson3_cache_stall_unlock(int cpu, int irq);
 #ifndef CONFIG_MIPS_MT_SMTC
-irqreturn_t c0_compare_interrupt(int irq, void *dev_id)
+irqreturn_t c0_compare_interrupt(int irq, void *data)
 {
 	const int r2 = cpu_has_mips_r2;
 	struct clock_event_device *cd;
 	int cpu = smp_processor_id();
-#if defined(CONFIG_CPU_LOONGSON3) && defined(CONFIG_OPROFILE)
+#if defined(CONFIG_CPU_LOONGSON3)
+#if defined(CONFIG_OPROFILE)
 	if(!(read_c0_cause() & (1<<30)))  return IRQ_NONE;
+#endif
+	loongson3_cache_stall_unlock(cpu, irq);
 #endif
 	/*
 	 * Suckage alert:

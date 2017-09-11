@@ -343,7 +343,7 @@ static void __cpuinit r4k_blast_scache_setup(void)
 		r4k_blast_scache = blast_scache128;
 }
 
-static void (* r4k_blast_scache_node)(long node);
+void (* r4k_blast_scache_node)(long node);
 
 static void __cpuinit r4k_blast_scache_node_setup(void)
 {

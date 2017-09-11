@@ -1,14 +1,49 @@
 #include <linux/delay.h>
 #include <linux/gpio.h>
+#include <linux/irq.h>
 #include <asm/bootinfo.h>
 #include <ec_wpce775l.h>
 #include <workarounds.h>
 #include <asm/sections.h>
 
+#include <loongson.h>
 #define GPIO_LCD_CNTL		5
 #define GPIO_BACKLIGHIT_CNTL	7
 #define SYNCI   0x041f0000
 #define SYNC    0xf
+
+unsigned int last_timer_irq_count[NR_CPUS];
+extern void (* r4k_blast_scache_node)(long node);
+
+void loongson3_cache_stall_unlock(int cpu, int irq)
+{
+	unsigned int core_id;
+	unsigned int node_id;
+	unsigned int cpu_next;
+	int curr_timer_irq_count;
+	struct irq_desc *desc = irq_to_desc(irq);
+
+	if (!desc)
+		return;
+
+	if (*per_cpu_ptr(desc->kstat_irqs, cpu) & 0x3F)
+		return;
+
+	core_id = cpu_data[cpu].core;
+	node_id = cpu_data[cpu].package;
+
+	cpu_next = cpu + 1;
+	if (core_id == (cores_per_package - 1))
+		cpu_next -= cores_per_package;
+
+	curr_timer_irq_count = *per_cpu_ptr(desc->kstat_irqs, cpu_next);
+
+	if (curr_timer_irq_count == last_timer_irq_count[cpu_next])
+		r4k_blast_scache_node(node_id);
+	else
+		last_timer_irq_count[cpu_next] = curr_timer_irq_count;
+}
+EXPORT_SYMBOL(loongson3_cache_stall_unlock);
 
 void gpio_lvds_off(void)
 {
