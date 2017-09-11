@@ -104,6 +104,7 @@ static inline int ls2k_gpio_direction_output(struct gpio_chip *chip, unsigned gp
 	if (gpio >= LS2K_GPIO_MAX)
 		return -EINVAL;
 
+	ls2k_gpio_set_value(chip, gpio, value);
 	ls2k_writeq(ls2k_readq(gpio_dir) & ~(1ULL << gpio), gpio_dir);
 
 	return 0;
