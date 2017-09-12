@@ -875,14 +875,14 @@ static void ls2k_find_init_mode(struct fb_info *info)
 
 	edid = ls2k_fb_i2c_connector(par);
 	if (!edid) {
-		return;
+		goto def;
 	}
 
 	fb_edid_to_monspecs(par->edid, specs);
 
         if (specs->modedb == NULL) {
 		printk("ls2h-fb: Unable to get Mode Database\n");
-		return;
+		goto def;
 	}
 
         fb_videomode_to_modelist(specs->modedb, specs->modedb_len,
@@ -908,6 +908,16 @@ static void ls2k_find_init_mode(struct fb_info *info)
 	fb_destroy_modedb(specs->modedb);
 	specs->modedb = NULL;
 	info->var = var;
+	return;
+def:
+	info->var = ls2k_fb_default;
+        if (mode_option) {
+		printk("mode_option: %s\n", mode_option);
+                if(fb_find_mode(&var, info, mode_option, specs->modedb,
+                             specs->modedb_len, (found) ? &mode : NULL,
+                             info->var.bits_per_pixel))
+		info->var = var;
+	}
 	return;
 }
 
