@@ -474,23 +474,6 @@ struct mips_abi mips_abi = {
 	.rt_signal_return_offset =
 		offsetof(struct mips_vdso, rt_signal_trampoline),
 	.restart	= __NR_restart_syscall,
-#ifdef CONFIG_64BIT
-# ifdef __BIG_ENDIAN
-	.audit_arch	= AUDIT_ARCH_MIPS64,
-# elif defined(__LITTLE_ENDIAN)
-	.audit_arch	= AUDIT_ARCH_MIPS64EL,
-# else
-#  error "Neither big nor little endian ???"
-# endif
-#else
-# ifdef __BIG_ENDIAN
-	.audit_arch	= AUDIT_ARCH_MIPS,
-# elif defined(__LITTLE_ENDIAN)
-	.audit_arch	= AUDIT_ARCH_MIPSEL,
-# else
-#  error "Neither big nor little endian ???"
-# endif
-#endif
 };
 
 static void handle_signal(unsigned long sig, siginfo_t *info,

@@ -356,8 +356,6 @@ enum {
  * These bits disambiguate different calling conventions that share an
  * ELF machine type, bitness, and endianness
  */
-#define __AUDIT_ARCH_CONVENTION_MASK 0x30000000
-#define __AUDIT_ARCH_CONVENTION_MIPS64_N32 0x20000000
 
 /* distinguish syscall tables */
 #define __AUDIT_ARCH_64BIT 0x80000000
