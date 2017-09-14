@@ -907,7 +907,7 @@ static int __init loongson_czc_laptop_init(void)
 {
 	int ret;
 
-	if (!strstr(eboard->name,"B20"))
+	if (!strstr(eboard->name,"B20-"))
 		return 0;
 
 	printk(KERN_INFO "Loongson-czc Laptop Platform Driver:regist loongson platform driver begain.\n");
