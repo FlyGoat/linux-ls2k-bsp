@@ -43,7 +43,8 @@
 #define CUR_HEIGHT_SIZE		32
 #define DEFAULT_BITS_PER_PIXEL	16
 
-#ifdef CONFIG_DMA_NONCOHERENT
+#define CONFIG_DC_NOCOHERENT
+#if defined(CONFIG_DMA_NONCOHERENT) || defined(CONFIG_DC_NOCOHERENT)
 #define DEFAULT_CURSOR_MEM	0x900000000ef00000
 #define DEFAULT_CURSOR_DMA	0x0ef00000
 #define DEFAULT_FB_MEM		0x900000000e000000
@@ -452,6 +453,11 @@ static int ls2k_fb_set_par(struct fb_info *info)
 	unsigned long flags;
 	info->fix.line_length = get_line_length(info->var.xres_virtual,
 						info->var.bits_per_pixel);
+#if defined(CONFIG_DMA_NONCOHERENT) || defined(CONFIG_DC_NOCOHERENT)
+	*(volatile int *)(int)0xbfe10430 &= ~8; 
+#else
+	*(volatile int *)(int)0xbfe10430 |= 8; 
+#endif
 #ifdef LS2K_FB_DEBUG
 	show_var(&info->var);
 #endif
