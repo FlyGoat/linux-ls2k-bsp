@@ -121,14 +121,15 @@ static inline int syscall_get_arch(void)
 	int arch = AUDIT_ARCH_MIPS;
 #endif
 
+#ifdef CONFIG_MIPS32_O32
+	if (test_thread_flag(TIF_32BIT_REGS))
+		arch = AUDIT_ARCH_MIPS;
+#endif
 #ifdef CONFIG_MIPS32_N32
 	/* N32 sets only TIF_32BIT_ADDR */
-	if (test_thread_flag(TIF_32BIT_ADDR))
-		arch |= __AUDIT_ARCH_ALT;
-#endif
-#ifdef CONFIG_MIPS32_O32
-	if (!test_thread_flag(TIF_32BIT_REGS))
-		arch ^= __AUDIT_ARCH_64BIT;
+	if (test_thread_flag(TIF_32BIT_ADDR) &&
+			!test_thread_flag(TIF_32BIT_REGS))
+		arch = AUDIT_ARCH_MIPS64_N32;
 #endif
 //#ifdef __LITTLE_ENDIAN
 	//arch |= __AUDIT_ARCH_LE;
