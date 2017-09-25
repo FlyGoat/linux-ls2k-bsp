@@ -146,6 +146,7 @@
 #define _PAGE_SPLITTING		({BUG(); 1; })	/* Dummy value */
 #endif
 
+#ifdef CONFIG_NUMA_BALANCING
 #if defined(_PAGE_SPLITTING_SHIFT)
 #define _PAGE_PROTNONE_SHIFT	(_PAGE_SPLITTING_SHIFT + 1)
 #else
@@ -159,6 +160,10 @@
 
 /* Page cannot be executed */
 #define _PAGE_NO_EXEC_SHIFT	(cpu_has_rixi ? _PAGE_SPECIAL_SHIFT + 1 : _PAGE_SPECIAL_SHIFT)
+#else
+/* Page cannot be executed */
+#define _PAGE_NO_EXEC_SHIFT	(cpu_has_rixi ? _PAGE_SPLITTING_SHIFT + 1 : _PAGE_SPLITTING_SHIFT)
+#endif /* CONFIG_NUMA_BALANCING */
 #define _PAGE_NO_EXEC		({BUG_ON(!cpu_has_rixi); 1 << _PAGE_NO_EXEC_SHIFT; })
 
 /* Page cannot be read */
@@ -270,6 +275,10 @@ static inline uint64_t pte_to_entrylo(unsigned long pte_val)
 #define __READABLE	(_PAGE_SILENT_READ | _PAGE_ACCESSED | (cpu_has_rixi ? 0 : _PAGE_READ))
 #define __WRITEABLE	(_PAGE_WRITE | _PAGE_SILENT_WRITE | _PAGE_MODIFIED)
 
+#ifdef CONFIG_NUMA_BALANCING
 #define _PAGE_CHG_MASK	(_PFN_MASK | _PAGE_ACCESSED | _PAGE_MODIFIED | _PAGE_SPECIAL | _CACHE_MASK)
+#else
+#define _PAGE_CHG_MASK	(_PFN_MASK | _PAGE_ACCESSED | _PAGE_MODIFIED | _CACHE_MASK)
+#endif /* CONFIG_NUMA_BALANCING */
 
 #endif /* _ASM_PGTABLE_BITS_H */

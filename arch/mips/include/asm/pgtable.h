@@ -162,7 +162,11 @@ static inline void pte_clear(struct mm_struct *mm, unsigned long addr, pte_t *pt
 #else
 
 #define pte_none(pte)		(!(pte_val(pte) & ~_PAGE_GLOBAL))
+#ifdef CONFIG_NUMA_BALANCING
 #define pte_present(pte)	(pte_val(pte) & (_PAGE_PRESENT | _PAGE_PROTNONE))
+#else
+#define pte_present(pte)	(pte_val(pte) & _PAGE_PRESENT)
+#endif /* CONFIG_NUMA_BALANCING */
 
 /*
  * Certain architectures need to do special things when pte's
@@ -408,8 +412,13 @@ static inline pte_t pte_mkhuge(pte_t pte)
 }
 #endif /* _PAGE_HUGE */
 #endif
+#ifdef CONFIG_NUMA_BALANCING
 static inline int pte_special(pte_t pte)	{ return pte_val(pte) & _PAGE_SPECIAL; }
 static inline pte_t pte_mkspecial(pte_t pte)	{ pte_val(pte) |= _PAGE_SPECIAL; return pte; }
+#else
+static inline int pte_special(pte_t pte)	{ return 0; }
+static inline pte_t pte_mkspecial(pte_t pte)	{ return pte; }
+#endif
 
 /*
  * Macro to make mark a page protection value as "uncacheable".	 Note
@@ -619,7 +628,11 @@ static inline pmd_t pmd_modify(pmd_t pmd, pgprot_t newprot)
 
 static inline pmd_t pmd_mknotpresent(pmd_t pmd)
 {
+#ifdef CONFIG_NUMA_BALANCING
 	pmd_val(pmd) &= ~(_PAGE_PRESENT | _PAGE_VALID | _PAGE_DIRTY | _PAGE_PROTNONE);
+#else
+	pmd_val(pmd) &= ~(_PAGE_PRESENT | _PAGE_VALID | _PAGE_DIRTY);
+#endif
 
 	return pmd;
 }

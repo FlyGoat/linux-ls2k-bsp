@@ -41,11 +41,13 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 		pte_t pte = gup_get_pte(ptep);
 		struct page *page;
 
+#ifdef CONFIG_NUMA_BALANCING
 		/* Similar to the PMD case, NUMA hinting must take slow path */
 		if (pte_numa(pte)) {
 			pte_unmap(ptep);
 			return 0;
 		}
+#endif /* CONFIG_NUMA_BALANCING */
 
 		if (!pte_present(pte) ||
 		    pte_special(pte) || (write && !pte_write(pte))) {
@@ -133,8 +135,10 @@ static int gup_pmd_range(pud_t pud, unsigned long addr, unsigned long end,
 			 * slowpath for accounting purposes and so that they
 			 * can be serialised against THP migration.
 			 */
+#ifdef CONFIG_NUMA_BALANCING
 			if (pmd_numa(pmd))
 				return 0;
+#endif /* CONFIG_NUMA_BALANCING */
 			if (!gup_huge_pmd(pmd, addr, next, write, pages,nr))
 				return 0;
 		} else {

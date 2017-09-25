@@ -191,7 +191,11 @@ static inline int pmd_present(pmd_t pmd)
 {
 #ifdef CONFIG_MIPS_HUGE_TLB_SUPPORT
 	if (unlikely(pmd_val(pmd) & _PAGE_HUGE))
+#ifdef CONFIG_NUMA_BALANCING
 		return pmd_val(pmd) & (_PAGE_PRESENT | _PAGE_PROTNONE);
+#else
+		return pmd_val(pmd) & _PAGE_PRESENT;
+#endif /* CONFIG_NUMA_BALANCING */
 #endif
 
 	return pmd_val(pmd) != (unsigned long) invalid_pte_table;
