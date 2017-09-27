@@ -183,22 +183,15 @@ static void loongson_dma_sync_sg_for_device(struct device *dev,
 	mb();
 }
 
-#define SZ_4G	0x100000000ULL
 
 static dma_addr_t loongson_ls2h_phys_to_dma(struct device *dev, phys_addr_t paddr)
 {
-	dma_addr_t daddr;
-
-	daddr = (paddr < SZ_256M) ? paddr :
-		(paddr - high_physmem_start + SZ_256M);
-
-	return (daddr < SZ_4G) ? daddr : -1ULL; /* DMA address should be below 4GB */
+	return (paddr < 0x10000000) ? paddr : (paddr - 0x80000000);
 }
 
 static phys_addr_t loongson_ls2h_dma_to_phys(struct device *dev, dma_addr_t daddr)
 {
-	return (daddr < SZ_256M) ? daddr :
-		(daddr + high_physmem_start - SZ_256M);
+	return (daddr < 0x10000000) ? daddr : (daddr + 0x80000000);
 }
 
 static dma_addr_t loongson_rs780_phys_to_dma(struct device *dev, phys_addr_t paddr)
