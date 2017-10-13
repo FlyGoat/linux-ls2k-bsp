@@ -198,8 +198,14 @@ static int ttm_bo_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 						cvma.vm_page_prot);
 	} else {
 		ttm = bo->ttm;
+#ifdef CONFIG_CPU_LOONGSON3
+		/* uncache accelerate only for GTT */
+		if (!(bo->mem.placement & TTM_PL_FLAG_CACHED))
+			cvma.vm_page_prot = __pgprot((pgprot_val(cvma.vm_page_prot) & ~_CACHE_MASK) | _CACHE_UNCACHED_ACCELERATED);
+#else
 		cvma.vm_page_prot = ttm_io_prot(bo->mem.placement,
 						cvma.vm_page_prot);
+#endif
 
 		/* Allocate all page at once, most common usage */
 		if (ttm->bdev->driver->ttm_tt_populate(ttm)) {
