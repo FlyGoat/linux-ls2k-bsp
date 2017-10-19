@@ -142,6 +142,11 @@ extern void bus_unregister(struct bus_type *bus);
 
 extern int __must_check bus_rescan_devices(struct bus_type *bus);
 
+struct predev {
+	int devfn;
+	int bus;
+};
+
 /* iterator helpers for buses */
 struct subsys_dev_iter {
 	struct klist_iter		ki;
@@ -169,6 +174,9 @@ int bus_for_each_drv(struct bus_type *bus, struct device_driver *start,
 void bus_sort_breadthfirst(struct bus_type *bus,
 			   int (*compare)(const struct device *a,
 					  const struct device *b));
+void bus_sort_depthfirst(struct bus_type *bus,
+			   int (*compare)(const struct device *a,
+					  const struct device *b, struct predev *predev));
 /*
  * Bus notifiers: Get notified of addition/removal of devices
  * and binding/unbinding of drivers to devices.

@@ -19,6 +19,12 @@
 #include <linux/ioport.h>
 #include <linux/of.h>
 
+enum pci_bf_sort_state {
+	pci_bf_sort_default,
+	pci_force_nobf,
+	pci_force_bf,
+	pci_dmi_bf,
+};
 /*
  * Each pci channel is a top-level PCI bus seem by CPU.	 A machine  with
  * multiple PCI channels may have multiple PCI host controllers or a
