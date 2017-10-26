@@ -33,6 +33,13 @@
 			reg = <0x1fe11400 0x40>;
 		};
 
+		dc@0x10290000 {
+			compatible = "loongson,ls2k-fb";
+			reg = <0x102a0000 0x10000>;
+			interrupt-parent = <&icu>;
+			interrupts = <28>;
+		};
+
 		ohci@0x102b0000 {
 			compatible = "loongson,ls2k-ohci", "usb-ohci";
 			reg = <0x102b0000 0x8000>;
