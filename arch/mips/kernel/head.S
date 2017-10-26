@@ -209,10 +209,10 @@ NESTED(kernel_entry, 16, sp)			# kernel entry point
 	back_to_back_c0_hazard
 	set_saved_sp	sp, t0, t1
 	PTR_SUBU	sp, 4 * SZREG		# init stack pointer
-
+#ifndef	CONFIG_CPU_LOONGSON2K
 	jal       loongson3_inst_fixup
 	nop
-
+#endif
 	j		start_kernel
 	END(kernel_entry)
 
