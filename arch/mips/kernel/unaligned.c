@@ -619,7 +619,7 @@ static void emulate_load_store_insn(struct pt_regs *regs,
 			break;
 		return;
 
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 	case ldc2_op:
 		switch (insn.loongson3_lsdc2_format.opcode1) {
 		/*
