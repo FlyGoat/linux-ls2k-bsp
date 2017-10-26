@@ -16,7 +16,7 @@
 #define UINT64_C(x) x##ULL
 #define DP_FBITS 52
 
-#if defined (CONFIG_CPU_LOONGSON3) || defined (CONFIG_CPU_MIPS64R2)
+#if defined (CONFIG_CPU_LOONGSON3) || defined (CONFIG_CPU_LOONGSON2K) || defined (CONFIG_CPU_MIPS64R2)
 inline int dclz(unsigned long int a0)
 {
 	int cnt;
@@ -183,7 +183,7 @@ static ieee754dp _ieee754dp_maddf(ieee754dp z, ieee754dp x,
 	assert(ym & DP_HIDDEN_BIT);
 
 	re = xe + ye;
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined (CONFIG_CPU_LOONGSON3) || defined (CONFIG_CPU_LOONGSON2K)
 	rs = xs ^ ys ^ (opt & 2);
 	zs = zs ^ (opt & 1) ^ (opt & 2);
 	xm <<= 64 - (DP_FBITS + 2);
@@ -225,7 +225,7 @@ static ieee754dp _ieee754dp_maddf(ieee754dp z, ieee754dp x,
 	lrm = at;
 
 	hrm = hrm + (t >> 32);
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined (CONFIG_CPU_LOONGSON3) || defined (CONFIG_CPU_LOONGSON2K)
 	/* here we need to normalize hrm|rm */
 	if (hrm < UINT64_C( 0x2000000000000000)) {
 		hrm = (hrm << 1) | ((lrm & 0x8000000000000000) != 0);
