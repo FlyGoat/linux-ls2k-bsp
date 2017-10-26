@@ -19,6 +19,7 @@
 #include <linux/mutex.h>
 #include "base.h"
 #include "power/power.h"
+#include <linux/pci.h>
 
 /* /sys/devices/system */
 static struct kset *system_kset;
@@ -1090,6 +1091,74 @@ static void device_insertion_sort_klist(struct device *a, struct list_head *list
 	list_move_tail(&a->p->knode_bus.n_node, list);
 }
 
+/**
+ * device_insertion_sort_klist_depth - sorted breadth-first sequences's element into
+ * depth-first sequences
+ * @a: device which rely on breadth-first sequences
+ * @list: list which stored depth-first sequences
+ * @compare_depth:function which can compare element which wait to sorted.
+ */
+
+static void device_insertion_sort_klist_depth(struct device *a,
+		struct list_head *list,
+				int (*compare_depth)(const struct device *a,
+					const struct device *b, struct predev *p),
+						struct predev *predev)
+{
+	struct list_head *pos;
+	struct klist_node *n;
+	struct device_private *dev_prv;
+	struct device *b;
+
+	list_for_each(pos, list) {
+		n = container_of(pos, struct klist_node, n_node);
+		dev_prv = to_device_private_bus(n);
+		b = dev_prv->device;
+		if (compare_depth(a, b, predev) <= 0) {
+			list_move(&a->p->knode_bus.n_node,
+					&b->p->knode_bus.n_node);
+			return;
+		}
+	}
+	list_move_tail(&a->p->knode_bus.n_node, list);
+}
+
+/**
+ * bus_sort_depthfirst -sorted breadth-first sequences into
+ * depth-first sequences
+ * @bus:bus which breadth-first device rely on
+ * @compare_depth:function which can compare element which wait to sorted.
+ */
+void bus_sort_depthfirst(struct bus_type *bus,
+			int (*compare_depth)(const struct device *a,
+				const struct device *b, struct predev *p))
+{
+	LIST_HEAD(sorted_devices);
+	struct list_head *pos, *tmp;
+	struct klist_node *n;
+	struct device_private *dev_prv;
+	struct device *dev;
+	struct klist *device_klist;
+	struct predev *predev;
+	predev = (struct predev *)kzalloc(sizeof(struct predev), GFP_KERNEL);
+	memset(predev, 0, sizeof(struct predev));
+
+	device_klist = bus_get_device_klist(bus);
+
+	spin_lock(&device_klist->k_lock);
+	/* device_klist :pcie devices list which sorted first in breadth */
+	/* list_for_each_safe : get devlice_klist list each element */
+	list_for_each_safe(pos, tmp, &device_klist->k_list) {
+		n = container_of(pos, struct klist_node, n_node);
+		dev_prv = to_device_private_bus(n);
+		dev = dev_prv->device;
+		device_insertion_sort_klist_depth(dev,
+				&sorted_devices, compare_depth, predev);
+	}
+	list_splice_tail(&sorted_devices, &device_klist->k_list);
+	spin_unlock(&device_klist->k_lock);
+}
+EXPORT_SYMBOL_GPL(bus_sort_depthfirst);
 void bus_sort_breadthfirst(struct bus_type *bus,
 			   int (*compare)(const struct device *a,
 					  const struct device *b))

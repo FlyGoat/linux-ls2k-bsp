@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/pci.h>
 #include <linux/of_address.h>
+static int pci_bf_sort;
 
 #include <asm/cpu-info.h>
 
@@ -34,6 +35,8 @@ static struct pci_controller *hose_head, **hose_tail = &hose_head;
 unsigned long PCIBIOS_MIN_IO;
 unsigned long PCIBIOS_MIN_MEM;
 
+extern int pci_sort_bf_cmp_depth(const struct device *d_a,
+		const struct device *d_b, struct predev *d_p);
 static int pci_initialized;
 
 /*
@@ -250,10 +253,12 @@ static int __init pcibios_init(void)
 	/* Scan all of the recorded PCI controllers.  */
 	for (hose = hose_head; hose; hose = hose->next)
 		pcibios_scanbus(hose);
-
 	pci_fixup_irqs(pci_common_swizzle, pcibios_map_irq);
 
 	pci_initialized = 1;
+
+	if (pci_bf_sort == pci_force_nobf)
+		bus_sort_depthfirst(&pci_bus_type, &pci_sort_bf_cmp_depth);
 
 	return 0;
 }
@@ -354,6 +359,15 @@ char * (*pcibios_plat_setup)(char *str) __initdata;
 
 char *__init pcibios_setup(char *str)
 {
+
+	if (!strcmp(str, "bfsort")) {
+		pci_bf_sort = pci_force_bf;
+		return NULL;
+	} else if (!strcmp(str, "nobfsort")) {
+		pci_bf_sort = pci_force_nobf;
+		return NULL;
+	}
+
 	if (pcibios_plat_setup)
 		return pcibios_plat_setup(str);
 	return str;

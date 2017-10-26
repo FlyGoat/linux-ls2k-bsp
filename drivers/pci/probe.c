@@ -2198,6 +2198,68 @@ void pci_bus_release_busn_res(struct pci_bus *b)
 			res, ret ? "can not be" : "is");
 }
 
+/**
+ * pci_sort_bf_cmp_depth
+ *
+ * @d_a: element of breadth-first sequences
+ * @d_b: element of depth-first sequences
+ * @d_p: pre element of depth-first sequences which just insert
+ * when return 1 ,find next depth-first sequences's element
+ * when return -1 ,insert device a behind device b
+ * compare rules:
+ * 1 when d_a bus number is 0, insert d_a behind
+ * d_b according to devfn;
+ * 2 when d_a bus number !=0, has two situations:
+ *   d_a bus number != d_p bus number,find d_a 's bridge
+ *   and insert d_a behind bridge
+ *   d_a bus number = d_p bus number,find d_p and insert
+ *   d_a behind d_p
+ */
+int pci_sort_bf_cmp_depth(const struct device *d_a,
+		const struct device *d_b, struct predev *d_p)
+{
+	const struct pci_dev *a = to_pci_dev(d_a);
+	const struct pci_dev *b = to_pci_dev(d_b);
+
+	if (a->bus->number == 0) {
+		if (a->bus->number < b->bus->number) return -1;
+		else if (a->bus->number > b->bus->number) return  1;
+
+		if (a->devfn < b->devfn) return -1;
+		else if (a->devfn > b->devfn) return  1;
+
+	} else {
+		/* if d_a bus number != d_p bus number,find d_a 's
+		 * bridge and insert d_a behind bridge
+		 * if d_a bus number = d_p bus number,
+		 * find d_p and insert d_a behind d_p
+		 * for example:
+		 * 1、same bus number has multiple device for
+		 * example pcie switch
+		 * 2、device has multiple functions for example
+		 * multiport Networkcard
+		 */
+		if (a->bus->number != d_p->bus) {
+			if (b->hdr_type == PCI_HEADER_TYPE_NORMAL) return 1;
+			else {
+				if (a->bus->number == b->subordinate->number) {
+					d_p->devfn = a->devfn;
+					d_p->bus = a->bus->number;
+					return -1;
+				} else return 1;
+			}
+		} else {
+			if (a->devfn > d_p->devfn) {
+				if ((a->bus->number == b->bus->number) && (b->devfn == d_p->devfn)) {
+					d_p->devfn = a->devfn;
+					d_p->bus = a->bus->number;
+					return -1;
+				} else return 1;
+			}
+		}
+	}
+		return 0;
+}
 struct pci_bus *pci_scan_root_bus(struct device *parent, int bus,
 		struct pci_ops *ops, void *sysdata, struct list_head *resources)
 {
@@ -2224,7 +2286,6 @@ struct pci_bus *pci_scan_root_bus(struct device *parent, int bus,
 	}
 
 	max = pci_scan_child_bus(b);
-
 	if (!found)
 		pci_bus_update_busn_res_end(b, max);
 
