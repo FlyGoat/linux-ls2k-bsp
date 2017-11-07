@@ -96,6 +96,27 @@
 			interrupt-parent = <&icu>;
 			interrupts = <8>;
 		};
+
+		i2c0: i2c@0fe01000{
+			compatible = "loongson,ls2k-i2c";
+			reg = <0x1fe01000 0x8>;
+			interrupt-parent = <&icu>;
+			interrupts = <30>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			eeprom@57{
+				compatible = "atmel,24c16";
+				reg = <0x57>;
+				pagesize = <16>;
+			};
+		};
+		i2c1: i2c@1fe01800{
+			compatible = "loongson,ls2k-i2c";
+			reg = <0x1fe01800 0x8>;
+			interrupt-parent = <&icu>;
+			interrupts = <31>;
+		};
+
 	};
 
 	chosen {
