@@ -215,4 +215,12 @@ config PWM_VT8500
 	  To compile this driver as a module, choose M here: the module
 	  will be called pwm-vt8500.
 
+config PWM_LS2K
+	tristate "Loongson2k PWM support"
+	depends on CPU_LOONGSON2K
+	help
+	  Generic PWM framework driver for loongson2k.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called pwm-ls2k.
 endif

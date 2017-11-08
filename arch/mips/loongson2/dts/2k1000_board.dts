@@ -141,6 +141,30 @@
 			interrupt-parent = <&icu>;
 			interrupts = <60>;
 		};
+		pwm0: pwm@1fe02000{
+		    compatible = "loongson,ls2k-pwm";
+		    reg = <0x1fe02000 0xf>;
+		    interrupt-parent = <&icu>;
+		    interrupts = <32>;
+		};
+		pwm1: pwm@1fe02010{
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe02010 0xf>;
+			interrupt-parent = <&icu>;
+			interrupts = <33>;
+		};
+		pwm2: pwm@1fe02020{
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe02020 0xf>;
+			interrupt-parent = <&icu>;
+			interrupts = <34>;
+		};
+		pwm3: pwm@1fe02030{
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe02030 0xf>;
+			interrupt-parent = <&icu>;
+			interrupts = <35>;
+		};
 	};
 
 	chosen {
