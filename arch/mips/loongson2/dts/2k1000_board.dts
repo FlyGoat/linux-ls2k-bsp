@@ -141,6 +141,24 @@
 			interrupt-parent = <&icu>;
 			interrupts = <60>;
 		};
+
+		/* CAN controller nodes:
+		 * If you want to use the "can" function,enable the "can"
+		 * controller by configure general configuration register 0.
+		 */
+		/*can0: can@1fe00c00{
+			compatible = "nxp,sja1000";
+			reg = <0x1fe00c00 0xff>;
+			interrupt-parent = <&icu>;
+			interrupts = <24>;
+		};
+		can1: can@1fe00d00{
+			compatible = "nxp,sja1000";
+			reg = <0x1fe00d00 0xff>;
+			interrupt-parent = <&icu>;
+			interrupts = <25>;
+		};*/
+
 		pwm0: pwm@1fe02000{
 		    compatible = "loongson,ls2k-pwm";
 		    reg = <0x1fe02000 0xf>;
