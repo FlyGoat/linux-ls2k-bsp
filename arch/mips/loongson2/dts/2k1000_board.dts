@@ -101,6 +101,14 @@
 			interrupts = <8>;
 		};
 
+		pioA:gpio@0x1fe10500{
+			compatible = "ls,ls2k-gpio", "ls,ls-gpio";
+			reg = <0x1fe10500 0x38>;
+			ngpios = <64>;
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
+
 		i2c0: i2c@0fe01000{
 			compatible = "loongson,ls2k-i2c";
 			reg = <0x1fe01000 0x8>;
@@ -124,6 +132,27 @@
 			interrupt-parent = <&icu>;
 			interrupts = <31>;
 		};
+
+		i2c_dvo0:i2c@2{
+			compatible = "i2c-gpio";
+			gpios = <&pioA 1 0 /* sda */
+				 &pioA 0 0 /* scl */
+				>;
+			/*i2c-gpio,sda-open-drain;*/
+			/*i2c-gpio,scl-open-drain;*/
+			i2c-gpio,delay-us = <5>;	/* ~100 kHz */
+		};
+
+		i2c_dvo1:i2c@3{
+			compatible = "i2c-gpio";
+			gpios = <&pioA 32 0 /* sda */
+				 &pioA 33 0 /* scl */
+				>;
+			/*i2c-gpio,sda-open-drain;*/
+			/*i2c-gpio,scl-open-drain;*/
+			i2c-gpio,delay-us = <5>;	/* ~100 kHz */
+		};
+
 		spi0: spi@1fff0220{
 			compatible = "loongson,ls2k-spi";
 			#address-cells = <1>;
