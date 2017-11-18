@@ -109,7 +109,7 @@
 			#gpio-cells = <2>;
 		};
 
-		i2c0: i2c@0fe01000{
+		i2c0: i2c@1fe01000{
 			compatible = "loongson,ls2k-i2c";
 			reg = <0x1fe01000 0x8>;
 			interrupt-parent = <&icu>;
