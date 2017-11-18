@@ -851,7 +851,6 @@ static void ls2k_find_init_mode(struct fb_info *info)
         memset(&var, 0, sizeof(struct fb_var_screeninfo));
 		var.bits_per_pixel = DEFAULT_BITS_PER_PIXEL;
 
-		goto def;
 		edid = ls2k_fb_i2c_connector(par);
 		if (!edid){
 			goto def;

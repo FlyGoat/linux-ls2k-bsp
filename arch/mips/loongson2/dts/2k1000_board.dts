@@ -141,6 +141,12 @@
 			/*i2c-gpio,sda-open-drain;*/
 			/*i2c-gpio,scl-open-drain;*/
 			i2c-gpio,delay-us = <5>;	/* ~100 kHz */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			eeprom@50{
+				compatible = "dvi-eeprom-edid";
+				reg = <0x50>;
+			};
 		};
 
 		i2c_dvo1:i2c@3{
