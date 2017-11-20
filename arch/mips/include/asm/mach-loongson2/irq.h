@@ -25,10 +25,10 @@
 #define NR_IRQS 160
 
 enum LS2K_ICU {
-	LS64_IRQ_BASE = 8,
+	LS2K_IRQ_BASE = 8,
 
 	/* 8 */
-	UART_I0,
+	UART_I0 = LS2K_IRQ_BASE,
 	UART_I1,
 	UART_I2,
 	E1_I,

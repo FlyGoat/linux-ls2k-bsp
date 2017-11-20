@@ -36,7 +36,7 @@ static void unmask_icu_irq(struct irq_data * data)
 	if (data->irq >= LS64_MSI_IRQ_BASE)
 		index = data->irq - LS64_MSI_IRQ_BASE;
 	else
-		index = data->irq - LS64_IRQ_BASE;
+		index = data->irq - LS2K_IRQ_BASE;
 	base = CKSEG1ADDR(CONF_BASE) + (index > 32) * 0x40 + INT_LO_OFF ;
 	ls64_conf_write32(1 << (index & 0x1f), (void *)(base + INT_SET_OFF));
 }
@@ -50,7 +50,7 @@ static void mask_icu_irq(struct irq_data * data)
 	if (data->irq >= LS64_MSI_IRQ_BASE)
 		index = data->irq - LS64_MSI_IRQ_BASE;
 	else
-		index = data->irq - LS64_IRQ_BASE;
+		index = data->irq - LS2K_IRQ_BASE;
 	base = CKSEG1ADDR(CONF_BASE) + (index > 32) * 0x40 + INT_LO_OFF;
 	ls64_conf_write32(1 << (index & 0x1f), (void *)(base + INT_CLR_OFF));
 }
@@ -115,7 +115,7 @@ asmlinkage void plat_irq_dispatch(void)
 	else if (cp0_cause & STATUSF_IP4) {
 		lo = (irq_status & irq_masked);
 		while ((i = __fls(lo)) != -1) {
-			do_IRQ(i + LS64_IRQ_BASE);
+			do_IRQ(i + LS2K_IRQ_BASE);
 			lo = (lo ^ (1UL << i));
 		}
 
@@ -139,7 +139,7 @@ static void set_irq_attr(int irq, unsigned int imask, unsigned int core_mask, in
 	if (irq >= LS64_MSI_IRQ_BASE)
 		index = irq - LS64_MSI_IRQ_BASE;
 	else
-		index = irq - LS64_IRQ_BASE;
+		index = irq - LS2K_IRQ_BASE;
 
 	hi = (index >= 32);
 	index = index & 0x1f;
@@ -163,7 +163,7 @@ void __init setup_irq_default(void)
 	unsigned int i;
 	int core_id = (read_c0_ebase() & 0x3ff);
 
-	for (i = LS64_IRQ_BASE; i < LS64_IRQ_BASE + 60; i++) {
+	for (i = LS2K_IRQ_BASE; i < LS2K_IRQ_BASE + 60; i++) {
 		irq_set_chip_and_handler(i, &ls64_irq_chip, handle_level_irq);
 		set_irq_attr(i, 1 << (STATUSB_IP4 - 10), 1 << core_id, 0);
 	}
