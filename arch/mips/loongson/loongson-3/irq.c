@@ -12,6 +12,9 @@
 extern unsigned long long smp_group[4];
 extern void loongson3_ipi_interrupt(struct pt_regs *regs);
 
+int ls3a_msi_enabled = 0;
+EXPORT_SYMBOL(ls3a_msi_enabled);
+
 int plat_set_irq_affinity(struct irq_data *d, const struct cpumask *affinity,
 			  bool force)
 {

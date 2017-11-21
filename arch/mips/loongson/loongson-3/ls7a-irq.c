@@ -16,17 +16,23 @@ static volatile unsigned long long *irq_status = (volatile unsigned long long *)
 static volatile unsigned long long *irq_mask   = (volatile unsigned long long *)((LS7A_IOAPIC_INT_MASK  ));
 static volatile unsigned long long *irq_edge   = (volatile unsigned long long *)((LS7A_IOAPIC_INT_EDGE  ));
 static volatile unsigned long long *irq_clear  = (volatile unsigned long long *)((LS7A_IOAPIC_INT_CLEAR ));
+static volatile unsigned long long *irq_msi_en = (volatile unsigned long long *)((LS7A_IOAPIC_HTMSI_EN  ));
+static volatile unsigned char *irq_msi_vec = (volatile unsigned char *)((LS7A_IOAPIC_HTMSI_VEC ));
 
 extern unsigned long long smp_group[4];
 extern void loongson3_send_irq_by_ipi(int cpu, int irqs);
 
 static DEFINE_SPINLOCK(pch_irq_lock);
+extern int ls3a_msi_enabled;
 
 static void mask_pch_irq(struct irq_data *d)
 {
 	unsigned long flags;
 
 	unsigned long irq_nr = d->irq;
+
+	if(ls3a_msi_enabled)
+		return;
 
 	spin_lock_irqsave(&pch_irq_lock, flags);
 
@@ -43,7 +49,10 @@ static void unmask_pch_irq(struct irq_data *d)
 
 	spin_lock_irqsave(&pch_irq_lock, flags);
 
-	*irq_mask &= ~(1ULL << (irq_nr - LS7A_IOAPIC_IRQ_BASE));
+	if(ls3a_msi_enabled)
+		*irq_clear |= 1ULL << (irq_nr - LS7A_IOAPIC_IRQ_BASE);
+	else
+		*irq_mask &= ~(1ULL << (irq_nr - LS7A_IOAPIC_IRQ_BASE));
 
 	spin_unlock_irqrestore(&pch_irq_lock, flags);
 }
@@ -161,10 +170,40 @@ void ls7a_irq_dispatch(void)
 	handle_7a_irqs(intstatus);
 }
 
+void ls7a_msi_irq_dispatch(void)
+{
+	unsigned int i, irq;
+	unsigned long long  irqs;
+	int cpu = smp_processor_id();
+
+	unsigned int ls3a_irq_cpu = LOONGSON_INT_ROUTER_ISR(cpu);
+
+	for(i=0; i<2;i++) {
+		if(ls3a_irq_cpu & 0x3<<(24+i*2)) {
+			irqs = LOONGSON_HT1_INT_VECTOR64(i);
+			LOONGSON_HT1_INT_VECTOR64(i) = irqs;
+
+			if(i==1) {
+				handle_7a_irqs(irqs);
+			} else {
+				while(irqs){
+					irq = __ffs(irqs);
+					do_IRQ(irq+i*64);
+					irqs &= ~(1ULL<<irq);
+				}
+			}
+		}
+	}
+}
+
 static void init_7a_irq(int dev, int irq) {
 	*irq_mask  &= ~(1ULL << dev);
 	*(volatile unsigned char *)(LS7A_IOAPIC_ROUTE_ENTRY + dev) = USE_7A_INT0;
 	irq_set_chip_and_handler(irq, &pch_irq_chip, handle_level_irq);
+	if(ls3a_msi_enabled) {
+		*irq_msi_en |= 1ULL << dev;
+		*(volatile unsigned char *)(irq_msi_vec+dev) = irq;
+	}
 }
 
 void init_7a_irqs(void)
@@ -208,17 +247,44 @@ void init_7a_irqs(void)
 
 static void ls7a_irq_router_init(void)
 {
+	int i;
 	/* route LPC int to cpu core0 int 0 */
 	LOONGSON_INT_ROUTER_LPC = LOONGSON_INT_COREx_INTy(loongson_boot_cpu_id, 0);
 	LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | 0x1 << 10;
 
-	/* route 3A CPU0 INT0 to node0 core0 INT1(IP3) */
-	LOONGSON_INT_ROUTER_ENTRY(0) = LOONGSON_INT_COREx_INTy(loongson_boot_cpu_id, 1);
-	LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | 0x1 << 0;
+	if(ls3a_msi_enabled) {
+		*(volatile int *)(LOONGSON_HT1_CFG_BASE+0x58) = 0x400;//strip1, ht_int 8bit
+		/* route HT1 int0 ~ int3 */
+		for (i = 0; i < 2; i++) {
+			LOONGSON_INT_ROUTER_HT1(i) = 1<<5 | 0xf;
+			LOONGSON_HT1_INTN_EN(i) = 0xffffffff;
+			LOONGSON_INT_ROUTER_BOUNCE = LOONGSON_INT_ROUTER_BOUNCE | (1<<(i+24));
+			LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | (1<<(i+24));
+		}
+		LOONGSON_INT_ROUTER_HT1(2) = LOONGSON_INT_COREx_INTy(loongson_boot_cpu_id, 1);
+		LOONGSON_HT1_INTN_EN(2) = 0xffffffff;
+		LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | (1<<(2+24));
+
+		LOONGSON_INT_ROUTER_HT1(3) = LOONGSON_INT_COREx_INTy(loongson_boot_cpu_id, 1);
+		LOONGSON_HT1_INTN_EN(3) = 0xffffffff;
+		LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | (1<<(3+24));
+	} else {
+		/* route 3A CPU0 INT0 to node0 core0 INT1(IP3) */
+		LOONGSON_INT_ROUTER_ENTRY(0) = LOONGSON_INT_COREx_INTy(loongson_boot_cpu_id, 1);
+		LOONGSON_INT_ROUTER_INTENSET = LOONGSON_INT_ROUTER_INTEN | 0x1 << 0;
+	}
 }
 
 void __init ls7a_init_irq(void)
 {
+#ifdef CONFIG_LS7A_MSI_SUPPORT
+	if((read_c0_prid() & 0xf) == PRID_REV_LOONGSON3A_R3_1) {
+		pr_info("Loongson 3A3000F supports HT MSI interrupt, enabling LS7A MSI Interrupt.\n");
+		ls3a_msi_enabled = 1;
+		pch_irq_chip.name = "LS7A-IOAPIC-MSI";
+		loongson_pch->irq_dispatch = ls7a_msi_irq_dispatch;
+	}
+#endif
 	init_7a_irqs();
 	ls7a_irq_router_init();
 }

@@ -17,3 +17,5 @@ obj-$(CONFIG_GS464E_NODE_COUNTER) += node_counter.o
 obj-$(CONFIG_RS780_HPET) += hpet.o
 
 obj-$(CONFIG_LOONGSON3_CPUAUTOPLUG) += loongson3_cpuautoplug.o
+
+obj-$(CONFIG_PCI_MSI)  += pci_msi.o

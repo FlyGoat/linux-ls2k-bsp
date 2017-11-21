@@ -132,6 +132,14 @@ config RS780_HPET
 
 	  If unsure, say Yes.
 
+config LS7A_MSI_SUPPORT
+	bool "LS7A MSI Support"
+	depends on LOONGSON_MACH3X
+	help
+	  This option enables the MSI of LS7A.
+
+	  If unsure, say Yes.
+
 config LOONGSON_UART_BASE
 	bool
 	default y
