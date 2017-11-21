@@ -20,6 +20,9 @@
 extern int hpet_enabled;
 static DEFINE_SPINLOCK(hpet_lock);
 DEFINE_PER_CPU(struct clock_event_device, hpet_clockevent_device);
+unsigned long long hpet_mmio_addr;
+unsigned int hpet_freq;
+unsigned int hpet_t0_irq;
 
 static unsigned int smbus_read(int offset)
 {
@@ -89,6 +92,29 @@ static void hpet_enable_legacy_int(void)
 #endif
 }
 
+void clean_comparator_value(void)
+{
+	int cfg;
+	cfg = hpet_read(HPET_T0_CMP);
+	cfg &= 0;
+	hpet_write(HPET_T0_CMP,cfg);
+}
+void clean_timer_config(void)
+{
+	int cfg;
+	cfg = hpet_read(HPET_T0_CFG);
+	cfg &= 0;
+	hpet_write(HPET_T0_CFG,cfg);
+}
+
+void soft_reset(void)
+{
+	hpet_stop_counter();
+	hpet_reset_counter();
+	clean_timer_config();
+	clean_comparator_value();
+}
+
 static void hpet_set_mode(enum clock_event_mode mode,
 				struct clock_event_device *evt)
 {
@@ -98,23 +124,35 @@ static void hpet_set_mode(enum clock_event_mode mode,
 	switch (mode) {
 	case CLOCK_EVT_MODE_PERIODIC:
 		printk(KERN_INFO "set clock event to periodic mode!\n");
-		/* stop counter */
-		hpet_stop_counter();
+		if (loongson_pch && loongson_pch->board_type == RS780E) {
+			/* stop counter */
+			hpet_stop_counter();
 
-		/* enables the timer0 to generate a periodic interrupt */
-		cfg = hpet_read(HPET_T0_CFG);
-		cfg &= ~HPET_TN_LEVEL;
-		cfg |= HPET_TN_ENABLE | HPET_TN_PERIODIC |
-				HPET_TN_SETVAL | HPET_TN_32BIT;
-		hpet_write(HPET_T0_CFG, cfg);
+			/* enables the timer0 to generate a periodic interrupt */
+			cfg = hpet_read(HPET_T0_CFG);
+			cfg &= ~HPET_TN_LEVEL;
+			cfg |= HPET_TN_ENABLE | HPET_TN_PERIODIC |
+					HPET_TN_SETVAL | HPET_TN_32BIT;
+			hpet_write(HPET_T0_CFG, cfg);
 
-		/* set the comparator */
-		hpet_write(HPET_T0_CMP, HPET_COMPARE_VAL);
-		udelay(1);
-		hpet_write(HPET_T0_CMP, HPET_COMPARE_VAL);
+			/* set the comparator */
+			hpet_write(HPET_T0_CMP, HPET_COMPARE_VAL);
+			udelay(1);
+			hpet_write(HPET_T0_CMP, HPET_COMPARE_VAL);
 
-		/* start counter */
-		hpet_start_counter();
+			/* start counter */
+			hpet_start_counter();
+		} else {
+			soft_reset();
+			cfg = hpet_read(HPET_T0_CFG);
+			cfg |= 0x48;
+			hpet_write(HPET_T0_CFG,cfg);
+			hpet_write(HPET_T0_CMP,HPET_COMPARE_VAL);
+			cfg = hpet_read(HPET_T0_CFG);
+			cfg |= 0xe;
+			hpet_write(HPET_T0_CFG,cfg);
+			hpet_start_counter();
+		}
 		break;
 	case CLOCK_EVT_MODE_SHUTDOWN:
 	case CLOCK_EVT_MODE_UNUSED:
@@ -212,10 +250,25 @@ void __init setup_hpet_timer(void)
 	unsigned int cpu = smp_processor_id();
 	struct clock_event_device *cd;
 
-	if (loongson_pch && loongson_pch->board_type != RS780E)
+#ifndef CONFIG_RS780_HPET
+	if (loongson_pch && loongson_pch->board_type == RS780E)
+		return;
+#endif
+#ifndef CONFIG_LS7A_HPET
+	if (loongson_pch && loongson_pch->board_type == LS7A)
+		return;
+#endif
+
+	if (loongson_pch && loongson_pch->board_type != LS7A && loongson_pch->board_type != RS780E)
 		return;
 
-	hpet_setup();
+	hpet_mmio_addr = (loongson_pch && loongson_pch->board_type == RS780E) ? RS780_MMIO_ADDR : LS7A_MMIO_ADDR;
+	hpet_freq = (loongson_pch && loongson_pch->board_type == RS780E) ? RS780_FREQ : LS7A_FREQ;
+	hpet_t0_irq = (loongson_pch && loongson_pch->board_type == RS780E) ? RS780_HPET_IRQ : LS7A_IOAPIC_HPET_INT_IRQ;
+
+	if (loongson_pch && loongson_pch->board_type == RS780E)
+		hpet_setup();
+
 	hpet_enabled = 1;
 
 	cd = &per_cpu(hpet_clockevent_device, cpu);
@@ -246,7 +299,8 @@ static void hpet_suspend(struct clocksource *cs)
 
 static void hpet_resume(struct clocksource *cs)
 {
-	hpet_setup();
+	if (loongson_pch && loongson_pch->board_type == RS780E)
+		hpet_setup();
 	hpet_restart_counter();
 }
 

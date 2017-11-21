@@ -120,6 +120,11 @@ config GS464E_NODE_COUNTER
 
 	  If unsure, say No.
 
+menuconfig LOONGSON3_HPET_SUPPORT
+	bool "Loongson3 HPET Support"
+	depends on LOONGSON_MACH3X
+
+if LOONGSON3_HPET_SUPPORT
 config RS780_HPET
 	bool "RS780/SBX00 HPET Timer"
 	depends on LOONGSON_MACH3X
@@ -131,6 +136,20 @@ config RS780_HPET
 	  this option at first, otherwise, You will get wrong system time.
 
 	  If unsure, say Yes.
+
+config LS7A_HPET
+	bool "LS7A HPET Timer"
+	depends on LOONGSON_MACH3X
+	select MIPS_EXTERNAL_TIMER
+	help
+	  This option enables the hpet timer of LS7A.
+
+	  If you want to enable the Loongson3 CPUFreq Driver, Please enable
+	  this option at first, otherwise, You will get wrong system time.
+
+	  If unsure, say Yes.
+
+endif # LOONGSON3_HPET_SUPPORT
 
 config LS7A_MSI_SUPPORT
 	bool "LS7A MSI Support"
