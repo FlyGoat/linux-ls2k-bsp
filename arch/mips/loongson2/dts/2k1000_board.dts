@@ -110,7 +110,7 @@
 		};
 
 		i2c0: i2c@1fe01000{
-			compatible = "loongson,ls2k-i2c";
+			compatible = "loongson,ls-i2c";
 			reg = <0x1fe01000 0x8>;
 			interrupt-parent = <&icu>;
 			interrupts = <30>;
@@ -127,7 +127,7 @@
 			};
 		};
 		i2c1: i2c@1fe01800{
-			compatible = "loongson,ls2k-i2c";
+			compatible = "loongson,ls-i2c";
 			reg = <0x1fe01800 0x8>;
 			interrupt-parent = <&icu>;
 			interrupts = <31>;

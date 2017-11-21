@@ -186,19 +186,6 @@
 #define LS2K_I2C1_CR_REG     		(LS2K_I2C1_REG_BASE + 0x4)
 #define LS2K_I2C1_SR_REG     		(LS2K_I2C1_REG_BASE + 0x4)
 
-#define	CR_START			0x80
-#define	CR_STOP				0x40
-#define	CR_READ				0x20
-#define	CR_WRITE			0x10
-#define	CR_ACK				0x8
-#define	CR_IACK				0x1
-
-#define	SR_NOACK			0x80
-#define	SR_BUSY				0x40
-#define	SR_AL				0x20
-#define	SR_TIP				0x2
-#define	SR_IF				0x1
-
 #define LS2K_NAND_DMA_SHIFT		0
 #define LS2K_AESR_DMA_SHIFT		3
 #define LS2K_AESW_DMA_SHIFT		6

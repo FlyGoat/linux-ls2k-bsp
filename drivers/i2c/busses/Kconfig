@@ -586,12 +586,12 @@ config I2C_LS2H
 	  If you say yes to this option, support will be included for the
 	  I2C interface on the Loongson-2H Platform-Bridge.
 
-config I2C_LS2K
-	tristate "Loongson-2k I2C adapter"
+config I2C_LS
+	tristate "Loongson I2C adapter"
 	depends on CPU_LOONGSON2K
 	help
 	  If you say yes to this option, support will be included for the
-	  I2C interface on the Loongson-2k Platform-Bridge.
+	  I2C interface on the Loongson Platform.
 
 config I2C_PASEMI
 	tristate "PA Semi SMBus interface"

@@ -1,5 +1,5 @@
 /*
- * Loongson-2K I2C master mode driver
+ * Loongson I2C master mode driver
  *
  * Copyright (C) 2013 Loongson Technology Corporation Limited
  *
@@ -30,26 +30,44 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+
+#ifdef CONFIG_CPU_LOONGSON2K
 #include <ls2k.h>
-
-#define LS2K_I2C_PRER_LO_REG	0x0
-#define LS2K_I2C_PRER_HI_REG	0x1
-#define LS2K_I2C_CTR_REG    	0x2
-#define LS2K_I2C_TXR_REG    	0x3
-#define LS2K_I2C_RXR_REG    	0x3
-#define LS2K_I2C_CR_REG     	0x4
-#define LS2K_I2C_SR_REG     	0x4
-
-#define ls2k_i2c_readb(addr)		readb(dev->base + addr)
-#define ls2k_i2c_writeb(val, addr)	writeb(val, dev->base + addr)
-
-#ifdef LS2K_I2C_DEBUG
-#define ls2k_i2c_debug(fmt, args...)	printk(KERN_CRIT fmt, ##args)
 #else
-#define ls2k_i2c_debug(fmt, args...)
+#include <loongson-pch.h>
 #endif
 
-struct ls2k_i2c_dev {
+#define	CR_START			0x80
+#define	CR_STOP				0x40
+#define	CR_READ				0x20
+#define	CR_WRITE			0x10
+#define	CR_ACK				0x8
+#define	CR_IACK				0x1
+
+#define	SR_NOACK			0x80
+#define	SR_BUSY				0x40
+#define	SR_AL				0x20
+#define	SR_TIP				0x2
+#define	SR_IF				0x1
+
+#define LS_I2C_PRER_LO_REG	0x0
+#define LS_I2C_PRER_HI_REG	0x1
+#define LS_I2C_CTR_REG    	0x2
+#define LS_I2C_TXR_REG    	0x3
+#define LS_I2C_RXR_REG    	0x3
+#define LS_I2C_CR_REG     	0x4
+#define LS_I2C_SR_REG     	0x4
+
+#define ls_i2c_readb(addr)			readb(dev->base + addr)
+#define ls_i2c_writeb(val, addr)	writeb(val, dev->base + addr)
+
+#ifdef LS_I2C_DEBUG
+#define ls_i2c_debug(fmt, args...)	printk(KERN_CRIT fmt, ##args)
+#else
+#define ls_i2c_debug(fmt, args...)
+#endif
+
+struct ls_i2c_dev {
 	spinlock_t		lock;
 	unsigned int		suspended:1;
 	struct device		*dev;
@@ -60,16 +78,16 @@ struct ls2k_i2c_dev {
 	struct i2c_adapter	adapter;
 };
 
-static void ls2k_i2c_stop(struct ls2k_i2c_dev *dev)
+static void ls_i2c_stop(struct ls_i2c_dev *dev)
 {
 again:
-        ls2k_i2c_writeb(CR_STOP, LS2K_I2C_CR_REG);
-        ls2k_i2c_readb(LS2K_I2C_SR_REG);
-        while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_BUSY)
+        ls_i2c_writeb(CR_STOP, LS_I2C_CR_REG);
+        ls_i2c_readb(LS_I2C_SR_REG);
+        while (ls_i2c_readb(LS_I2C_SR_REG) & SR_BUSY)
                 goto again;
 }
 
-static int ls2k_i2c_start(struct ls2k_i2c_dev *dev,
+static int ls_i2c_start(struct ls_i2c_dev *dev,
 		int dev_addr, int flags)
 {
 	int retry = 5;
@@ -78,14 +96,14 @@ static int ls2k_i2c_start(struct ls2k_i2c_dev *dev,
 
 start:
 	mdelay(1);
-	ls2k_i2c_writeb(addr, LS2K_I2C_TXR_REG);
-	ls2k_i2c_debug("%s <line%d>: i2c device address: 0x%x\n",
+	ls_i2c_writeb(addr, LS_I2C_TXR_REG);
+	ls_i2c_debug("%s <line%d>: i2c device address: 0x%x\n",
 			__func__, __LINE__, addr);
-	ls2k_i2c_writeb((CR_START | CR_WRITE), LS2K_I2C_CR_REG);
-	while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_TIP) ;
+	ls_i2c_writeb((CR_START | CR_WRITE), LS_I2C_CR_REG);
+	while (ls_i2c_readb(LS_I2C_SR_REG) & SR_TIP) ;
 
-	if (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_NOACK) {
-		ls2k_i2c_stop(dev);
+	if (ls_i2c_readb(LS_I2C_SR_REG) & SR_NOACK) {
+		ls_i2c_stop(dev);
 		while (retry--)
 			goto start;
 		pr_info("There is no i2c device ack\n");
@@ -94,48 +112,48 @@ start:
 	return 1;
 }
 
-static void ls2k_i2c_init(struct ls2k_i2c_dev *dev)
+static void ls_i2c_init(struct ls_i2c_dev *dev)
 {
-        ls2k_i2c_writeb(0, LS2K_I2C_CTR_REG);
-        ls2k_i2c_writeb(0x2c, LS2K_I2C_PRER_LO_REG);
-        ls2k_i2c_writeb(0x1, LS2K_I2C_PRER_HI_REG);
-        ls2k_i2c_writeb(0x80, LS2K_I2C_CTR_REG);
+        ls_i2c_writeb(0, LS_I2C_CTR_REG);
+        ls_i2c_writeb(0x2c, LS_I2C_PRER_LO_REG);
+        ls_i2c_writeb(0x1, LS_I2C_PRER_HI_REG);
+        ls_i2c_writeb(0x80, LS_I2C_CTR_REG);
 }
 
-static int ls2k_i2c_read(struct ls2k_i2c_dev *dev,
+static int ls_i2c_read(struct ls_i2c_dev *dev,
 		unsigned char *buf, int count)
 {
 	int i;
 
 	for (i = 0; i < count; i++) {
-		ls2k_i2c_writeb((i == count - 1)?
+		ls_i2c_writeb((i == count - 1)?
 				(CR_READ | CR_ACK) : CR_READ,
-				LS2K_I2C_CR_REG);
-		while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_TIP) ;
-		buf[i] = ls2k_i2c_readb(LS2K_I2C_RXR_REG);
-		ls2k_i2c_debug("%s <line%d>: read buf[%d] <= %02x\n",
+				LS_I2C_CR_REG);
+		while (ls_i2c_readb(LS_I2C_SR_REG) & SR_TIP) ;
+		buf[i] = ls_i2c_readb(LS_I2C_RXR_REG);
+		ls_i2c_debug("%s <line%d>: read buf[%d] <= %02x\n",
 				__func__, __LINE__, i, buf[i]);
         }
 
         return i;
 }
 
-static int ls2k_i2c_write(struct ls2k_i2c_dev *dev,
+static int ls_i2c_write(struct ls_i2c_dev *dev,
 		unsigned char *buf, int count)
 {
         int i;
 
         for (i = 0; i < count; i++) {
-		ls2k_i2c_writeb(buf[i], LS2K_I2C_TXR_REG);
-		ls2k_i2c_debug("%s <line%d>: write buf[%d] => %02x\n",
+		ls_i2c_writeb(buf[i], LS_I2C_TXR_REG);
+		ls_i2c_debug("%s <line%d>: write buf[%d] => %02x\n",
 				__func__, __LINE__, i, buf[i]);
-		ls2k_i2c_writeb(CR_WRITE, LS2K_I2C_CR_REG);
-		while (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_TIP) ;
+		ls_i2c_writeb(CR_WRITE, LS_I2C_CR_REG);
+		while (ls_i2c_readb(LS_I2C_SR_REG) & SR_TIP) ;
 
-		if (ls2k_i2c_readb(LS2K_I2C_SR_REG) & SR_NOACK) {
-			ls2k_i2c_debug("%s <line%d>: device no ack\n",
+		if (ls_i2c_readb(LS_I2C_SR_REG) & SR_NOACK) {
+			ls_i2c_debug("%s <line%d>: device no ack\n",
 					__func__, __LINE__);
-			ls2k_i2c_stop(dev);
+			ls_i2c_stop(dev);
 			return 0;
 		}
         }
@@ -143,7 +161,7 @@ static int ls2k_i2c_write(struct ls2k_i2c_dev *dev,
         return i;
 }
 
-static int ls2k_i2c_doxfer(struct ls2k_i2c_dev *dev,
+static int ls_i2c_doxfer(struct ls_i2c_dev *dev,
 		struct i2c_msg *msgs, int num)
 {
 	struct i2c_msg *m = msgs;
@@ -152,37 +170,37 @@ static int ls2k_i2c_doxfer(struct ls2k_i2c_dev *dev,
 
 	spin_lock_irqsave(&dev->lock, flags);
 	for(i = 0; i < num; i++) {
-		if (!ls2k_i2c_start(dev, m->addr, m->flags)) {
+		if (!ls_i2c_start(dev, m->addr, m->flags)) {
 			spin_unlock_irqrestore(&dev->lock, flags);
 			return 0;
 		}
 		if (m->flags & I2C_M_RD)
 		{
-			ls2k_i2c_read(dev, m->buf, m->len);
+			ls_i2c_read(dev, m->buf, m->len);
 		}
 		else
 		{
-			ls2k_i2c_write(dev, m->buf, m->len);
+			ls_i2c_write(dev, m->buf, m->len);
 		}
 		++m;
 	}
 
-	ls2k_i2c_stop(dev);
+	ls_i2c_stop(dev);
 	spin_unlock_irqrestore(&dev->lock, flags);
 
 	return i;
 }
 
-static int ls2k_i2c_xfer(struct i2c_adapter *adap,
+static int ls_i2c_xfer(struct i2c_adapter *adap,
                         struct i2c_msg *msgs, int num)
 {
 	int ret;
 	int retry;
-	struct ls2k_i2c_dev *dev;
+	struct ls_i2c_dev *dev;
 
 	dev = i2c_get_adapdata(adap);
 	for (retry = 0; retry < adap->retries; retry++) {
-		ret = ls2k_i2c_doxfer(dev, msgs, num);
+		ret = ls_i2c_doxfer(dev, msgs, num);
 		if (ret != -EAGAIN)
 			return ret;
 
@@ -192,19 +210,19 @@ static int ls2k_i2c_xfer(struct i2c_adapter *adap,
 	return -EREMOTEIO;
 }
 
-static unsigned int ls2k_i2c_func(struct i2c_adapter *adap)
+static unsigned int ls_i2c_func(struct i2c_adapter *adap)
 {
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
-static const struct i2c_algorithm ls2k_i2c_algo = {
-	.master_xfer	= ls2k_i2c_xfer,
-	.functionality	= ls2k_i2c_func,
+static const struct i2c_algorithm ls_i2c_algo = {
+	.master_xfer	= ls_i2c_xfer,
+	.functionality	= ls_i2c_func,
 };
 
-static int ls2k_i2c_probe(struct platform_device *pdev)
+static int ls_i2c_probe(struct platform_device *pdev)
 {
-	struct ls2k_i2c_dev	*dev;
+	struct ls_i2c_dev	*dev;
 	struct i2c_adapter	*adap;
 	struct resource		*mem, *irq, *ioarea;
 	int r;
@@ -228,7 +246,7 @@ static int ls2k_i2c_probe(struct platform_device *pdev)
 		return -EBUSY;
 	}
 
-	dev = kzalloc(sizeof(struct ls2k_i2c_dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct ls_i2c_dev), GFP_KERNEL);
 	if (!dev) {
 		r = -ENOMEM;
 		goto err_release_region;
@@ -245,15 +263,15 @@ static int ls2k_i2c_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, dev);
 
-	ls2k_i2c_init(dev);
+	ls_i2c_init(dev);
 
 	adap = &dev->adapter;
 	i2c_set_adapdata(adap, dev);
 	adap->owner = THIS_MODULE;
 	adap->class = I2C_CLASS_HWMON;
 	adap->retries = 5;
-	strlcpy(adap->name, "LS2K I2C adapter", sizeof(adap->name));
-	adap->algo = &ls2k_i2c_algo;
+	strlcpy(adap->name, "LS I2C adapter", sizeof(adap->name));
+	adap->algo = &ls_i2c_algo;
 	adap->dev.parent = &pdev->dev;
 #ifdef CONFIG_OF
 	adap->dev.of_node = of_node_get(pdev->dev.of_node);
@@ -278,9 +296,9 @@ err_release_region:
 	return r;
 }
 
-static int ls2k_i2c_remove(struct platform_device *pdev)
+static int ls_i2c_remove(struct platform_device *pdev)
 {
-	struct ls2k_i2c_dev	*dev = platform_get_drvdata(pdev);
+	struct ls_i2c_dev	*dev = platform_get_drvdata(pdev);
 	struct resource		*mem;
 
 	platform_set_drvdata(pdev, NULL);
@@ -293,70 +311,70 @@ static int ls2k_i2c_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
-static int ls2k_i2c_suspend_noirq(struct device *dev)
+static int ls_i2c_suspend_noirq(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
-	struct ls2k_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
+	struct ls_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	i2c_dev->suspended = 1;
 
 	return 0;
 }
 
-static int ls2k_i2c_resume(struct device *dev)
+static int ls_i2c_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
-	struct ls2k_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
+	struct ls_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	i2c_dev->suspended = 0;
-	ls2k_i2c_init(i2c_dev);
+	ls_i2c_init(i2c_dev);
 
 	return 0;
 }
 
-static const struct dev_pm_ops ls2k_i2c_dev_pm_ops = {
-	.suspend_noirq	= ls2k_i2c_suspend_noirq,
-	.resume		= ls2k_i2c_resume,
+static const struct dev_pm_ops ls_i2c_dev_pm_ops = {
+	.suspend_noirq	= ls_i2c_suspend_noirq,
+	.resume		= ls_i2c_resume,
 };
 
-#define LS2K_DEV_PM_OPS (&ls2k_i2c_dev_pm_ops)
+#define LS_DEV_PM_OPS (&ls_i2c_dev_pm_ops)
 #else
-#define LS2K_DEV_PM_OPS NULL
+#define LS_DEV_PM_OPS NULL
 #endif
 #ifdef CONFIG_OF
-static struct of_device_id ls2k_i2c_id_table[] = {
-	{.compatible = "loongson,ls2k-i2c"},
+static struct of_device_id ls_i2c_id_table[] = {
+	{.compatible = "loongson,ls-i2c"},
 	{},
 };
 #endif
-static struct platform_driver ls2k_i2c_driver = {
-	.probe		= ls2k_i2c_probe,
-	.remove		= ls2k_i2c_remove,
+static struct platform_driver ls_i2c_driver = {
+	.probe		= ls_i2c_probe,
+	.remove		= ls_i2c_remove,
 	.driver		= {
-		.name = "ls2k-i2c",
+		.name = "ls-i2c",
 		.owner = THIS_MODULE,
-		.pm = LS2K_DEV_PM_OPS,
+		.pm = LS_DEV_PM_OPS,
 		.bus = &platform_bus_type,
 #ifdef CONFIG_OF
-		.of_match_table = of_match_ptr(ls2k_i2c_id_table),
+		.of_match_table = of_match_ptr(ls_i2c_id_table),
 #endif
 	},
 };
 
-static int __init ls2k_i2c_init_driver(void)
+static int __init ls_i2c_init_driver(void)
 {
-	return platform_driver_register(&ls2k_i2c_driver);
+	return platform_driver_register(&ls_i2c_driver);
 }
-subsys_initcall(ls2k_i2c_init_driver);
+subsys_initcall(ls_i2c_init_driver);
 
-static void __exit ls2k_i2c_exit_driver(void)
+static void __exit ls_i2c_exit_driver(void)
 {
-	platform_driver_unregister(&ls2k_i2c_driver);
+	platform_driver_unregister(&ls_i2c_driver);
 }
 
-module_exit(ls2k_i2c_exit_driver);
+module_exit(ls_i2c_exit_driver);
 
 MODULE_AUTHOR("Loongson Technology Corporation Limited");
-MODULE_DESCRIPTION("LOONGSON-2K I2C bus adapter");
+MODULE_DESCRIPTION("LOONGSON I2C bus adapter");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:ls2k-i2c");
+MODULE_ALIAS("platform:ls-i2c");
