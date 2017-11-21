@@ -73,6 +73,10 @@
 			| DMA_AXI_BLEN_32 | DMA_AXI_BLEN_64 \
 			| DMA_AXI_BLEN_128 | DMA_AXI_BLEN_256)
 
+/* AXI DMA Outstanding request limit */
+#define DMA_AXI_RD_OSR_LMT  (3 << 16)
+#define DMA_AXI_WR_OSR_LMT  (3 << 20)
+
 /* Platfrom data for platform device structure's platform_data field */
 
 struct stmmac_mdio_bus_data {
