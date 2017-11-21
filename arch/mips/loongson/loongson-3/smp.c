@@ -27,7 +27,9 @@
 #include <asm/clock.h>
 #include <asm/tlbflush.h>
 #include <loongson.h>
+#include <irq.h>
 #include <workarounds.h>
+#include <loongson-pch.h>
 
 #include "smp.h"
 
@@ -191,6 +193,7 @@ static void loongson3_send_ipi_mask(const struct cpumask *mask, unsigned int act
 }
 
 #define IPI_IRQ_OFFSET 6
+extern unsigned int ls7a_ipi_pos2irq[];
 
 void loongson3_send_irq_by_ipi(int cpu, int irqs)
 {
@@ -227,10 +230,26 @@ void loongson3_ipi_interrupt(struct pt_regs *regs)
 	}
 
 	if (irqs) {
-		int irq;
-		while ((irq = ffs(irqs))) {
-			do_IRQ(irq-1);
-			irqs &= ~(1<<(irq-1));
+		int irq, irq1;
+		switch (loongson_pch->board_type) {
+		case RS780E:
+			while ((irq = ffs(irqs))) {
+				do_IRQ(irq-1);
+				irqs &= ~(1<<(irq-1));
+			}
+		break;
+		case LS2H:
+			do_IRQ(irqs);
+		break;
+		case LS7A:
+			while ((irq = ffs(irqs))) {
+				irq1 = ls7a_ipi_pos2irq[irq-1];
+				do_IRQ(LS7A_IOAPIC_IRQ_BASE+irq1);
+				irqs &= ~(1<<(irq-1));
+			}
+			break;
+		default:
+		break;
 		}
 	}
 }

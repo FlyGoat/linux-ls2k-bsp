@@ -68,6 +68,9 @@ extern int mach_i8259_irq(void);
 #define LOONGSON3_REG32(base, x) \
 	(*(volatile u32 *)((char *)TO_UNCAC(base) + (x)))
 
+#define LOONGSON3_REG64(base, x) \
+	(*(volatile u64 *)((char *)TO_UNCAC(base) + (x)))
+
 #define LOONGSON_IRQ_BASE	32
 #define LOONGSON2_PERFCNT_IRQ	(MIPS_CPU_IRQ_BASE + 6) /* cpu perf counter */
 

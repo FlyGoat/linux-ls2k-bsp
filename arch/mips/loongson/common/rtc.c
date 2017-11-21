@@ -37,7 +37,7 @@ static struct platform_device loongson_rtc_device = {
 
 static int __init loongson_rtc_platform_init(void)
 {
-	if (loongson_pch && loongson_pch->board_type == LS2H)
+	if (loongson_pch && (loongson_pch->board_type == LS2H ||loongson_pch->board_type == LS7A))
 		return 0;
 
 	platform_device_register(&loongson_rtc_device);

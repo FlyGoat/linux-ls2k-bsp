@@ -13,6 +13,8 @@
 #define __ASM_MACH_LOONGSON_PCI_H_
 
 extern struct pci_ops loongson_pci_ops;
+extern struct pci_ops loongson_ls7a_pci_ops;
+extern struct pci_ops loongson_780e_pci_ops;
 
 /* this is an offset from mips_io_port_base */
 #define LOONGSON_PCI_IO_START	0x00004000UL

@@ -12,7 +12,7 @@
 #define HT1LO_PCICFG_BASE      0x1a000000
 #define HT1LO_PCICFG_BASE_TP1  0x1b000000
 
-static int rs780_pci_config_access(unsigned char access_type,
+static int ls7a_pci_config_access(unsigned char access_type,
 		struct pci_bus *bus, unsigned int devfn,
 		int where, u32 *data)
 {
@@ -23,8 +23,14 @@ static int rs780_pci_config_access(unsigned char access_type,
 	int function = PCI_FUNC(devfn);
 	int reg = where & ~3;
 
+	if (busnum == 0 && device == 6 && function == 0 && reg == 0x20)
+		return 0;
 	if (busnum == 0) {
-		if (device > 31)
+
+		/** Filter out non-supported devices.
+		 *  device 2:misc  device 21:confbus
+		 */
+		if (device > 23)
 			return PCIBIOS_DEVICE_NOT_FOUND;
 		addr = (device << 11) | (function << 8) | reg;
 		addrp = (void *)(TO_UNCAC(HT1LO_PCICFG_BASE) | (addr & 0xffff));
@@ -40,6 +46,11 @@ static int rs780_pci_config_access(unsigned char access_type,
 		*(volatile unsigned int *)addrp = cpu_to_le32(*data);
 	else {
 		*data = le32_to_cpu(*(volatile unsigned int *)addrp);
+		if (busnum == 0 && reg == PCI_CLASS_REVISION && *data == 0x06000001)
+			*data = (PCI_CLASS_BRIDGE_PCI << 16) | (*data & 0xffff);
+		if (busnum == 0 && reg == 0x3c &&  (*data &0xff00) == 0)
+			*data |= 0x100;
+
 		if (*data == 0xffffffff) {
 			*data = -1;
 			return PCIBIOS_DEVICE_NOT_FOUND;
@@ -48,11 +59,11 @@ static int rs780_pci_config_access(unsigned char access_type,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-static int rs780_pci_pcibios_read(struct pci_bus *bus, unsigned int devfn,
+static int ls7a_pci_pcibios_read(struct pci_bus *bus, unsigned int devfn,
 				 int where, int size, u32 * val)
 {
 	u32 data = 0;
-	int ret = rs780_pci_config_access(PCI_ACCESS_READ,
+	int ret = ls7a_pci_config_access(PCI_ACCESS_READ,
 			bus, devfn, where, &data);
 
 	if (ret != PCIBIOS_SUCCESSFUL)
@@ -68,7 +79,7 @@ static int rs780_pci_pcibios_read(struct pci_bus *bus, unsigned int devfn,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-static int rs780_pci_pcibios_write(struct pci_bus *bus, unsigned int devfn,
+static int ls7a_pci_pcibios_write(struct pci_bus *bus, unsigned int devfn,
 				  int where, int size, u32 val)
 {
 	u32 data = 0;
@@ -77,7 +88,7 @@ static int rs780_pci_pcibios_write(struct pci_bus *bus, unsigned int devfn,
 	if (size == 4)
 		data = val;
 	else {
-		ret = rs780_pci_config_access(PCI_ACCESS_READ,
+		ret = ls7a_pci_config_access(PCI_ACCESS_READ,
 				bus, devfn, where, &data);
 		if (ret != PCIBIOS_SUCCESSFUL)
 			return ret;
@@ -90,7 +101,7 @@ static int rs780_pci_pcibios_write(struct pci_bus *bus, unsigned int devfn,
 			    (val << ((where & 3) << 3));
 	}
 
-	ret = rs780_pci_config_access(PCI_ACCESS_WRITE,
+	ret = ls7a_pci_config_access(PCI_ACCESS_WRITE,
 			bus, devfn, where, &data);
 	if (ret != PCIBIOS_SUCCESSFUL)
 		return ret;
@@ -98,7 +109,7 @@ static int rs780_pci_pcibios_write(struct pci_bus *bus, unsigned int devfn,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-struct pci_ops loongson_780e_pci_ops = {
-	.read = rs780_pci_pcibios_read,
-	.write = rs780_pci_pcibios_write
+struct pci_ops loongson_ls7a_pci_ops = {
+	.read = ls7a_pci_pcibios_read,
+	.write = ls7a_pci_pcibios_write
 };

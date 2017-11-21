@@ -72,6 +72,7 @@ u32 loongson_hwmon;
 
 struct platform_controller_hub *loongson_pch;
 extern struct platform_controller_hub ls2h_pch;
+extern struct platform_controller_hub ls7a_pch;
 extern struct platform_controller_hub rs780_pch;
 
 struct board_devices *eboard;
@@ -243,6 +244,10 @@ void __init prom_init_env(void)
 
 		loongson_pch = &ls2h_pch;
 		loongson_ec_sci_irq = 0x80;
+	}
+	else if (strstr(eboard->name,"7A")) {
+		loongson_pch = &ls7a_pch;
+		loongson_ec_sci_irq = 0x07;
 	}
 	else {
 		loongson_pch = &rs780_pch;

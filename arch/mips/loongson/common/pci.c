@@ -29,7 +29,7 @@ static struct resource loongson_pci_io_resource = {
 };
 
 static struct pci_controller  loongson_pci_controller = {
-	.pci_ops	= &loongson_pci_ops,
+	.pci_ops	= NULL,
 	.io_resource	= &loongson_pci_io_resource,
 	.mem_resource	= &loongson_pci_mem_resource,
 	.mem_offset	= 0x00000000UL,
@@ -86,7 +86,16 @@ static int __init pcibios_init(void)
 	if (loongson_pch && loongson_pch->board_type == LS2H)
 		return 0;
 
-	setup_pcimap();
+#ifdef CONFIG_CPU_LOONGSON3
+	if (loongson_pch && loongson_pch->board_type == RS780E) {
+		setup_pcimap();
+		loongson_pci_controller.pci_ops = &loongson_780e_pci_ops;
+	} else if (loongson_pch && loongson_pch->board_type == LS7A) {
+		loongson_pci_controller.pci_ops = &loongson_ls7a_pci_ops;
+	} 
+#else
+	loongson_pci_controller.pci_ops = &loongson_pci_ops;
+#endif
 
 	loongson_pci_controller.io_map_base = mips_io_port_base;
 #ifdef CONFIG_UEFI_FIRMWARE_INTERFACE
@@ -96,7 +105,8 @@ static int __init pcibios_init(void)
 	register_pci_controller(&loongson_pci_controller);
 
 #ifdef CONFIG_CPU_LOONGSON3
-	sbx00_acpi_init();
+	if (loongson_pch && loongson_pch->board_type == RS780E)
+		sbx00_acpi_init();
 #endif
 
 	return 0;

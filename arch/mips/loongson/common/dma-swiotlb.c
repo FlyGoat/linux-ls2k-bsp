@@ -223,6 +223,16 @@ static phys_addr_t loongson_rs780_dma_to_phys(struct device *dev, dma_addr_t dad
 	return daddr;
 }
 
+static dma_addr_t loongson_ls7a_phys_to_dma(struct device *dev, phys_addr_t paddr)
+{
+	return paddr;
+}
+
+static phys_addr_t loongson_ls7a_dma_to_phys(struct device *dev, dma_addr_t daddr)
+{
+	return daddr;
+}
+
 struct loongson_dma_map_ops {
 	struct dma_map_ops dma_map_ops;
 	dma_addr_t (*phys_to_dma)(struct device *dev, phys_addr_t paddr);
@@ -287,5 +297,8 @@ void __init plat_swiotlb_setup(void)
 	if (loongson_pch && loongson_pch->board_type == LS2H) {
 		loongson_linear_dma_map_ops.phys_to_dma = loongson_ls2h_phys_to_dma;
 		loongson_linear_dma_map_ops.dma_to_phys = loongson_ls2h_dma_to_phys;
+	} else if (loongson_pch && loongson_pch->board_type == LS7A) {
+		loongson_linear_dma_map_ops.phys_to_dma = loongson_ls7a_phys_to_dma;
+		loongson_linear_dma_map_ops.dma_to_phys = loongson_ls7a_dma_to_phys;
 	}
 }

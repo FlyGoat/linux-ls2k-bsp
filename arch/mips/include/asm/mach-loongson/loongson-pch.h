@@ -306,6 +306,93 @@ enum {
 #define  LS2H_PCIE_REG_CTR_STAT_BIT_ISRC	(1 << 27)
 #define LS2H_PCI_EXP_LNKCAP			0x7c
 
+
+/* LS7A PCH Registers (Misc, Confreg) */
+
+/* MISC reg base */
+//#define LS7A_PCH_REG_BASE		ls7a_misc_addr
+#define LS7A_PCH_REG_BASE		0x10080000
+
+/* UART regs */
+#define LS7A_UART0_REG_BASE		(LS7A_PCH_REG_BASE + 0x00000000)
+#define LS7A_UART1_REG_BASE		(LS7A_PCH_REG_BASE + 0x00000100)
+#define LS7A_UART2_REG_BASE		(LS7A_PCH_REG_BASE + 0x00000200)
+#define LS7A_UART3_REG_BASE		(LS7A_PCH_REG_BASE + 0x00000300)
+
+/* I2C regs */
+#define LS7A_I2C0_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010000)
+#define LS7A_I2C1_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010100)
+#define LS7A_I2C2_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010200)
+#define LS7A_I2C3_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010300)
+#define LS7A_I2C4_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010400)
+#define LS7A_I2C5_REG_BASE		(LS7A_PCH_REG_BASE + 0x00010500)
+
+/* HPET */
+#define LS7A_HPET_REG_BASE    (LS7A_PCH_REG_BASE + 0x00040000)
+
+/* RTC regs */
+#define LS7A_RTC_REG_BASE		(LS7A_PCH_REG_BASE + 0x00050100)
+
+/* DC regs */
+#define LS7A_DC_REG_BASE		(LS7A_PCH_REG_BASE + 0x00050000)
+
+#define LS7A_FB_CFG_DVO0_REG		(0x1240)
+#define LS7A_FB_CFG_DVO1_REG		(0x1250)
+#define LS7A_FB_ADDR0_DVO0_REG		(0x1260)
+#define LS7A_FB_ADDR0_DVO1_REG		(0x1270)
+#define LS7A_FB_STRI_DVO0_REG		(0x1280)
+#define LS7A_FB_STRI_DVO1_REG		(0x1290)
+
+#define LS7A_FB_DITCFG_DVO0_REG		(0x1360)
+#define LS7A_FB_DITCFG_DVO1_REG		(0x1370)
+#define LS7A_FB_DITTAB_LO_DVO0_REG	(0x1380)
+#define LS7A_FB_DITTAB_LO_DVO1_REG	(0x1390)
+#define LS7A_FB_DITTAB_HI_DVO0_REG	(0x13a0)
+#define LS7A_FB_DITTAB_HI_DVO1_REG	(0x13b0)
+#define LS7A_FB_PANCFG_DVO0_REG		(0x13c0)
+#define LS7A_FB_PANCFG_DVO1_REG		(0x13d0)
+#define LS7A_FB_PANTIM_DVO0_REG		(0x13e0)
+#define LS7A_FB_PANTIM_DVO1_REG		(0x13f0)
+
+#define LS7A_FB_HDISPLAY_DVO0_REG	(0x1400)
+#define LS7A_FB_HDISPLAY_DVO1_REG	(0x1410)
+#define LS7A_FB_HSYNC_DVO0_REG		(0x1420)
+#define LS7A_FB_HSYNC_DVO1_REG		(0x1430)
+
+#define LS7A_FB_VDISPLAY_DVO0_REG	(0x1480)
+#define LS7A_FB_VDISPLAY_DVO1_REG	(0x1490)
+#define LS7A_FB_VSYNC_DVO0_REG		(0x14a0)
+#define LS7A_FB_VSYNC_DVO1_REG		(0x14b0)
+
+#define LS7A_FB_GAMINDEX_DVO0_REG	(0x14e0)
+#define LS7A_FB_GAMINDEX_DVO1_REG	(0x14f0)
+#define LS7A_FB_GAMDATA_DVO0_REG	(0x1500)
+#define LS7A_FB_GAMDATA_DVO1_REG	(0x1510)
+
+#define LS7A_FB_CUR_CFG_REG		(0x1520)
+#define LS7A_FB_CUR_ADDR_REG		(0x1530)
+#define LS7A_FB_CUR_LOC_ADDR_REG	(0x1540)
+#define LS7A_FB_CUR_BACK_REG		(0x1550)
+#define LS7A_FB_CUR_FORE_REG		(0x1560)
+
+#define LS7A_FB_INT_REG			(0x1570)
+
+#define LS7A_FB_ADDR1_DVO0_REG		(0x1580)
+#define LS7A_FB_ADDR1_DVO1_REG		(0x1590)
+
+#define LS7A_FB_DAC_CTRL_REG		(0x1600)
+#define LS7A_FB_DVO_OUTPUT_REG		(0x1630)
+
+/* REG ACCESS*/
+#define ls7a_readb(addr)			  (*(volatile unsigned char  *)TO_UNCAC(addr))
+#define ls7a_readw(addr)			  (*(volatile unsigned short *)TO_UNCAC(addr))
+#define ls7a_readl(addr)			  (*(volatile unsigned int   *)TO_UNCAC(addr))
+#define ls7a_readq(addr)			  (*(volatile unsigned long  *)TO_UNCAC(addr))
+#define ls7a_writeb(val, addr)		*(volatile unsigned char  *)TO_UNCAC(addr) = (val)
+#define ls7a_writew(val, addr)		*(volatile unsigned short *)TO_UNCAC(addr) = (val)
+#define ls7a_writel(val, addr)		*(volatile unsigned int   *)TO_UNCAC(addr) = (val)
+#define ls7a_writeq(val, addr)		*(volatile unsigned long  *)TO_UNCAC(addr) = (val)
+
 static inline int pcie_get_portnum(void *sysdata)
 {
 	u64 memstart = ((struct pci_controller *)(sysdata))->mem_resource->start;
@@ -318,7 +405,8 @@ static inline int pcie_get_portnum(void *sysdata)
 
 enum board_type {
 	LS2H,
-	RS780E
+	RS780E,
+	LS7A
 };
 
 struct platform_controller_hub {
