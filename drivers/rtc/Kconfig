@@ -880,12 +880,12 @@ config RTC_DRV_LS2H
          If you say yes here you get support for the RTC on the
          Loongson-2H Platform-Bridge.
 
-config RTC_DRV_LS2K
-	tristate "Loongson-2K RTC"
+config RTC_DRV_LS
+	tristate "Loongson RTC"
 	depends on CPU_LOONGSON2K
 	help
          If you say yes here you get support for the RTC on the
-         Loongson-2K Platform-Bridge.
+         Loongson Platform.
 
 config RTC_DRV_OMAP
 	tristate "TI OMAP1"

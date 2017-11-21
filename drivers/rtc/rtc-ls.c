@@ -1,5 +1,5 @@
 /*
- * Loongson-2K Real Time Clock interface for Linux
+ * Loongson Real Time Clock interface for Linux
  *
  * Author: liushaozong <liushaozong@loongson.cn>
  *
@@ -22,10 +22,16 @@
 #include <linux/spinlock.h>
 #include <asm/io.h>
 #include <asm/time.h>
-#include <ls2k.h>
 #include <linux/of.h>
-/**
- * Loongson-2K rtc register
+
+#ifdef CONFIG_CPU_LOONGSON2K
+#include <ls2k.h>
+#else
+#include <loongson-pch.h>
+#endif
+
+/*
+ * Loongson rtc register
  */
 
 #define TOY_TRIM_REG   0x20
@@ -64,7 +70,7 @@
 #define rtc_write(val, addr)   writel(val, rtc_reg_base + (addr))
 #define rtc_read(addr)         readl(rtc_reg_base + (addr))
 
-struct ls2k_rtc_info {
+struct ls_rtc_info {
 	struct platform_device *pdev;
 	struct rtc_device *rtc_dev;
 	struct resource *mem_res;
@@ -74,7 +80,7 @@ struct ls2k_rtc_info {
 
 static void __iomem *rtc_reg_base;
 
-static int ls2k_rtc_read_time(struct device *dev, struct rtc_time *tm)
+static int ls_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	unsigned int val;
 	unsigned long flags;
@@ -95,7 +101,7 @@ static int ls2k_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static int ls2k_rtc_set_time(struct device *dev, struct rtc_time *tm)
+static int ls_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	unsigned int val = 0;
 	unsigned long flags;
@@ -116,18 +122,18 @@ static int ls2k_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static struct rtc_class_ops ls2k_rtc_ops = {
-	.read_time = ls2k_rtc_read_time,
-	.set_time = ls2k_rtc_set_time,
+static struct rtc_class_ops ls_rtc_ops = {
+	.read_time = ls_rtc_read_time,
+	.set_time = ls_rtc_set_time,
 };
 
-static int ls2k_rtc_probe(struct platform_device *pdev)
+static int ls_rtc_probe(struct platform_device *pdev)
 {
 	struct resource *res, *mem;
 	struct rtc_device *rtc;
-	struct ls2k_rtc_info *info;
+	struct ls_rtc_info *info;
 
-	info = kzalloc(sizeof(struct ls2k_rtc_info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct ls_rtc_info), GFP_KERNEL);
 	if (!info) {
 		pr_debug("%s: no enough memory\n", pdev->name);
 		return -ENOMEM;
@@ -162,7 +168,7 @@ static int ls2k_rtc_probe(struct platform_device *pdev)
 	rtc_reg_base = info->rtc_base;
 
 	rtc = info->rtc_dev = rtc_device_register(pdev->name, &pdev->dev,
-						  &ls2k_rtc_ops, THIS_MODULE);
+						  &ls_rtc_ops, THIS_MODULE);
 	if (IS_ERR(info->rtc_dev)) {
 		pr_debug("%s: can't register RTC device, err %ld\n",
 			 pdev->name, PTR_ERR(rtc));
@@ -180,9 +186,9 @@ static int ls2k_rtc_probe(struct platform_device *pdev)
 	return -EIO;
 }
 
-static int ls2k_rtc_remove(struct platform_device *pdev)
+static int ls_rtc_remove(struct platform_device *pdev)
 {
-	struct ls2k_rtc_info *info = platform_get_drvdata(pdev);
+	struct ls_rtc_info *info = platform_get_drvdata(pdev);
 	struct rtc_device *rtc = info->rtc_dev;
 
 	iounmap(info->rtc_base);
@@ -193,32 +199,32 @@ static int ls2k_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 #ifdef CONFIG_OF
-static struct of_device_id ls2k_rtc_id_table[] = {
-	{.compatible = "loongson,ls2k-rtc"},
+static struct of_device_id ls_rtc_id_table[] = {
+	{.compatible = "loongson,ls-rtc"},
 	{},
 };
 #endif
-static struct platform_driver ls2k_rtc_driver = {
-	.probe	= ls2k_rtc_probe,
-	.remove	= ls2k_rtc_remove,
+static struct platform_driver ls_rtc_driver = {
+	.probe	= ls_rtc_probe,
+	.remove	= ls_rtc_remove,
 	.driver = {
-		   .name	= "ls2k-rtc",
+		   .name	= "ls-rtc",
 		   .owner	= THIS_MODULE,
 		   .bus = &platform_bus_type,
 #ifdef CONFIG_OF
-		   .of_match_table = of_match_ptr(ls2k_rtc_id_table),
+		   .of_match_table = of_match_ptr(ls_rtc_id_table),
 #endif
 	},
 };
 
 static int __init rtc_init(void)
 {
-	return platform_driver_register(&ls2k_rtc_driver);
+	return platform_driver_register(&ls_rtc_driver);
 }
 
 static void __exit rtc_exit(void)
 {
-	platform_driver_unregister(&ls2k_rtc_driver);
+	platform_driver_unregister(&ls_rtc_driver);
 }
 
 module_init(rtc_init);
@@ -226,4 +232,4 @@ module_exit(rtc_exit);
 
 MODULE_AUTHOR("Liu Shaozong");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:ls2k-rtc");
+MODULE_ALIAS("platform:ls-rtc");
