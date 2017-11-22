@@ -220,6 +220,7 @@ static const struct ata_port_info ahci_port_info[] = {
 };
 
 static const struct pci_device_id ahci_pci_tbl[] = {
+	{ PCI_VDEVICE(LOONGSON, PCI_DEVICE_ID_LOONGSON_SATA), board_ahci },
 	/* Intel */
 	{ PCI_VDEVICE(INTEL, 0x2652), board_ahci }, /* ICH6 */
 	{ PCI_VDEVICE(INTEL, 0x2653), board_ahci }, /* ICH6M */
@@ -1439,7 +1440,8 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		ahci_pci_bar = AHCI_PCI_BAR_STA2X11;
 	else if (pdev->vendor == 0x1c44 && pdev->device == 0x8000)
 		ahci_pci_bar = AHCI_PCI_BAR_ENMOTUS;
-
+	else if (pdev->vendor == PCI_VENDOR_ID_LOONGSON && pdev->device == PCI_DEVICE_ID_LOONGSON_SATA)
+		ahci_pci_bar = 0;
 	/*
 	 * The JMicron chip 361/363 contains one SATA controller and one
 	 * PATA controller,for powering on these both controllers, we must
