@@ -19,6 +19,8 @@
 #include <loongson.h>
 #include <linux/gpio.h>
 
+#include <loongson-pch.h>
+
 #define STLS2F_N_GPIO		4
 #define STLS3A_N_GPIO		16
 
@@ -32,10 +34,16 @@
 
 static DEFINE_SPINLOCK(gpio_lock);
 
+extern int ls7a_gpio_get_val(unsigned gpio);
+extern void ls7a_gpio_set_val(unsigned gpio, int value);
+
 int gpio_get_value(unsigned gpio)
 {
 	u32 val;
 	u32 mask;
+
+	if (loongson_pch && loongson_pch->board_type == LS7A)
+		return ls7a_gpio_get_val(gpio);
 
 	if (gpio >= LOONGSON_GPIO_NR)
 		return __gpio_get_value(gpio);
@@ -53,6 +61,11 @@ void gpio_set_value(unsigned gpio, int state)
 {
 	u32 val;
 	u32 mask;
+
+	if (loongson_pch && loongson_pch->board_type == LS7A) {
+		ls7a_gpio_set_val(gpio, state);
+		return;
+	}
 
 	if (gpio >= LOONGSON_GPIO_NR) {
 		__gpio_set_value(gpio, state);
