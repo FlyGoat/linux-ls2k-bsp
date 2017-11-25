@@ -85,7 +85,7 @@ static struct resource ls7a_i2c0_resources[] = {
 };
 
 static struct platform_device ls7a_i2c0_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 0,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c0_resources),
 	.resource       = ls7a_i2c0_resources,
@@ -105,7 +105,7 @@ static struct resource ls7a_i2c1_resources[] = {
 };
 
 static struct platform_device ls7a_i2c1_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 1,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c1_resources),
 	.resource       = ls7a_i2c1_resources,
@@ -125,7 +125,7 @@ static struct resource ls7a_i2c2_resources[] = {
 };
 
 static struct platform_device ls7a_i2c2_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 2,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c2_resources),
 	.resource       = ls7a_i2c2_resources,
@@ -145,7 +145,7 @@ static struct resource ls7a_i2c3_resources[] = {
 };
 
 static struct platform_device ls7a_i2c3_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 3,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c3_resources),
 	.resource       = ls7a_i2c3_resources,
@@ -165,7 +165,7 @@ static struct resource ls7a_i2c4_resources[] = {
 };
 
 static struct platform_device ls7a_i2c4_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 4,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c4_resources),
 	.resource       = ls7a_i2c4_resources,
@@ -185,7 +185,7 @@ static struct resource ls7a_i2c5_resources[] = {
 };
 
 static struct platform_device ls7a_i2c5_device = {
-	.name           = "ls7a-i2c",
+	.name           = "ls-i2c",
 	.id             = 5,
 	.num_resources  = ARRAY_SIZE(ls7a_i2c5_resources),
 	.resource       = ls7a_i2c5_resources,

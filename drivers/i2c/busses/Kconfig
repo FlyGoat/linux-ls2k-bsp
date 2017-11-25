@@ -588,7 +588,7 @@ config I2C_LS2H
 
 config I2C_LS
 	tristate "Loongson I2C adapter"
-	depends on CPU_LOONGSON2K
+	depends on (CPU_LOONGSON2K || CPU_LOONGSON3)
 	help
 	  If you say yes to this option, support will be included for the
 	  I2C interface on the Loongson Platform.
