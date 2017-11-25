@@ -242,6 +242,7 @@
 			dma-channels = <1>;
 			dma-requests = <1>;
 		};
+		*/
 		dma1: dma@1fe10c10 {
 			compatible = "loongson,ls-apbdma-1";
 			reg = <0x1fe10c10 0x8>;
@@ -250,6 +251,7 @@
 			dma-channels = <1>;
 			dma-requests = <1>;
 		};
+		/*
 		dma2: dma@1fe10c20 {
 			compatible = "loongson,ls-apbdma-2";
 			reg = <0x1fe10c20 0x8>;
@@ -275,6 +277,20 @@
 			dma-requests = <1>;
 		};
 		*/
+		sdio@0x1fe0c000 {
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			compatible = "loongson,ls2k_sdio";
+			reg = <0x1fe0c000 0xfff>;
+			interrupt-parent = <&icu>;
+			interrupts = <39>;
+			interrupt-names = "ls2k_mci_irq";
+
+			dmas = <&dma1 1>;
+			dma-names = "sdio_rw";
+			dma-mask = <0xffffffff>;
+		};
 	};
 
 	chosen {
