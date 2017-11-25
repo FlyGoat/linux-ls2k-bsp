@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/video/ls2k_fb.c -- Virtual frame buffer device
+ *  linux/drivers/video/ls_fb.c -- Virtual frame buffer device
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -25,32 +25,17 @@
 #include <asm/addrspace.h>
 #include <linux/fb.h>
 #include <linux/init.h>
-#include <ls2k.h>
 #include <asm/addrspace.h>
 #include "edid.h"
+#include "lsfb.h"
 
-#ifdef LS2K_FB_DEBUG
-#define LS2K_DEBUG(frm, arg...)	\
-	printk("ls2k_fb: %s %d: "frm, __func__, __LINE__, ##arg);
+#ifdef LS_FB_DEBUG
+#define LS_DEBUG(frm, arg...)	\
+	printk("ls_fb: %s %d: "frm, __func__, __LINE__, ##arg);
 #else
-#define LS2K_DEBUG(frm, arg...)
-#endif /* LS2K_FB_DEBUG */
+#define LS_DEBUG(frm, arg...)
+#endif /* LS_FB_DEBUG */
 
-#define ON	1
-#define OFF	0
-
-#define CUR_WIDTH_SIZE		32
-#define CUR_HEIGHT_SIZE		32
-#define DEFAULT_BITS_PER_PIXEL	16
-
-#define DEFAULT_CURSOR_MEM	0x900000000ef00000
-#define DEFAULT_CURSOR_DMA	0x0ef00000
-#define DEFAULT_FB_MEM		0x900000000e000000
-#define DEFAULT_PHY_ADDR	0x0e000000
-#define DEFAULT_FB_DMA		0x0e000000
-
-#define LO_OFF	0
-#define HI_OFF	8
 struct pix_pll {
 	unsigned int l2_div;
 	unsigned int l1_loopc;
@@ -62,7 +47,7 @@ static struct eep_info{
 	unsigned short addr;
 }eeprom_info;
 
-struct ls2k_fb_par {
+struct ls_fb_par {
 	struct platform_device *pdev;
 	struct fb_info *fb_info;
 	unsigned long reg_base;
@@ -80,9 +65,9 @@ static dma_addr_t cursor_dma;
 
 static u_long videomemorysize = 0;
 module_param(videomemorysize, ulong, 0);
-DEFINE_SPINLOCK(fb_lock);
+static DEFINE_SPINLOCK(fb_lock);
 static void config_pll(unsigned long pll_base, struct pix_pll *pll_cfg);
-static struct fb_var_screeninfo ls2k_fb_default __initdata = {
+static struct fb_var_screeninfo ls_fb_default __initdata = {
 	.xres		= 1280,
 	.yres		= 1024,
 	.xres_virtual	= 1280,
@@ -106,7 +91,7 @@ static struct fb_var_screeninfo ls2k_fb_default __initdata = {
 	.sync		= 4,
 	.vmode =	FB_VMODE_NONINTERLACED,
 };
-static struct fb_fix_screeninfo ls2k_fb_fix __initdata = {
+static struct fb_fix_screeninfo ls_fb_fix __initdata = {
 	.id =		"Virtual FB",
 	.type =		FB_TYPE_PACKED_PIXELS,
 	.visual =	FB_VISUAL_TRUECOLOR,
@@ -116,8 +101,8 @@ static struct fb_fix_screeninfo ls2k_fb_fix __initdata = {
 	.accel =	FB_ACCEL_NONE,
 };
 
-static bool ls2k_fb_enable __initdata = 0;	/* disabled by default */
-module_param(ls2k_fb_enable, bool, 0);
+static bool ls_fb_enable __initdata = 0;	/* disabled by default */
+module_param(ls_fb_enable, bool, 0);
 
 /*
  *  Internal routines
@@ -141,7 +126,7 @@ static u_long get_line_length(int xres_virtual, int bpp)
  *  data from it to check this var.
  */
 
-static int ls2k_fb_check_var(struct fb_var_screeninfo *var,
+static int ls_fb_check_var(struct fb_var_screeninfo *var,
 			 struct fb_info *info)
 {
 	u_long line_length;
@@ -269,59 +254,53 @@ static unsigned int cal_freq(unsigned int pixclock_khz, struct pix_pll * pll_con
 		for (frefc = 3; frefc < 6; frefc++) {
 			for (loopc = 24; loopc < 161; loopc++) {
 
-				if ((loopc < 12 * frefc) || 
+				if ((loopc < 12 * frefc) ||
 						(loopc > 32 * frefc))
 					continue;
 
 				b = 100000L * loopc / frefc;
 				c = (a > b) ? (a - b) : (b - a);
 				if (c < min) {
-
 					pll_config->l2_div = pstdiv;
 					pll_config->l1_loopc = loopc;
 					pll_config->l1_frefc = frefc;
-					/*printk("found = %d, pix = %d khz; min = %ld; pstdiv = %x;"*/
-							/*"loopc = %x; frefc = %x\n", found, pixclock_khz, */
-							/*min, pll_config->l2_div, pll_config->l1_loopc, */
-							/*pll_config->l1_frefc);*/
-
 
 					return 1;
 				}
-			}	
-
+			}
 		}
 	}
-
 	return 0;
 }
 
 static void config_pll(unsigned long pll_base, struct pix_pll *pll_cfg)
 {
+#if CONFIG_CPU_LOONGSON2K
 	unsigned long out;
 
-	out = (1 << 7) | (1L << 42) | (3 << 10) | 
-		((unsigned long)(pll_cfg->l1_loopc) << 32) | 
-		((unsigned long)(pll_cfg->l1_frefc) << 26); 
+	out = (1 << 7) | (1L << 42) | (3 << 10) |
+		((unsigned long)(pll_cfg->l1_loopc) << 32) |
+		((unsigned long)(pll_cfg->l1_frefc) << 26);
 
-	ls2k_writeq(0, pll_base + LO_OFF);
-	ls2k_writeq(1 << 19, pll_base + LO_OFF);
-	ls2k_writeq(out, pll_base + LO_OFF);
-	ls2k_writeq(pll_cfg->l2_div, pll_base + HI_OFF);
+	ls_writeq(0, pll_base + LO_OFF);
+	ls_writeq(1 << 19, pll_base + LO_OFF);
+	ls_writeq(out, pll_base + LO_OFF);
+	ls_writeq(pll_cfg->l2_div, pll_base + HI_OFF);
 	out = (out | (1 << 2));
-	ls2k_writeq(out, pll_base + LO_OFF);
+	ls_writeq(out, pll_base + LO_OFF);
 
-	while (!(ls2k_readq(pll_base + LO_OFF) & 0x10000)) ;
+	while (!(ls_readq(pll_base + LO_OFF) & 0x10000)) ;
 
-	ls2k_writeq((out | 1), pll_base + LO_OFF);
+	ls_writeq((out | 1), pll_base + LO_OFF);
+#endif
 }
-static void ls2k_reset_cursor_image(void)
+static void ls_reset_cursor_image(void)
 {
 	u8 __iomem *addr = (u8 *)DEFAULT_CURSOR_MEM;
 	memset(addr, 0, 32*32*4);
 }
 
-static int ls2k_init_regs(struct fb_info *info)
+static int ls_init_regs(struct fb_info *info)
 {
 	unsigned int pix_freq;
 	unsigned int depth;
@@ -330,7 +309,7 @@ static int ls2k_init_regs(struct fb_info *info)
 	int ret;
 	struct pix_pll pll_cfg;
 	struct fb_var_screeninfo *var = &info->var;
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 
 	hr	= var->xres;
@@ -348,67 +327,85 @@ static int ls2k_init_regs(struct fb_info *info)
 
 	ret = cal_freq(pix_freq, &pll_cfg);
 	if (ret) {
-		config_pll(LS2K_PIX0_PLL, &pll_cfg);
-		config_pll(LS2K_PIX1_PLL, &pll_cfg);
+		config_pll(LS_PIX0_PLL, &pll_cfg);
+		config_pll(LS_PIX1_PLL, &pll_cfg);
 	}
 
+	ls_writel(dma_A, base + LS_FB_ADDR0_DVO0_REG);
+	ls_writel(dma_A, base + LS_FB_ADDR0_DVO1_REG);
+	ls_writel(dma_A, base + LS_FB_ADDR1_DVO0_REG);
+	ls_writel(dma_A, base + LS_FB_ADDR1_DVO1_REG);
+	ls_writel(0, base + LS_FB_DITCFG_DVO0_REG);
+	ls_writel(0, base + LS_FB_DITCFG_DVO1_REG);
+	ls_writel(0, base + LS_FB_DITTAB_LO_DVO0_REG);
+	ls_writel(0, base + LS_FB_DITTAB_LO_DVO1_REG);
+	ls_writel(0, base + LS_FB_DITTAB_HI_DVO0_REG);
+	ls_writel(0, base + LS_FB_DITTAB_HI_DVO1_REG);
+	ls_writel(0x80001311, base + LS_FB_PANCFG_DVO0_REG);
+	ls_writel(0x80001311, base + LS_FB_PANCFG_DVO1_REG);
+	ls_writel(0x00000000, base + LS_FB_PANTIM_DVO0_REG);
+	ls_writel(0x00000000, base + LS_FB_PANTIM_DVO1_REG);
 
-	ls2k_writel(dma_A, base + LS2K_FB_ADDR0_DVO0_REG);
-	ls2k_writel(dma_A, base + LS2K_FB_ADDR0_DVO1_REG);
-	ls2k_writel(dma_A, base + LS2K_FB_ADDR1_DVO0_REG);
-	ls2k_writel(dma_A, base + LS2K_FB_ADDR1_DVO1_REG);
-	ls2k_writel(0, base + LS2K_FB_DITCFG_DVO0_REG);
-	ls2k_writel(0, base + LS2K_FB_DITCFG_DVO1_REG);
-	ls2k_writel(0, base + LS2K_FB_DITTAB_LO_DVO0_REG);
-	ls2k_writel(0, base + LS2K_FB_DITTAB_LO_DVO1_REG);
-	ls2k_writel(0, base + LS2K_FB_DITTAB_HI_DVO0_REG);
-	ls2k_writel(0, base + LS2K_FB_DITTAB_HI_DVO1_REG);
-	ls2k_writel(0x80001311, base + LS2K_FB_PANCFG_DVO0_REG);
-	ls2k_writel(0x80001311, base + LS2K_FB_PANCFG_DVO1_REG);
-	ls2k_writel(0x00000000, base + LS2K_FB_PANTIM_DVO0_REG);//mtf add
-	ls2k_writel(0x00000000, base + LS2K_FB_PANTIM_DVO1_REG);//mtf add
-
-/* these 4 lines cause out of range, because 
+/* these 4 lines cause out of range, because
  * the hfl hss vfl vss are different with PMON vgamode cfg.
  * So the refresh freq in kernel and refresh freq in PMON are different.
  * */
-	ls2k_writel((hfl << 16) | hr, base + LS2K_FB_HDISPLAY_DVO0_REG);
-	ls2k_writel((hfl << 16) | hr, base + LS2K_FB_HDISPLAY_DVO1_REG);
-	ls2k_writel(0x40000000 | (hse << 16) | hss, base + LS2K_FB_HSYNC_DVO0_REG);
-	ls2k_writel(0x40000000 | (hse << 16) | hss, base + LS2K_FB_HSYNC_DVO1_REG);
-	ls2k_writel((vfl << 16) | vr, base + LS2K_FB_VDISPLAY_DVO0_REG);
-	ls2k_writel((vfl << 16) | vr, base + LS2K_FB_VDISPLAY_DVO1_REG);
-	ls2k_writel(0x40000000 | (vse << 16) | vss, base + LS2K_FB_VSYNC_DVO0_REG);
-	ls2k_writel(0x40000000 | (vse << 16) | vss, base + LS2K_FB_VSYNC_DVO1_REG);
+	ls_writel((hfl << 16) | hr, base + LS_FB_HDISPLAY_DVO0_REG);
+	ls_writel((hfl << 16) | hr, base + LS_FB_HDISPLAY_DVO1_REG);
+	ls_writel(0x40000000 | (hse << 16) | hss, base + LS_FB_HSYNC_DVO0_REG);
+	ls_writel(0x40000000 | (hse << 16) | hss, base + LS_FB_HSYNC_DVO1_REG);
+	ls_writel((vfl << 16) | vr, base + LS_FB_VDISPLAY_DVO0_REG);
+	ls_writel((vfl << 16) | vr, base + LS_FB_VDISPLAY_DVO1_REG);
+	ls_writel(0x40000000 | (vse << 16) | vss, base + LS_FB_VSYNC_DVO0_REG);
+	ls_writel(0x40000000 | (vse << 16) | vss, base + LS_FB_VSYNC_DVO1_REG);
 
 	switch (depth) {
 	case 32:
 	case 24:
-		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO0_REG);
-		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls_writel(0x00100104, base + LS_FB_CFG_DVO0_REG);
+		ls_writel(0x00100104, base + LS_FB_CFG_DVO1_REG);
+		ls_writel((hr * 4 + 255) & ~255, base + LS_FB_STRI_DVO0_REG);
+		ls_writel((hr * 4 + 255) & ~255, base + LS_FB_STRI_DVO1_REG);
 		break;
 	case 16:
-		ls2k_writel(0x00100103, base + LS2K_FB_CFG_DVO0_REG);
-		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls_writel(0x00100103, base + LS_FB_CFG_DVO0_REG);
+		ls_writel(0x00100103, base + LS_FB_CFG_DVO1_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO0_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO1_REG);
 		break;
 	case 15:
-		ls2k_writel(0x00100102, base + LS2K_FB_CFG_DVO0_REG);
-		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls_writel(0x00100102, base + LS_FB_CFG_DVO0_REG);
+		ls_writel(0x00100102, base + LS_FB_CFG_DVO1_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO0_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO1_REG);
 		break;
 	case 12:
-		ls2k_writel(0x00100101, base + LS2K_FB_CFG_DVO0_REG);
-		ls2k_writel((hr * 2 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls_writel(0x00100101, base + LS_FB_CFG_DVO0_REG);
+		ls_writel(0x00100101, base + LS_FB_CFG_DVO1_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO0_REG);
+		ls_writel((hr * 2 + 255) & ~255, base + LS_FB_STRI_DVO1_REG);
 		break;
 	default:
-		ls2k_writel(0x00100104, base + LS2K_FB_CFG_DVO0_REG);
-		ls2k_writel((hr * 4 + 255) & ~255, base + LS2K_FB_STRI_DVO0_REG);
+		ls_writel(0x00100104, base + LS_FB_CFG_DVO0_REG);
+		ls_writel(0x00100104, base + LS_FB_CFG_DVO1_REG);
+		ls_writel((hr * 4 + 255) & ~255, base + LS_FB_STRI_DVO0_REG);
+		ls_writel((hr * 4 + 255) & ~255, base + LS_FB_STRI_DVO1_REG);
 		break;
 	}
+
+	/* cursor */
+	/* Select full color ARGB mode */
+	ls_writel(0x00050212,base + LS_FB_CUR_CFG_REG);
+	ls_writel(cursor_dma,base + LS_FB_CUR_ADDR_REG);
+	ls_writel(0x00060122,base + LS_FB_CUR_LOC_ADDR_REG);
+	ls_writel(0x00eeeeee,base + LS_FB_CUR_BACK_REG);
+	ls_writel(0x00aaaaaa,base + LS_FB_CUR_FORE_REG);
+	ls_reset_cursor_image();
 
 	return 0;
 }
 
-#ifdef LS2K_FB_DEBUG
+#ifdef LS_FB_DEBUG
 void show_var(struct fb_var_screeninfo *var)
 {
 	printk(" xres: %d\n"
@@ -422,17 +419,17 @@ void show_var(struct fb_var_screeninfo *var)
  * the hardware state info->par and fix which can be affected by the
  * change in par. For this driver it doesn't do much.
  */
-static int ls2k_fb_set_par(struct fb_info *info)
+static int ls_fb_set_par(struct fb_info *info)
 {
 	unsigned long flags;
 	info->fix.line_length = get_line_length(info->var.xres_virtual,
 						info->var.bits_per_pixel);
-#ifdef LS2K_FB_DEBUG
+#ifdef LS_FB_DEBUG
 	show_var(&info->var);
 #endif
 	spin_lock_irqsave(&fb_lock, flags);
 
-	ls2k_init_regs(info);
+	ls_init_regs(info);
 
 	spin_unlock_irqrestore(&fb_lock, flags);
 	return 0;
@@ -444,7 +441,7 @@ static int ls2k_fb_set_par(struct fb_info *info)
  *  entries in the var structure). Return != 0 for invalid regno.
  */
 
-static int ls2k_fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
+static int ls_fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 			 u_int transp, struct fb_info *info)
 {
 	if (regno >= 256)	/* no. of hw registers */
@@ -526,7 +523,7 @@ static int ls2k_fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 	return 0;
 }
 
-static int ls2k_fb_blank (int blank_mode, struct fb_info *info)
+static int ls_fb_blank (int blank_mode, struct fb_info *info)
 {
 	return 0;
 }
@@ -536,21 +533,21 @@ static int ls2k_fb_blank (int blank_mode, struct fb_info *info)
  *************************************************************/
 
 /**
- * ls2k_enable_cursor - show or hide the hardware cursor
+ * ls_enable_cursor - show or hide the hardware cursor
  * @mode: show (1) or hide (0)
  *
  * Description:
  * Shows or hides the hardware cursor
  */
-static void ls2k_enable_cursor(int mode, unsigned long base)
+static void ls_enable_cursor(int mode, unsigned long base)
 {
-	unsigned int tmp = ls2k_readl(base + LS2K_FB_CUR_CFG_REG);
+	unsigned int tmp = ls_readl(base + LS_FB_CUR_CFG_REG);
 	tmp &= ~0xff;
-	ls2k_writel(mode ? (tmp | 0x12) : (tmp | 0x10),
-			base + LS2K_FB_CUR_CFG_REG);
+	ls_writel(mode ? (tmp | 0x12) : (tmp | 0x10),
+			base + LS_FB_CUR_CFG_REG);
 }
 
-static void ls2k_load_cursor_image(int width, int height, u8 *data)
+static void ls_load_cursor_image(int width, int height, u8 *data)
 {
 	u32 __iomem *addr = (u32 *)DEFAULT_CURSOR_MEM;
 	int row, col, i, j, bit = 0;
@@ -572,36 +569,33 @@ static void ls2k_load_cursor_image(int width, int height, u8 *data)
 }
 
 
-static int ls2k_fb_cursor(struct fb_info *info, struct fb_cursor *cursor)
+static int ls_fb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 {
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 
 	if (cursor->image.width > CUR_WIDTH_SIZE ||
 			cursor->image.height > CUR_HEIGHT_SIZE)
 		return -ENXIO;
 
-	ls2k_enable_cursor(OFF, base);
+	ls_enable_cursor(OFF, base);
 
 	if (cursor->set & FB_CUR_SETPOS) {
 		u32 tmp;
 
 		tmp = (cursor->image.dx - info->var.xoffset) & 0xffff;
 		tmp |= (cursor->image.dy - info->var.yoffset) << 16;
-		ls2k_writel(tmp, base + LS2K_FB_CUR_LOC_ADDR_REG);
+		ls_writel(tmp, base + LS_FB_CUR_LOC_ADDR_REG);
 	}
 
 	if (cursor->set & FB_CUR_SETSIZE)
-		ls2k_reset_cursor_image();
+		ls_reset_cursor_image();
 
 	if (cursor->set & FB_CUR_SETHOT) {
 		u32 hot = (cursor->hot.x << 16) | (cursor->hot.y << 8);
-		u32 con = ls2k_readl(base + LS2K_FB_CUR_CFG_REG) & 0xff;
-		ls2k_writel(hot | con, base + LS2K_FB_CUR_CFG_REG);
+		u32 con = ls_readl(base + LS_FB_CUR_CFG_REG) & 0xff;
+		ls_writel(hot | con, base + LS_FB_CUR_CFG_REG);
 	}
-
-	if (cursor->set & FB_CUR_SETCMAP)
-		;
 
 	if (cursor->set & (FB_CUR_SETSHAPE | FB_CUR_SETIMAGE)) {
 		int size = ((cursor->image.width + 7) >> 3) *
@@ -624,13 +618,13 @@ static int ls2k_fb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 			break;
 		}
 
-		ls2k_load_cursor_image(cursor->image.width,
+		ls_load_cursor_image(cursor->image.width,
 				       cursor->image.height, data);
 		kfree(data);
 	}
 
 	if (cursor->enable)
-		ls2k_enable_cursor(ON, base);
+		ls_enable_cursor(ON, base);
 
 	return 0;
 }
@@ -640,18 +634,12 @@ struct cursor_req {
 	u32 y;
 };
 
-#define CURIOSET_CORLOR		0x4607
-#define CURIOSET_POSITION	0x4608
-#define CURIOLOAD_ARGB		0x4609
-#define CURIOLOAD_IMAGE		0x460A
-#define CURIOHIDE_SHOW		0x460B
-
-static int ls2k_fb_ioctl(struct fb_info *info, unsigned int cmd,
+static int ls_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		                        unsigned long arg)
 {
 	u32 tmp;
 	struct cursor_req req;
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 	void __user *argp = (void __user *)arg;
 	u8 *cursor_base = (u8 *)DEFAULT_CURSOR_MEM;
@@ -660,22 +648,26 @@ static int ls2k_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	case CURIOSET_CORLOR:
 		break;
 	case CURIOSET_POSITION:
-		LS2K_DEBUG("CURIOSET_POSITION\n");
+		LS_DEBUG("CURIOSET_POSITION\n");
 		if (copy_from_user(&req, argp, sizeof(struct cursor_req)))
 			return -EFAULT;
 		tmp = (req.x - info->var.xoffset) & 0xffff;
 		tmp |= (req.y - info->var.yoffset) << 16;
-		ls2k_writel(tmp, base + LS2K_FB_CUR_LOC_ADDR_REG);
+		ls_writel(tmp, base + LS_FB_CUR_LOC_ADDR_REG);
 		break;
 	case CURIOLOAD_ARGB:
-		LS2K_DEBUG("CURIOLOAD_ARGB\n");
+		LS_DEBUG("CURIOLOAD_ARGB\n");
 		if (copy_from_user(cursor_base, argp, 32 * 32 * 4))
 			return -EFAULT;
 		break;
 	case CURIOHIDE_SHOW:
-		LS2K_DEBUG("CURIOHIDE_SHOW:%s\n", arg ? "show" : "hide");
-		ls2k_enable_cursor(arg, base);
+		LS_DEBUG("CURIOHIDE_SHOW:%s\n", arg ? "show" : "hide");
+		ls_enable_cursor(arg, base);
 		break;
+	case FBEDID_GET:
+		LS_DEBUG("COPY EDID TO USER\n");
+		if (copy_to_user(argp, par->edid, EDID_LENGTH))
+			return -EFAULT;
 	default:
 		return -ENOTTY;
 
@@ -684,14 +676,13 @@ static int ls2k_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	return 0;
 }
 
-
 /*
  *  Pan or Wrap the Display
  *
  *  This call looks only at xoffset, yoffset and the FB_VMODE_YWRAP flag
  */
 
-static int ls2k_fb_pan_display(struct fb_var_screeninfo *var,
+static int ls_fb_pan_display(struct fb_var_screeninfo *var,
 			struct fb_info *info)
 {
 	if (var->vmode & FB_VMODE_YWRAP) {
@@ -714,10 +705,10 @@ static int ls2k_fb_pan_display(struct fb_var_screeninfo *var,
 }
 
 #ifndef MODULE
-static int __init ls2k_fb_setup(char *options)
+static int __init ls_fb_setup(char *options)
 {
 	char *this_opt;
-	ls2k_fb_enable = 1;
+	ls_fb_enable = 1;
 
 	if (!options || !*options)
 		return 1;
@@ -726,15 +717,13 @@ static int __init ls2k_fb_setup(char *options)
 		if (!*this_opt)
 			continue;
 		if (!strncmp(this_opt, "disable", 7))
-			ls2k_fb_enable = 0;
+			ls_fb_enable = 0;
 		else
 			mode_option = this_opt;
 	}
 	return 1;
 }
-#endif
-
-	/* MODULE */
+#endif  /* MODULE */
 static unsigned char *fb_do_probe_ddc_edid(struct i2c_adapter *adapter)
 {
 	unsigned char start = 0x0;
@@ -765,6 +754,10 @@ static unsigned char *fb_do_probe_ddc_edid(struct i2c_adapter *adapter)
 	return NULL;
 }
 
+#ifdef CONFIG_CPU_LOONGSON2K
+/* Display chip */
+#endif
+
 static const struct i2c_device_id dvi_eep_ids[] = {
 	{ "dvi-eeprom-edid", 0 },
 	{ /* END OF LIST */ }
@@ -785,7 +778,6 @@ static int eep_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 static int eep_remove(struct i2c_client *client)
 {
-
 	i2c_unregister_device(client);
 	return 0;
 }
@@ -810,18 +802,19 @@ static struct i2c_driver dvi_eep_driver = {
 };
 
 static bool edid_flag = 0;
-static unsigned char *ls2k_fb_i2c_connector(struct ls2k_fb_par *fb_par)
+static unsigned char *ls_fb_i2c_connector(struct ls_fb_par *fb_par)
 {
 	unsigned char *edid = NULL;
 
-	LS2K_DEBUG("edid entry\n");
+	LS_DEBUG("edid entry\n");
 	if (i2c_add_driver(&dvi_eep_driver)) {
 		pr_err("i2c-%d No eeprom device register!",dvi_eep_driver.id_table->driver_data);
 		return -ENODEV;
 	}
 	if (eeprom_info.adapter)
+#ifdef CONFIG_CPU_LOONGSON2K
 		edid = fb_do_probe_ddc_edid(eeprom_info.adapter);
-
+#endif
 	if (!edid) {
 		if (i2c_add_driver(&vga_eep_driver)) {
 			pr_err("i2c-%d No eeprom device register!",vga_eep_driver.id_table->driver_data);
@@ -838,26 +831,44 @@ static unsigned char *ls2k_fb_i2c_connector(struct ls2k_fb_par *fb_par)
 	return edid;
 }
 
-static void ls2k_find_init_mode(struct fb_info *info)
+static void ls_fb_address_init(void)
+{
+	if(lsfb_mem == 0)
+	{
+		ls_cursor_mem = DEFAULT_ADDRESS_CURSOR_MEM;
+		ls_cursor_dma = DEFAULT_ADDRESS_CURSOR_DMA;
+		ls_fb_mem     = DEFAULT_ADDRESS_FB_MEM;
+		ls_phy_addr   = DEFAULT_ADDRESS_PHY_ADDR;
+		ls_fb_dma     = DEFAULT_ADDRESS_FB_DMA;
+	}else{
+		ls_cursor_mem = lsfb_mem | LSFB_MASK;
+		ls_cursor_dma = lsfb_dma | LSFB_MASK;
+		ls_fb_mem     = lsfb_mem;
+		ls_phy_addr   = lsfb_mem & LSFB_GPU_MASK;
+		ls_fb_dma     = lsfb_dma;
+	}
+}
+static void ls_find_init_mode(struct fb_info *info)
 {
         struct fb_videomode mode;
         struct fb_var_screeninfo var;
         struct fb_monspecs *specs = &info->monspecs;
-		struct ls2k_fb_par *par = info->par;
+		struct ls_fb_par *par = info->par;
         int found = 0;
 		unsigned char *edid;
         INIT_LIST_HEAD(&info->modelist);
+
+		ls_fb_address_init();
         memset(&mode, 0, sizeof(struct fb_videomode));
         memset(&var, 0, sizeof(struct fb_var_screeninfo));
 		var.bits_per_pixel = DEFAULT_BITS_PER_PIXEL;
-
-		edid = ls2k_fb_i2c_connector(par);
+		edid = ls_fb_i2c_connector(par);
 		if (!edid){
 			goto def;
 		}
 		fb_edid_to_monspecs(par->edid, specs);
 		if (specs->modedb == NULL){
-			printk("ls2k-fb: Unable to get Mode Database\n");
+			printk("ls-fb: Unable to get Mode Database\n");
 			goto def;
 		}
 		fb_videomode_to_modelist(specs->modedb,specs->modedb_len,
@@ -878,36 +889,36 @@ static void ls2k_find_init_mode(struct fb_info *info)
 				info->var = var;
 		}
 	else{
-		info->var = ls2k_fb_default;
+		info->var = ls_fb_default;
 	}
 	info->var = var;
 	fb_destroy_modedb(specs->modedb);
 	specs->modedb = NULL;
 	return;
 def:
-	info->var = ls2k_fb_default;
+	info->var = ls_fb_default;
 	return;
 }
 
 /* irq */
-static irqreturn_t ls2kfb_irq(int irq, void *dev_id)
+static irqreturn_t lsfb_irq(int irq, void *dev_id)
 {
 	unsigned int val, cfg;
 	unsigned long flags;
 	struct fb_info *info = (struct fb_info *) dev_id;
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 
 	spin_lock_irqsave(&fb_lock, flags);
 
-	val = ls2k_readl(base + LS2K_FB_INT_REG);
-	ls2k_writel(val & (0xffff << 16), base + LS2K_FB_INT_REG);
+	val = ls_readl(base + LS_FB_INT_REG);
+	ls_writel(val & (0xffff << 16), base + LS_FB_INT_REG);
 
-	cfg = ls2k_readl(base + LS2K_FB_CFG_DVO1_REG);
+	cfg = ls_readl(base + LS_FB_CFG_DVO1_REG);
 	/* if underflow, reset VGA */
 	if (val & 0x280) {
-		ls2k_writel(0, base + LS2K_FB_CFG_DVO1_REG);
-		ls2k_writel(cfg, base + LS2K_FB_CFG_DVO1_REG);
+		ls_writel(0, base + LS_FB_CFG_DVO1_REG);
+		ls_writel(cfg, base + LS_FB_CFG_DVO1_REG);
 	}
 
 	spin_unlock_irqrestore(&fb_lock, flags);
@@ -915,30 +926,30 @@ static irqreturn_t ls2kfb_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static struct fb_ops ls2k_fb_ops = {
+static struct fb_ops ls_fb_ops = {
 	.owner			= THIS_MODULE,
-	.fb_check_var		= ls2k_fb_check_var,
-	.fb_set_par		= ls2k_fb_set_par,
-	.fb_setcolreg		= ls2k_fb_setcolreg,
-	.fb_blank		= ls2k_fb_blank,
-	.fb_pan_display		= ls2k_fb_pan_display,
+	.fb_check_var		= ls_fb_check_var,
+	.fb_set_par		= ls_fb_set_par,
+	.fb_setcolreg		= ls_fb_setcolreg,
+	.fb_blank		= ls_fb_blank,
+	.fb_pan_display		= ls_fb_pan_display,
 	.fb_fillrect		= cfb_fillrect,
 	.fb_copyarea		= cfb_copyarea,
 	.fb_imageblit		= cfb_imageblit,
-	.fb_cursor		= ls2k_fb_cursor,
-	.fb_ioctl		= ls2k_fb_ioctl,
-	.fb_compat_ioctl	= ls2k_fb_ioctl,
+	.fb_cursor		= ls_fb_cursor,
+	.fb_ioctl		= ls_fb_ioctl,
+	.fb_compat_ioctl	= ls_fb_ioctl,
 };
 
 /*
  *  Initialisation
  */
-static int ls2k_fb_probe(struct platform_device *dev)
+static int ls_fb_probe(struct platform_device *dev)
 {
 	int irq;
 	struct fb_info *info;
 	int retval = -ENOMEM;
-	struct ls2k_fb_par *par;
+	struct ls_fb_par *par;
 	struct resource *r;
 	irq = platform_get_irq(dev, 0);
 	if (irq < 0) {
@@ -950,13 +961,13 @@ static int ls2k_fb_probe(struct platform_device *dev)
 	if (!info)
 		return -ENOMEM;
 
-	info->fix = ls2k_fb_fix;
+	info->fix = ls_fb_fix;
 	info->node = -1;
-	info->fbops = &ls2k_fb_ops;
+	info->fbops = &ls_fb_ops;
 	info->pseudo_palette = info->par;
 	info->flags = FBINFO_FLAG_DEFAULT;
 
-	par = kzalloc(sizeof(struct ls2k_fb_par), GFP_KERNEL);
+	par = kzalloc(sizeof(struct ls_fb_par), GFP_KERNEL);
 	if (!par) {
 		retval = -ENOMEM;
 		goto release_info;
@@ -973,7 +984,7 @@ static int ls2k_fb_probe(struct platform_device *dev)
 	}
 
 	par->reg_base = r->start;
-	ls2k_find_init_mode(info);
+	ls_find_init_mode(info);
 
 	if (!videomemorysize) {
 		videomemorysize = info->var.xres_virtual *
@@ -1010,7 +1021,7 @@ static int ls2k_fb_probe(struct platform_device *dev)
 	if (retval < 0)
 		goto release_map;
 
-	retval = request_irq(irq, ls2kfb_irq, IRQF_DISABLED, dev->name, info);
+	retval = request_irq(irq, lsfb_irq, IRQF_DISABLED, dev->name, info);
 	if (retval) {
 		dev_err(&dev->dev, "cannot get irq %d - err %d\n", irq, retval);
 		goto unreg_info;
@@ -1034,10 +1045,10 @@ release_info:
 	return retval;
 }
 
-static int ls2k_fb_remove(struct platform_device *dev)
+static int ls_fb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
-	struct ls2k_fb_par *par = info->par;
+	struct ls_fb_par *par = info->par;
 	int irq = par->irq;
 
 	free_irq(irq, info);
@@ -1054,7 +1065,7 @@ static int ls2k_fb_remove(struct platform_device *dev)
 
 #if    defined(CONFIG_SUSPEND)
 /**
- **      ls2k_fb_suspend - Suspend the device.
+ **      ls_fb_suspend - Suspend the device.
  **      @dev: platform device
  **      @msg: the suspend event code.
  **
@@ -1064,35 +1075,35 @@ static u32 output_mode;
 void console_lock(void);
 void console_unlock(void);
 
-static int ls2k_fb_suspend(struct platform_device *dev, pm_message_t msg)
+static int ls_fb_suspend(struct platform_device *dev, pm_message_t msg)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 
 	console_lock();
 	fb_set_suspend(info, 1);
 	console_unlock();
 
-	output_mode = ls2k_readl(base + LS2K_FB_DVO_OUTPUT_REG);
+	output_mode = ls_readl(base + LS_FB_DVO_OUTPUT_REG);
 
 	return 0;
 }
 
 /**
- **      ls2k_fb_resume - Resume the device.
+ **      ls_fb_resume - Resume the device.
  **      @dev: platform device
  **
  **      See Documentation/power/devices.txt for more information
  **/
-static int ls2k_fb_resume(struct platform_device *dev)
+static int ls_fb_resume(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
-	struct ls2k_fb_par *par = (struct ls2k_fb_par *)info->par;
+	struct ls_fb_par *par = (struct ls_fb_par *)info->par;
 	unsigned long base = par->reg_base;
 
-	ls2k_fb_set_par(info);
-	ls2k_writel(output_mode, base + LS2K_FB_DVO_OUTPUT_REG);
+	ls_fb_set_par(info);
+	ls_writel(output_mode, base + LS_FB_DVO_OUTPUT_REG);
 
 	console_lock();
 	fb_set_suspend(info, 0);
@@ -1102,44 +1113,145 @@ static int ls2k_fb_resume(struct platform_device *dev)
 }
 #endif
 
-static struct of_device_id ls2k_fb_id_table[] = {
-	{ .compatible = "loongson,ls2k-fb", },
-	{ },
+static struct of_device_id ls_fb_id_table[] = {
+	{ .compatible = "loongson,ls-fb", },
 };
 
-static struct platform_driver ls2k_fb_driver = {
-	.probe	= ls2k_fb_probe,
-	.remove = ls2k_fb_remove,
+static struct platform_driver ls_fb_driver = {
+	.probe	= ls_fb_probe,
+	.remove = ls_fb_remove,
 #ifdef	CONFIG_SUSPEND
-	.suspend = ls2k_fb_suspend,
-	.resume	 = ls2k_fb_resume,
+	.suspend = ls_fb_suspend,
+	.resume	 = ls_fb_resume,
 #endif
 	.driver = {
-		.name	= "ls2k-fb",
+		.name	= "ls-fb",
 		.bus = &platform_bus_type,
-		.of_match_table = of_match_ptr(ls2k_fb_id_table),
+		.of_match_table = of_match_ptr(ls_fb_id_table),
 	},
 };
 
-static int __init ls2k_fb_init (void)
+static struct pci_device_id ls_fb_devices[] = {
+	{PCI_DEVICE(0x14, 0x7a06)},
+	{0, 0, 0, 0, 0, 0, 0}
+};
+
+/*
+ * DC
+ */
+static struct resource ls_dc_resources[] = {
+	[0] = {
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device ls_dc_device = {
+	.name           = "ls-fb",
+	.id             = 0,
+	.num_resources	= ARRAY_SIZE(ls_dc_resources),
+	.resource	= ls_dc_resources,
+};
+
+static int ls_fb_pci_register(struct pci_dev *pdev,
+				 const struct pci_device_id *ent)
+{
+	int ret;
+	unsigned char v8;
+
+	pr_debug("ls_fb_pci_register BEGIN\n");
+
+	/* Enable device in PCI config */
+	ret = pci_enable_device(pdev);
+	if (ret < 0) {
+		printk(KERN_ERR "lsfb (%s): Cannot enable PCI device\n",
+		       pci_name(pdev));
+		goto err_out;
+	}
+
+	/* request the mem regions */
+	ret = pci_request_region(pdev, 0, "lsfb io");
+	if (ret < 0) {
+		printk( KERN_ERR "lsfb (%s): cannot request region 0.\n",
+			pci_name(pdev));
+		goto err_out;
+	}
+
+	ls_dc_resources[0].start = pci_resource_start (pdev, 0);
+	ls_dc_resources[0].end = pci_resource_end(pdev, 0);
+	/* need api from pci irq */
+	ret = pci_read_config_byte(pdev, PCI_INTERRUPT_LINE, &v8);
+
+	if (ret == PCIBIOS_SUCCESSFUL) {
+
+		ls_dc_resources[1].start = v8;
+		ls_dc_resources[1].end = v8;
+
+		platform_device_register(&ls_dc_device);
+		platform_driver_register(&ls_fb_driver);
+
+	}
+
+err_out:
+	return ret;
+}
+
+static void ls_fb_pci_unregister(struct pci_dev *pdev)
+{
+	platform_driver_unregister(&ls_fb_driver);
+	pci_release_region(pdev, 0);
+}
+
+#ifdef	CONFIG_SUSPEND
+int ls_fb_pci_suspend(struct pci_dev *pdev, pm_message_t mesg)
+{
+	ls_fb_suspend(&ls_dc_device, mesg);
+	pci_save_state(pdev);
+	return 0;
+}
+#endif
+
+#ifdef	CONFIG_SUSPEND
+int ls_fb_pci_resume(struct pci_dev *pdev)
+{
+	ls_fb_resume(&ls_dc_device);
+	return 0;
+}
+#endif
+
+static struct pci_driver ls_fb_pci_driver = {
+	.name		= "ls-fb",
+	.id_table	= ls_fb_devices,
+	.probe		= ls_fb_pci_register,
+	.remove		= ls_fb_pci_unregister,
+#ifdef	CONFIG_SUSPEND
+	.suspend = ls_fb_pci_suspend,
+	.resume	 = ls_fb_pci_resume,
+#endif
+};
+
+static int __init ls_fb_init (void)
 {
 #ifndef MODULE
 	char *option = NULL;
 
-	if (fb_get_options("ls2k-fb", &option))
+	if (fb_get_options("ls-fb", &option))
 		return -ENODEV;
-	ls2k_fb_setup(option);
+	ls_fb_setup(option);
 #endif
-	return platform_driver_register(&ls2k_fb_driver);
+	platform_driver_register(&ls_fb_driver);
+	return pci_register_driver (&ls_fb_pci_driver);
 }
 
-
-static void __exit ls2k_fb_exit (void)
+static void __exit ls_fb_exit (void)
 {
-	return platform_driver_unregister(&ls2k_fb_driver);
+	platform_driver_unregister(&ls_fb_driver);
+	return pci_unregister_driver (&ls_fb_pci_driver);
 }
 
-module_init(ls2k_fb_init);
-module_exit(ls2k_fb_exit);
+module_init(ls_fb_init);
+module_exit(ls_fb_exit);
 
 MODULE_LICENSE("GPL");

@@ -1699,7 +1699,7 @@ CONFIG_FB_MODE_HELPERS=y
 # CONFIG_FB_ARK is not set
 # CONFIG_FB_PM3 is not set
 # CONFIG_FB_CARMINE is not set
-CONFIG_FB_LS2K=y
+CONFIG_FB_LS=y
 # CONFIG_FB_SMSCUFX is not set
 # CONFIG_FB_UDL is not set
 # CONFIG_FB_GOLDFISH is not set

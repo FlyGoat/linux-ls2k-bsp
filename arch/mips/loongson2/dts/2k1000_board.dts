@@ -34,7 +34,7 @@
 		};
 
 		dc@0x10290000 {
-			compatible = "loongson,ls2k-fb";
+			compatible = "loongson,ls-fb";
 			reg = <0x102a0000 0x10000>;
 			interrupt-parent = <&icu>;
 			interrupts = <28>;

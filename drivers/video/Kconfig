@@ -2000,14 +2000,14 @@ config FB_LS2H
 	---help---
 	  Frame buffer driver for the Loongson-2H Platform-Bridge.
 
-config FB_LS2K
-        tristate "Loongson2K Frame Buffer Support"
+config FB_LS
+        tristate "Loongson Frame Buffer Support"
         depends on FB && MACH_LOONGSON2
         select FB_CFB_FILLRECT
         select FB_CFB_COPYAREA
         select FB_CFB_IMAGEBLIT
         ---help---
-          Frame buffer driver for the 2K SoC.
+          Frame buffer driver for the Loongson platform.
 
 config FB_SH_MOBILE_LCDC
 	tristate "SuperH Mobile LCDC framebuffer support"
