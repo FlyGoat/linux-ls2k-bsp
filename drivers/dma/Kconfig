@@ -114,6 +114,13 @@ config AT_HDMAC
 	help
 	  Support the Atmel AHB DMA controller.
 
+config LS_APBDMAC
+	tristate "Loongson APB DMA support"
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Support the Loongson APB DMA controller.
+
 config FSL_DMA
 	tristate "Freescale Elo and Elo Plus DMA support"
 	depends on FSL_SOC

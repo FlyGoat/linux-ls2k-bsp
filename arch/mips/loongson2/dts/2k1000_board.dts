@@ -218,6 +218,63 @@
 			interrupt-parent = <&icu>;
 			interrupts = <35>;
 		};
+
+		/* APB DMA controller nodes:
+		 * apbdma node specify the commom property for dma node.
+		 * the #config-nr must be 2,Used to provide APB sel region
+		 * and APB DMA controler information.
+		 */
+		apbdma: apbdma@1fe10438{
+			compatible = "loongson,ls-apbdma";
+			reg = <0x1fe10438 0x8>;
+			#config-nr = <2>;
+		};
+		/* DMA node should specify the apbdma-sel property using a
+		 * phandle to the controller followed by number of APB sel
+		 * region(max 9) and number of APB DMA controller(max 4).
+		*/
+		/*
+		dma0: dma@1fe10c00 {
+			compatible = "loongson,ls-apbdma-0";
+			reg = <0x1fe10c00 0x8>;
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma1: dma@1fe10c10 {
+			compatible = "loongson,ls-apbdma-1";
+			reg = <0x1fe10c10 0x8>;
+			apbdma-sel = <&apbdma 0x5 0x1>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma2: dma@1fe10c20 {
+			compatible = "loongson,ls-apbdma-2";
+			reg = <0x1fe10c20 0x8>;
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma3: dma@1fe10c30 {
+			compatible = "loongson,ls-apbdma-3";
+			reg = <0x1fe10c30 0x8>;
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma4: dma@1fe10c40 {
+			compatible = "loongson,ls-apbdma-4";
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			reg = <0x1fe10c40 0x8>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		*/
 	};
 
 	chosen {
