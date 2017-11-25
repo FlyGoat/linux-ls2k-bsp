@@ -10,6 +10,22 @@
 #define ls_readq					ls2k_readq
 #define ls_writel					ls2k_writel
 #define ls_writeq					ls2k_writeq
+#else
+#include <loongson-pch.h>
+#include "config-ch7034.h"
+
+#define DEFAULT_BITS_PER_PIXEL		32
+#define HT1LO_PCICFG_BASE			0x1a000000
+#define LS7A_PCH_CFG_SPACE_REG		(TO_UNCAC(HT1LO_PCICFG_BASE)|0x0000a810)
+#define LS7A_PCH_CFG_REG_BASE		((*(volatile unsigned int *)(LS7A_PCH_CFG_SPACE_REG))&0xfffffff0)
+
+#define LS_PIX0_PLL				(LS7A_PCH_CFG_REG_BASE + 0x04b0)
+#define LS_PIX1_PLL				(LS7A_PCH_CFG_REG_BASE + 0x04c0)
+
+#define ls_readl					ls7a_readl
+#define ls_readq					ls7a_readq
+#define ls_writel					ls7a_writel
+#define ls_writeq					ls7a_writeq
 
 #endif /* CONFIG_CPU_LOONGSON2K */
 

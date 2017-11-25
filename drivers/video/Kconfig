@@ -2002,7 +2002,7 @@ config FB_LS2H
 
 config FB_LS
         tristate "Loongson Frame Buffer Support"
-        depends on FB && MACH_LOONGSON2
+        depends on FB && (MACH_LOONGSON2 || CPU_LOONGSON3)
         select FB_CFB_FILLRECT
         select FB_CFB_COPYAREA
         select FB_CFB_IMAGEBLIT

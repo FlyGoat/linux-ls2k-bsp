@@ -275,7 +275,7 @@ static unsigned int cal_freq(unsigned int pixclock_khz, struct pix_pll * pll_con
 
 static void config_pll(unsigned long pll_base, struct pix_pll *pll_cfg)
 {
-#if CONFIG_CPU_LOONGSON2K
+#ifdef CONFIG_CPU_LOONGSON2K
 	unsigned long out;
 
 	out = (1 << 7) | (1L << 42) | (3 << 10) |
@@ -292,6 +292,45 @@ static void config_pll(unsigned long pll_base, struct pix_pll *pll_cfg)
 	while (!(ls_readq(pll_base + LO_OFF) & 0x10000)) ;
 
 	ls_writeq((out | 1), pll_base + LO_OFF);
+#else
+	unsigned long val;
+
+	/* set sel_pll_out0 0 */
+	val = ls_readq(pll_base + LO_OFF);
+	val &= ~(1UL << 40);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* pll_pd 1 */
+	val = ls_readq(pll_base + LO_OFF);
+	val |= (1UL << 45);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* set_pll_param 0 */
+	val = ls_readq(pll_base + LO_OFF);
+	val &= ~(1UL << 43);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* div ref, loopc, div out */
+	val = ls_readq(pll_base + LO_OFF);
+
+	/* clear old value */
+	val &= ~(0x7fUL << 32);
+	val &= ~(0x1ffUL << 21);
+	val &= ~(0x7fUL);
+
+	/* config new value */
+	val |= ((unsigned long)(pll_cfg->l1_frefc) << 32) | ((unsigned long)(pll_cfg->l1_loopc) << 21) |
+		((unsigned long)(pll_cfg->l2_div) << 0);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* set_pll_param 1 */
+	val = ls_readq(pll_base + LO_OFF);
+	val |= (1UL << 43);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* pll_pd 0 */
+	val = ls_readq(pll_base + LO_OFF);
+	val &= ~(1UL << 45);
+	ls_writeq(val, pll_base + LO_OFF);
+	/* set sel_pll_out0 1 */
+	val = ls_readq(pll_base + LO_OFF);
+	val |= (1UL << 40);
+	ls_writeq(val, pll_base + LO_OFF);
 #endif
 }
 static void ls_reset_cursor_image(void)
@@ -754,8 +793,31 @@ static unsigned char *fb_do_probe_ddc_edid(struct i2c_adapter *adapter)
 	return NULL;
 }
 
-#ifdef CONFIG_CPU_LOONGSON2K
+#ifndef CONFIG_CPU_LOONGSON2K
 /* Display chip */
+static void fb_do_probe_ddc_ch7034(struct i2c_adapter *adapter)
+{
+	int i;
+	unsigned char *buf = kmalloc(2*sizeof(unsigned char), GFP_KERNEL);
+	struct i2c_msg msgs = {
+		.addr = eeprom_info.addr,
+		.flags = 0,
+		.len = 2,
+		.buf = buf,
+	};
+	if (!buf){
+		dev_warn(&adapter->dev, "unable to allocate memory for CH7034"
+			"block.\n");
+		return;
+	}
+	for (i = 0; i < 131; i++) {
+		msgs.buf[0] = CH7034_VGA_REG_TABLE[0][i][0];
+		msgs.buf[1] = CH7034_VGA_REG_TABLE[0][i][1];
+		if (i2c_transfer(adapter, &msgs, 1) != 1)
+			printk("i %d buf 0x%x 0x%x\n", i, msgs.buf[0], msgs.buf[1]);
+	}
+	return;
+}
 #endif
 
 static const struct i2c_device_id dvi_eep_ids[] = {
@@ -814,6 +876,8 @@ static unsigned char *ls_fb_i2c_connector(struct ls_fb_par *fb_par)
 	if (eeprom_info.adapter)
 #ifdef CONFIG_CPU_LOONGSON2K
 		edid = fb_do_probe_ddc_edid(eeprom_info.adapter);
+#else
+		fb_do_probe_ddc_ch7034(eeprom_info.adapter);
 #endif
 	if (!edid) {
 		if (i2c_add_driver(&vga_eep_driver)) {
@@ -1113,10 +1177,11 @@ static int ls_fb_resume(struct platform_device *dev)
 }
 #endif
 
+#ifdef CONFIG_OF
 static struct of_device_id ls_fb_id_table[] = {
 	{ .compatible = "loongson,ls-fb", },
 };
-
+#endif
 static struct platform_driver ls_fb_driver = {
 	.probe	= ls_fb_probe,
 	.remove = ls_fb_remove,
@@ -1127,7 +1192,9 @@ static struct platform_driver ls_fb_driver = {
 	.driver = {
 		.name	= "ls-fb",
 		.bus = &platform_bus_type,
+#ifdef CONFIG_OF
 		.of_match_table = of_match_ptr(ls_fb_id_table),
+#endif
 	},
 };
 
