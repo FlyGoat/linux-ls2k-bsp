@@ -1,0 +1,26 @@
+menuconfig SND_HDA_LS7A
+	bool "Loongson7A HD Audio"
+	select SND_PCM
+	select SND_VMASTER
+	help
+	  Say Y here to include support for "Loongson7A High Definition
+	  Audio".
+
+if SND_HDA_LS7A
+
+config LS7A_HDA_POWER_SAVE
+	bool "Aggressive power-saving on HD-audio"
+	help
+	  Say Y here to enable more aggressive power-saving mode on
+	  HD-audio driver.  The power-saving timeout can be configured
+	  via power_save option or over sysfs on-the-fly.
+
+config LS7A_HDA_POWER_SAVE_DEFAULT
+	int "Default time-out for HD-audio power-save mode"
+    depends on LS7A_HDA_POWER_SAVE
+	default 0
+	  help
+	  The default time-out value in seconds for HD-audio automatic
+	  power-save mode.  0 means to disable the power-save mode.
+
+endif
