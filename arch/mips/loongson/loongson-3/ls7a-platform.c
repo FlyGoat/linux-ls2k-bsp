@@ -208,7 +208,7 @@ static struct resource ls7a_rtc_resources[] = {
 };
 
 static struct platform_device ls7a_rtc_device = {
-	.name   = "ls7a-rtc",
+	.name   = "ls-rtc",
 	.id     = 0,
 	.num_resources  = ARRAY_SIZE(ls7a_rtc_resources),
 	.resource       = ls7a_rtc_resources,
