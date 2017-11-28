@@ -1257,8 +1257,6 @@ static int ls_fb_pci_register(struct pci_dev *pdev,
 		ls_dc_resources[1].end = v8;
 
 		platform_device_register(&ls_dc_device);
-		platform_driver_register(&ls_fb_driver);
-
 	}
 
 err_out:
@@ -1267,7 +1265,6 @@ err_out:
 
 static void ls_fb_pci_unregister(struct pci_dev *pdev)
 {
-	platform_driver_unregister(&ls_fb_driver);
 	pci_release_region(pdev, 0);
 }
 
@@ -1301,6 +1298,7 @@ static struct pci_driver ls_fb_pci_driver = {
 
 static int __init ls_fb_init (void)
 {
+	int ret;
 #ifndef MODULE
 	char *option = NULL;
 
@@ -1308,14 +1306,16 @@ static int __init ls_fb_init (void)
 		return -ENODEV;
 	ls_fb_setup(option);
 #endif
-	platform_driver_register(&ls_fb_driver);
-	return pci_register_driver (&ls_fb_pci_driver);
+	ret = platform_driver_register(&ls_fb_driver);
+	if (!ret)
+		ret = pci_register_driver (&ls_fb_pci_driver);
+	return ret;
 }
 
 static void __exit ls_fb_exit (void)
 {
 	platform_driver_unregister(&ls_fb_driver);
-	return pci_unregister_driver (&ls_fb_pci_driver);
+	pci_unregister_driver (&ls_fb_pci_driver);
 }
 
 module_init(ls_fb_init);

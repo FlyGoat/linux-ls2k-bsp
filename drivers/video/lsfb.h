@@ -41,7 +41,7 @@ EXPORT_SYMBOL_GPL(lsfb_mem);
 #define DEFAULT_ADDRESS_FB_DMA		 0x0e000000
 
 #define LSFB_MASK		(0xf << 20)
-#define LSFB_GPU_MASK	~(0xff << 56)
+#define LSFB_GPU_MASK	(~(0xffUL << 56))
 u64 ls_cursor_mem;
 u32 ls_cursor_dma;
 u64 ls_fb_mem;
