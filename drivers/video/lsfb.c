@@ -1317,8 +1317,11 @@ static void __exit ls_fb_exit (void)
 	platform_driver_unregister(&ls_fb_driver);
 	pci_unregister_driver (&ls_fb_pci_driver);
 }
-
+#ifdef CONFIG_CPU_LOONGSON2K
 module_init(ls_fb_init);
+#else
+late_initcall(ls_fb_init);
+#endif
 module_exit(ls_fb_exit);
 
 MODULE_LICENSE("GPL");
