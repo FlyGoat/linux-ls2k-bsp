@@ -1,8 +1,9 @@
 menuconfig VIVANTE
-	tristate "Loongson-2H VIVANTE GPU Driver Support"
+	tristate "Loongson VIVANTE GPU Driver Support"
+    depends on MACH_LOONGSON2 || LOONGSON_MACH3X
 	default y
 	help
-	  This option enable Loongson-2H Vivante GPU kernel driver support.
+	  This option enable Loongson Vivante GPU kernel driver support.
 
 if VIVANTE
 

@@ -20,6 +20,7 @@ CONFIG_MIPS=y
 # CONFIG_LASAT is not set
 CONFIG_MACH_LOONGSON=y
 # CONFIG_MACH_LOONGSON1 is not set
+# CONFIG_MACH_LOONGSON2 is not set
 # CONFIG_MIPS_MALTA is not set
 # CONFIG_MIPS_SEAD3 is not set
 # CONFIG_NEC_MARKEINS is not set
@@ -1492,7 +1493,10 @@ CONFIG_IGB_HWMON=y
 CONFIG_IXGB=y
 CONFIG_IXGBE=y
 CONFIG_IXGBE_HWMON=y
+# CONFIG_IXGBEVF is not set
 # CONFIG_I40E is not set
+# CONFIG_I40EVF is not set
+# CONFIG_FM10K is not set
 # CONFIG_NET_VENDOR_I825XX is not set
 # CONFIG_IP1000 is not set
 # CONFIG_JME is not set
@@ -3113,6 +3117,7 @@ CONFIG_DMADEVICES=y
 #
 # CONFIG_DW_DMAC is not set
 # CONFIG_IDMA64 is not set
+# CONFIG_LS_APBDMAC is not set
 # CONFIG_TIMB_DMA is not set
 # CONFIG_AUXDISPLAY is not set
 # CONFIG_UIO is not set

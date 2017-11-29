@@ -35,9 +35,6 @@
 int lsgpu_hw_coherent = 0;	/* set loongsong gpu use or not use hw coherent */
 EXPORT_SYMBOL_GPL(lsgpu_hw_coherent);
 
-extern unsigned long lsfb_mem;
-extern unsigned int lsfb_dma;
-
 static struct platform_driver gpu_driver = {
 	.probe		= loongson_gpu_probe,
 	.remove		= loongson_gpu_remove,
@@ -117,8 +114,6 @@ static int loongson_gpu_pci_register(struct pci_dev *pdev,
 	ls2k_gpu_resources[2].start = pci_resource_start (pdev, 2);
 	ls2k_gpu_resources[2].end = pci_resource_end(pdev, 2);
 #endif
-	lsfb_dma = pci_resource_end(pdev, 2) - 0x01ffffff;
-	lsfb_mem = 0x90000e0000000000 | lsfb_dma;
 	if(loongson_pch->board_type == LS7A){
 		vram_type = VRAM_TYPE_UMA_LOW;
 	    gpu_brust_type = 1;

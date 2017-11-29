@@ -309,6 +309,7 @@ enum {
 
 /* LS7A PCH Registers (Misc, Confreg) */
 
+#define LS7A_HT1_BASE 0x90000e0000000000
 /* MISC reg base */
 //#define LS7A_PCH_REG_BASE		ls7a_misc_addr
 #define LS7A_PCH_REG_BASE		0x10080000

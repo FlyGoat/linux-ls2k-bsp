@@ -29,6 +29,7 @@
 #include "edid.h"
 #include "lsfb.h"
 
+
 #ifdef LS_FB_DEBUG
 #define LS_DEBUG(frm, arg...)	\
 	printk("ls_fb: %s %d: "frm, __func__, __LINE__, ##arg);
@@ -897,21 +898,35 @@ static unsigned char *ls_fb_i2c_connector(struct ls_fb_par *fb_par)
 
 static void ls_fb_address_init(void)
 {
-	if(lsfb_mem == 0)
-	{
-		ls_cursor_mem = DEFAULT_ADDRESS_CURSOR_MEM;
-		ls_cursor_dma = DEFAULT_ADDRESS_CURSOR_DMA;
-		ls_fb_mem     = DEFAULT_ADDRESS_FB_MEM;
-		ls_phy_addr   = DEFAULT_ADDRESS_PHY_ADDR;
-		ls_fb_dma     = DEFAULT_ADDRESS_FB_DMA;
-	}else{
-		ls_cursor_mem = lsfb_mem | LSFB_MASK;
-		ls_cursor_dma = lsfb_dma | LSFB_MASK;
-		ls_fb_mem     = lsfb_mem;
-		ls_phy_addr   = lsfb_mem & LSFB_GPU_MASK;
-		ls_fb_dma     = lsfb_dma;
-	}
+#ifdef CONFIG_CPU_LOONGSON3
+		struct pci_dev *pdev;
+
+		pdev= pci_get_device(PCI_VENDOR_ID_LOONGSON,PCI_DEVICE_ID_LOONGSON_GPU ,NULL);
+		if(pdev){
+				/*get frame buffer address from memory of GPU device*/
+				lsfb_dma = pci_resource_start(pdev,2);
+				lsfb_mem = LS7A_HT1_BASE|lsfb_dma;
+
+				ls_cursor_mem = lsfb_mem | LSFB_MASK;
+				ls_cursor_dma = lsfb_dma | LSFB_MASK;
+				ls_fb_mem     = lsfb_mem;
+				ls_phy_addr   = lsfb_mem & LSFB_GPU_MASK;
+				ls_fb_dma     = lsfb_dma;
+
+				pci_enable_device_mem(pdev);
+		}else{
+#endif
+				/*get frame buffer address from system memory*/
+				ls_cursor_mem = DEFAULT_ADDRESS_CURSOR_MEM;
+				ls_cursor_dma = DEFAULT_ADDRESS_CURSOR_DMA;
+				ls_fb_mem     = DEFAULT_ADDRESS_FB_MEM;
+				ls_phy_addr   = DEFAULT_ADDRESS_PHY_ADDR;
+				ls_fb_dma     = DEFAULT_ADDRESS_FB_DMA;
+#ifdef CONFIG_CPU_LOONGSON3
+		}
+#endif
 }
+
 static void ls_find_init_mode(struct fb_info *info)
 {
         struct fb_videomode mode;
@@ -1317,11 +1332,8 @@ static void __exit ls_fb_exit (void)
 	platform_driver_unregister(&ls_fb_driver);
 	pci_unregister_driver (&ls_fb_pci_driver);
 }
-#ifdef CONFIG_CPU_LOONGSON2K
+
 module_init(ls_fb_init);
-#else
-late_initcall(ls_fb_init);
-#endif
 module_exit(ls_fb_exit);
 
 MODULE_LICENSE("GPL");
