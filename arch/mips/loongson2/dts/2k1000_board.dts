@@ -127,10 +127,18 @@
 			};
 		};
 		i2c1: i2c@1fe01800{
+			#address-cells = <1>;
+			#size-cells = <1>;
+
 			compatible = "loongson,ls-i2c";
 			reg = <0x1fe01800 0x8>;
 			interrupt-parent = <&icu>;
 			interrupts = <31>;
+			codec@1a{
+				compatible = "codec_uda1342";
+				reg = <0x1a>;
+			};
+
 		};
 
 		i2c_dvo0:i2c@2{
@@ -251,11 +259,10 @@
 			dma-channels = <1>;
 			dma-requests = <1>;
 		};
-		/*
 		dma2: dma@1fe10c20 {
 			compatible = "loongson,ls-apbdma-2";
 			reg = <0x1fe10c20 0x8>;
-			apbdma-sel = <&apbdma 0x0 0x0>;
+			apbdma-sel = <&apbdma 0x6 0x2>;
 			#dma-cells = <1>;
 			dma-channels = <1>;
 			dma-requests = <1>;
@@ -263,11 +270,12 @@
 		dma3: dma@1fe10c30 {
 			compatible = "loongson,ls-apbdma-3";
 			reg = <0x1fe10c30 0x8>;
-			apbdma-sel = <&apbdma 0x0 0x0>;
+			apbdma-sel = <&apbdma 0x7 0x3>;
 			#dma-cells = <1>;
 			dma-channels = <1>;
 			dma-requests = <1>;
 		};
+		/*
 		dma4: dma@1fe10c40 {
 			compatible = "loongson,ls-apbdma-4";
 			apbdma-sel = <&apbdma 0x0 0x0>;
@@ -290,6 +298,26 @@
 			dmas = <&dma1 1>;
 			dma-names = "sdio_rw";
 			dma-mask = <0xffffffff>;
+		};
+		i2s: i2s@0x1fe0d000 {
+			compatible = "loongson,ls-i2s";
+			reg = <0x1fe0d000 0x10>;
+		};
+		audio: audio@0x1fe0d000 {
+			compatible = "loongson,ls-pcm-audio";
+			reg = <0x1fe0d000 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <54 55>;
+			interrupt-names = "i2s_irq0", "i2s_irq1";
+
+			dmas = <&dma2 1
+			        &dma3 1>;
+			dma-names = "i2s_play", "i2s_record";
+		};
+		sound {
+			compatible = "loongson,ls-sound";
+			loongson,i2s-controller = <&i2s>;
+			loongson,audio-codec = <&audio>;
 		};
 	};
 
