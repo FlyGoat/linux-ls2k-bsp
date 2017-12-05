@@ -1314,6 +1314,11 @@ static struct pci_driver ls_fb_pci_driver = {
 static int __init ls_fb_init (void)
 {
 	int ret;
+	struct pci_dev *pdev = NULL;
+	/*if PCIE Graphics card exist,use it as default*/
+	pdev = pci_get_device(PCI_VENDOR_ID_ATI, PCI_ANY_ID, NULL);
+	if(pdev)
+			return 0;
 #ifndef MODULE
 	char *option = NULL;
 
