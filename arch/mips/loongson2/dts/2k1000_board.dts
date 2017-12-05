@@ -241,7 +241,6 @@
 		 * phandle to the controller followed by number of APB sel
 		 * region(max 9) and number of APB DMA controller(max 4).
 		*/
-		/*
 		dma0: dma@1fe10c00 {
 			compatible = "loongson,ls-apbdma-0";
 			reg = <0x1fe10c00 0x8>;
@@ -250,7 +249,6 @@
 			dma-channels = <1>;
 			dma-requests = <1>;
 		};
-		*/
 		dma1: dma@1fe10c10 {
 			compatible = "loongson,ls-apbdma-1";
 			reg = <0x1fe10c10 0x8>;
@@ -318,6 +316,31 @@
 			compatible = "loongson,ls-sound";
 			loongson,i2s-controller = <&i2s>;
 			loongson,audio-codec = <&audio>;
+		};
+		nand@0x1fe06040{
+			#address-cells = <1>;
+			#size-cells = <1>;
+			compatible = "loongson,ls-nand";
+			reg = <0x1fe06040 0x0
+				0x1fe06000 0x20>;
+			interrupt-parent = <&icu>;
+			interrupts = <52>;
+			interrupt-names = "nand_irq";
+
+			dmas = <&dma0 1>;
+			dma-names = "nand_rw";
+
+			number-of-parts = <0x2>;
+
+			partition@0 {
+				label = "kernel_partition";
+				reg = <0x0000000 0x01400000>;
+			};
+
+			partition@0x01400000 {
+				label = "os_partition";
+				reg = <0x01400000 0x0>;
+			};
 		};
 	};
 
