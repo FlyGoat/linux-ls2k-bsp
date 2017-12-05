@@ -249,6 +249,11 @@ void __init prom_init_env(void)
 	else if (strstr(eboard->name,"7A")) {
 		loongson_pch = &ls7a_pch;
 		loongson_ec_sci_irq = 0x07;
+		if (strstr(eboard->name,"2way")) {
+			eirq_source->dma_noncoherent = 0;
+			hw_coherentio = 1;
+			pr_info("Board [%s] detected, **coherent dma** is unconditionally used!\n", eboard->name);
+		}
 	}
 	else {
 		loongson_pch = &rs780_pch;
