@@ -117,22 +117,6 @@ static int uda1342_write(struct snd_soc_codec *codec, unsigned int reg,
 		return -EIO;
 }
 
-static void uda1342_sync_cache(struct snd_soc_codec *codec)
-{
-	int reg;
-	u8 data[3];
-	u16 *cache = codec->reg_cache;
-
-	for (reg = 0; reg < UDA1342_MVOL; reg++) {
-		data[0] = reg;
-		data[1] = (cache[reg] & 0xff00) >> 8;
-		data[2] = cache[reg] & 0x00ff;
-		if (codec->hw_write(codec->control_data, data, 3) != 3)
-			dev_err(codec->dev, "%s: write to reg 0x%x failed\n",
-				__func__, reg);
-	}
-}
-
 static int uda1342_reset(struct snd_soc_codec *codec)
 {
 	int iface;
@@ -204,7 +188,6 @@ static int uda1342_trigger(struct snd_pcm_substream *substream, int cmd,
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct uda1342_priv *uda1342 = snd_soc_codec_get_drvdata(codec);
-	int mixer = uda1342_read_reg_cache(codec, UDA1342_MIXER);
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -290,7 +273,6 @@ static int uda1342_resume(struct snd_soc_codec *codec)
 static int uda1342_probe(struct snd_soc_codec *codec)
 {
 	struct uda1342_priv *uda1342 = snd_soc_codec_get_drvdata(codec);
-	int ret;
 
 	uda1342->codec = codec;
 

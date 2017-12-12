@@ -23,8 +23,6 @@ extern int __ls_pcm_prepare(struct snd_pcm_substream *substream);
 extern irqreturn_t ls_pcm_dma_irq(int irq, void *dev_id);
 extern int __ls_pcm_open(struct snd_pcm_substream *substream);
 extern int __ls_pcm_close(struct snd_pcm_substream *substream);
-static int ls_pcm_mmap(struct snd_pcm_substream *substream,
-	struct vm_area_struct *vma);
 extern int ls_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stream);
 extern void ls_pcm_free_dma_buffers(struct snd_pcm *pcm);
 

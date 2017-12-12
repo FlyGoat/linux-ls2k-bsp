@@ -29,8 +29,10 @@
 
 #endif /* CONFIG_CPU_LOONGSON2K */
 
+#ifdef CONFIG_CPU_LOONGSON3
 static unsigned long	lsfb_mem;
 static unsigned int		lsfb_dma;
+#endif
 
 #define DEFAULT_ADDRESS_CURSOR_MEM   0x900000000ef00000
 #define DEFAULT_ADDRESS_CURSOR_DMA   0x0ef00000

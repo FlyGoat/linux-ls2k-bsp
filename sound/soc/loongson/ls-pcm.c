@@ -99,8 +99,6 @@ EXPORT_SYMBOL(__ls_pcm_hw_params);
 
 int __ls_pcm_hw_free(struct snd_pcm_substream *substream)
 {
-	struct ls_runtime_data *rtd = substream->runtime->private_data;
-
 	snd_pcm_set_runtime_buffer(substream, NULL);
 	return 0;
 }
@@ -172,7 +170,6 @@ ls_pcm_pointer(struct snd_pcm_substream *substream)
 
 	snd_pcm_uframes_t x;
 	u32 val;
-	int timeout = 20000;
 	void *order_addr;
 	order_addr = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?  prtd->order_addr1 : prtd->order_addr2;
 
@@ -194,7 +191,6 @@ EXPORT_SYMBOL(ls_pcm_pointer);
 int __ls_pcm_prepare(struct snd_pcm_substream *substream)
 {
 	struct ls_runtime_data *prtd = substream->runtime->private_data;
-	u32 val;
 
 	if (!prtd || !prtd->params)
 		return 0;
@@ -206,7 +202,6 @@ EXPORT_SYMBOL(__ls_pcm_prepare);
 irqreturn_t ls_pcm_dma_irq(int irq, void *dev_id)
 {
 	struct snd_pcm_substream *substream = dev_id;
-	struct ls_runtime_data *rtd = substream->runtime->private_data;
 
 	snd_pcm_period_elapsed(substream);
 
@@ -223,8 +218,6 @@ int __ls_pcm_open(struct snd_pcm_substream *substream)
 	int ret;
 	struct resource *r;
 	int irq;
-	struct dma_chan *chan;
-	int data;
 	char *na;
 
 	runtime->hw = ls_pcm_hardware;
@@ -287,7 +280,7 @@ int __ls_pcm_open(struct snd_pcm_substream *substream)
 	prtd->base_phys = r->start;
 	prtd->base = ioremap(r->start, r->end - r->start + 1);
 
-	na = of_get_property(pdev->dev.of_node,"dma-names", NULL);
+	na = (char *)of_get_property(pdev->dev.of_node,"dma-names", NULL);
 
 	r->start = dma_1;
 	prtd->order_addr1_phys = r->start;
@@ -393,8 +386,6 @@ static int ls_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct ls_runtime_data *prtd = runtime->private_data;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct ls_pcm_dma_params *dma = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
-	struct platform_device *pdev = to_platform_device(rtd->platform->dev);
-	int ret;
 
 	if (!dma)
 		return 0;
@@ -408,8 +399,6 @@ static int ls_pcm_hw_params(struct snd_pcm_substream *substream,
 
 static int ls_pcm_hw_free(struct snd_pcm_substream *substream)
 {
-	struct ls_runtime_data *prtd = substream->runtime->private_data;
-
 	__ls_pcm_hw_free(substream);
 
 	return 0;

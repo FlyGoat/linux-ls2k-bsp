@@ -1117,7 +1117,7 @@ static int init_dma_desc_rings(struct net_device *dev)
 						   &priv->dma_tx_phy,
 						   GFP_KERNEL);
 		if ((!priv->dma_erx) || (!priv->dma_etx))
-			return;
+			return ret;
 	} else {
 		priv->dma_rx = dma_alloc_coherent(priv->device, rxsize *
 						  sizeof(struct dma_desc),
@@ -1128,7 +1128,7 @@ static int init_dma_desc_rings(struct net_device *dev)
 						  &priv->dma_tx_phy,
 						  GFP_KERNEL);
 		if ((!priv->dma_rx) || (!priv->dma_tx))
-			return;
+			return ret;
 	}
 
 	priv->rx_skbuff_dma = kmalloc_array(rxsize, sizeof(dma_addr_t),
@@ -1369,24 +1369,6 @@ static void stmmac_dma_operation_mode(struct stmmac_priv *priv)
 		tc = SF_DMA_MODE;
 	} else
 		priv->hw->dma->dma_mode(priv->ioaddr, tc, SF_DMA_MODE);
-}
-
-static int stmmac_get_dma_cur(struct stmmac_priv *priv)
-{
-	unsigned int base, cur;
-	void *ioaddr = (void *) priv->dev->base_addr;
-
-	if(priv->extend_desc64) {
-		base = stmmac_readl(ioaddr + DMA_TX_BASE_ADDR64_LO);
-		cur = stmmac_readl(ioaddr + DMA_CUR_TX_DESC64_LO)<<4;
-
-		return (cur - base) / sizeof(struct dma_extended_desc);
-	} else {
-		base = stmmac_readl(ioaddr + DMA_TX_BASE_ADDR);
-		cur = stmmac_readl(ioaddr + DMA_CUR_TX_DESC);
-
-		return (cur - base) / sizeof(struct dma_desc);
-	}
 }
 
 /**

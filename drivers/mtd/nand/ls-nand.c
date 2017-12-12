@@ -20,7 +20,6 @@
 #define DRIVER_NAME	"ls-nand"
 #define ALIGN_DMA(x) 	((x + 3)/4)
 #define REG(reg)	(info->mmio_base + reg)
-#define NAND_DEBUG
 
 #define MAX_BUFF_SIZE		4096
 #define STATUS_TIME_LOOP_R	30
@@ -302,7 +301,7 @@ static void ls_read_id(struct ls_nand_info *info)
 	wait_nand_done(info, 100);
 	id_l = readl(REG(NAND_IDL_REG));
 	id_h = readl(REG(NAND_IDH_REG));
-#ifdef NAND_DEBUG
+#ifdef MTD_NAND_DEBUG
 	pr_info("id_l: %08x, id_h:%08x\n", id_l, id_h);
 #endif
 	data[0] = (id_h & 0xff);
@@ -548,8 +547,11 @@ static int ls_nand_probe(struct platform_device *pdev)
 #ifdef CONFIG_MTD_CMDLINE_PARTS
 	const char *part_probes[] = { "cmdlinepart", NULL };
 #endif
+
+#ifdef CONFIG_MTD_CMDLINE_PARTS
 	struct mtd_partition *partitions = NULL;
 	int num_partitions = 0;
+#endif
 
 	pdata =  devm_kzalloc(&pdev->dev,
                   sizeof(struct ls2k_nand_plat_data),
@@ -624,7 +626,9 @@ static int ls_nand_probe(struct platform_device *pdev)
 	of_property_read_u32(chan->device->dev->of_node, "reg", &data);
 	r->start = data;
 	info->dma_order_reg = r->start;
+#ifdef MTD_NAND_DEBUG
 	pr_info("info->dma_order_reg = %x\n", info->dma_order_reg);
+#endif
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (r == NULL) {
@@ -633,7 +637,9 @@ static int ls_nand_probe(struct platform_device *pdev)
 		goto fail_free_res;
 	}
 	info->apb_data_addr = r->start;
+#ifdef MTD_NAND_DEBUG
 	pr_info("info->apb_data_addr= %x\n", info->apb_data_addr);
+#endif
 
 	ret = ls_nand_init_buff(info);
 	if (ret)

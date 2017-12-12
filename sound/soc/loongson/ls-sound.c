@@ -108,10 +108,6 @@ static int codec_i2c_init(void)
 static int ls_sound_drv_probe(struct platform_device *pdev)
 {
 	int ret;
-	struct device_node *root;
-	char *d_name, *p_name;
-	struct device_node *nd = pdev->dev.of_node;
-	struct device_node *child_nd_1, *child_nd_2;
 	ls_snd_ac97_device = platform_device_alloc("soc-audio", -1);
 	if (!ls_snd_ac97_device)
 		return -ENOMEM;
@@ -167,7 +163,7 @@ static int __init ls_sound_init(void)
 	pr_debug("Entered %s\n", __func__);
 
 	ret = platform_driver_register(&ls_sound_driver);
-	if(!ret){
+	if(ret){
 		printk(KERN_ALERT"ERROR: register device!\n");
 		return -EINVAL;
 	}

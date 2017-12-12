@@ -36,7 +36,6 @@ struct pxa_i2s_port {
 	u32 fmt;
 };
 
-static struct pxa_i2s_port pxa_i2s;
 static int clk_ena = 0;
 
 static struct ls_pcm_dma_params ls_i2s_pcm_stereo_out = {
@@ -51,14 +50,6 @@ static struct ls_pcm_dma_params ls_i2s_pcm_stereo_in = {
 
 static int ls_i2s_startup(struct snd_pcm_substream *substream,
 			      struct snd_soc_dai *dai)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-
-	return 0;
-}
-
-static int pxa_i2s_wait(void)
 {
 	return 0;
 }
@@ -83,11 +74,8 @@ static int ls_i2s_hw_params(struct snd_pcm_substream *substream,
 	void *i2sbase = dai->dev->platform_data;
 	unsigned char rat_cddiv;
 	unsigned char rat_bitdiv;
-	unsigned short value;
 	int wlen = 16;
 	int depth = 16;
-	int frate = params_rate(params);
-	int apbclk = 125000000;
 
 	clk_ena = 1;
 

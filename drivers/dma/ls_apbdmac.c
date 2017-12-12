@@ -197,11 +197,8 @@ static struct ls_apbdma_platform_data *
 ls_apbdma_parse_dt(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	struct device_node *phandle_np;
 	struct ls_apbdma_platform_data *pdata;
 	struct of_phandle_args	dma_spec;
-	phandle phandle;
-	int size;
 
 	if (!np) {
 			dev_err(&pdev->dev, "Missing DT data\n");
@@ -242,13 +239,10 @@ ls_apbdma_parse_dt(struct platform_device *pdev)
 static int __init ls_apbdma_probe(struct platform_device *pdev)
 {
 	struct ls_apbdma_platform_data *pdata;
-	struct resource		*io;
-	struct ls_apbdma		*apbdma;
+	struct ls_apbdma		*apbdma = NULL;
 	size_t			size;
-	int			irq;
 	int			err;
 	int			i;
-	const struct ls_apbdma_platform_data *plat_dat;
 	dma_cap_mask_t mask;
 
 	/* get DMA parameters from controller type */
@@ -322,14 +316,11 @@ static int ls_apbdma_remove(struct platform_device *pdev)
 {
 	struct ls_apbdma	*apbdma = platform_get_drvdata(pdev);
 	struct dma_chan		*chan, *_chan;
-	struct resource		*io;
 
 	dma_async_device_unregister(&apbdma->dma_common);
 
 	list_for_each_entry_safe(chan, _chan, &apbdma->dma_common.channels,
 			device_node) {
-		struct ls_dma_chan	*lschan = to_ls_dma_chan(chan);
-
 		list_del(&chan->device_node);
 	}
 

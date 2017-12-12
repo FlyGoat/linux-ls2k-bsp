@@ -153,14 +153,9 @@ static void dbg_dumpcmd(struct ls2k_mci_host *host, struct mmc_command *cmd,
 	}
 }
 #else
-static void dbg_dumpcmd(struct ls2k_mci_host *host,
-			struct mmc_command *cmd, int fail) { }
-
-static void prepare_dbgmsg(struct ls2k_mci_host *host, struct mmc_command *cmd,
-			   int stop) { }
-
-static void dbg_dumpregs(struct ls2k_mci_host *host, char *prefix) { }
-
+#define dbg_dumpcmd	NULL
+#define prepare_dbgmsg	NULL
+#define dbg_dumpregs	NULL
 #endif /* CONFIG_MMC_DEBUG */
 
 #define CARD_DETECT_IRQ		(64+12) /* gpio12 */
@@ -619,6 +614,7 @@ static void ls2k_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		mci_con |= SDICON_CLOCKTYPE;
 	writel(mci_con, host->base + SDICON);
 
+#ifdef CONFIG_MMC_DEBUG
 	if ((ios->power_mode == MMC_POWER_ON) ||
 	    (ios->power_mode == MMC_POWER_UP)) {
 		dbg(host, dbg_conf, "running at %lukHz (requested: %ukHz).\n",
@@ -626,6 +622,7 @@ static void ls2k_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	} else {
 		dbg(host, dbg_conf, "powered down.\n");
 	}
+#endif
 	host->bus_width = ios->bus_width;
 }
 
@@ -685,8 +682,6 @@ static int ls2k_mci_probe(struct platform_device *pdev)
 	int ret;
 	unsigned long flags;
 	struct resource *r;
-	unsigned int ls2k_apbdma_cfg;
-	int ls2k_apbdma_sel;
 	struct dma_chan *chan;
 	int data;
 

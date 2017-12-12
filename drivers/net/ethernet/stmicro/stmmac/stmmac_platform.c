@@ -61,8 +61,8 @@ static int stmmac_probe_config_dt(struct platform_device *pdev,
 	if (of_device_is_compatible(np, "ls,ls2k-gmac")) {
 		    plat->enh_desc = 1;
             /*when bios transmit paratmer is not Null,then analysis data*/
-            bus_id_p = of_get_property(np, "bus_id", NULL);
-            phy_addr_p = of_get_property(np, "phy_addr", NULL);
+            bus_id_p = (__be32 *)of_get_property(np, "bus_id", NULL);
+            phy_addr_p = (__be32 *)of_get_property(np, "phy_addr", NULL);
 
         if ((bus_id_p != NULL) && (phy_addr_p != NULL)){
             plat->bus_id = of_read_number(bus_id_p,1);

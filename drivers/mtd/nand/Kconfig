@@ -98,6 +98,13 @@ config MTD_NAND_LS
 	help
           Support for NAND flash on Loongson SouthBridge and SoC.
 
+config MTD_NAND_DEBUG
+	tristate "NAND Flash device debug message on Loongson"
+	depends on MACH_LOONGSON2
+	depends on MTD_NAND_LS
+	help
+          Support for NAND flash debug message on Loongson SouthBridge and SoC.
+
 config MTD_NAND_OMAP2
 	tristate "NAND Flash device on OMAP2, OMAP3 and OMAP4"
 	depends on ARCH_OMAP2PLUS

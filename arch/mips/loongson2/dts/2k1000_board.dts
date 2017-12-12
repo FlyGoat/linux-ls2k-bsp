@@ -128,7 +128,7 @@
 		};
 		i2c1: i2c@1fe01800{
 			#address-cells = <1>;
-			#size-cells = <1>;
+			#size-cells = <0>;
 
 			compatible = "loongson,ls-i2c";
 			reg = <0x1fe01800 0x8>;

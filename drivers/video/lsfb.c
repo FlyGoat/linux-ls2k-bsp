@@ -871,8 +871,8 @@ static unsigned char *ls_fb_i2c_connector(struct ls_fb_par *fb_par)
 
 	LS_DEBUG("edid entry\n");
 	if (i2c_add_driver(&dvi_eep_driver)) {
-		pr_err("i2c-%d No eeprom device register!",dvi_eep_driver.id_table->driver_data);
-		return -ENODEV;
+		pr_err("i2c-%d No eeprom device register!",(int)dvi_eep_driver.id_table->driver_data);
+		return NULL;
 	}
 	if (eeprom_info.adapter)
 #ifdef CONFIG_CPU_LOONGSON2K
@@ -882,8 +882,8 @@ static unsigned char *ls_fb_i2c_connector(struct ls_fb_par *fb_par)
 #endif
 	if (!edid) {
 		if (i2c_add_driver(&vga_eep_driver)) {
-			pr_err("i2c-%d No eeprom device register!",vga_eep_driver.id_table->driver_data);
-			return -ENODEV;
+			pr_err("i2c-%d No eeprom device register!",(int)vga_eep_driver.id_table->driver_data);
+			return NULL;
 		}
 		edid_flag = 1;
 		if (eeprom_info.adapter)
@@ -1315,13 +1315,14 @@ static int __init ls_fb_init (void)
 {
 	int ret;
 	struct pci_dev *pdev = NULL;
+#ifndef MODULE
+	char *option = NULL;
+#endif
 	/*if PCIE Graphics card exist,use it as default*/
 	pdev = pci_get_device(PCI_VENDOR_ID_ATI, PCI_ANY_ID, NULL);
 	if(pdev)
 			return 0;
 #ifndef MODULE
-	char *option = NULL;
-
 	if (fb_get_options("ls-fb", &option))
 		return -ENODEV;
 	ls_fb_setup(option);
