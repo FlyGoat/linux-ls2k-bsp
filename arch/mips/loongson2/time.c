@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <asm/time.h>
 #include <asm/mach-loongson2/2k1000.h>
+#include <hpet.h>
 
 unsigned long get_cpu_clock(void)
 {
@@ -33,4 +34,7 @@ void __init plat_time_init(void)
 	mips_hpt_frequency = get_cpu_clock() / 2;
 	pr_info("MIPS Counter Frequency is: %d Mhz\n",
 			mips_hpt_frequency / 1000000);
+#ifdef CONFIG_LS2K_HPET
+	setup_hpet_timer();
+#endif
 }

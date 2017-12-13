@@ -4,3 +4,7 @@ obj-$(CONFIG_EARLY_PRINTK) += early_printk.o
 obj-$(CONFIG_SMP) += smp.o
 obj-$(CONFIG_USE_OF)  += dts/
 obj-$(CONFIG_SWIOTLB) += swiotlb.o
+#
+#HPET Support
+#
+obj-$(CONFIG_LS2K_HPET) += hpet.o

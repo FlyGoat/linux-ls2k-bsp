@@ -37,4 +37,12 @@ config SWIOTLB
 	help
 		If your memory address beyond 4GB and has 32bit DMA device(like ohci),
 		select it;
+
+config LS2K_HPET
+	bool "LS2K HPET Timer"
+	depends on CPU_LOONGSON2K
+	select MIPS_EXTERNAL_TIMER
+	help
+		This option enables the hpet timer of LS2K.
+
 endif
