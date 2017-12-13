@@ -30,6 +30,9 @@
 
 #include <ioremap.h>
 #include <mangle-port.h>
+#ifdef CONFIG_CPU_LOONGSON2K
+#include <linux/spinlock.h>
+#endif
 
 /*
  * Slowdown I/O port space accesses for antique hardware.
@@ -302,6 +305,29 @@ static inline void iounmap(const volatile void __iomem *addr)
 #undef __IS_KSEG1
 }
 
+#ifdef CONFIG_CPU_LOONGSON2K
+extern spinlock_t ls2k_io_lock;
+
+#define ls2k_var_apbio() \
+   unsigned long flags;
+
+#define ls2k_lock_apbio(addr) \
+   do { \
+       if((addr>=CKSEG1ADDR(0x1fe00000) && addr<CKSEG1ADDR(0x1fe0e000)) || ((addr>=(UNCAC_BASE+0x1fe00000) && addr<(UNCAC_BASE+0x1fe0e000)))) \
+       spin_lock_irqsave(&ls2k_io_lock, flags); \
+   } while(0)
+
+#define ls2k_unlock_apbio(addr) \
+   do { \
+       if((addr>=CKSEG1ADDR(0x1fe00000) && addr<CKSEG1ADDR(0x1fe0e000)) || ((addr>=(UNCAC_BASE+0x1fe00000) && addr<(UNCAC_BASE+0x1fe0e000)))) \
+       spin_unlock_irqrestore(&ls2k_io_lock, flags); \
+   } while(0)
+#else
+#define ls2k_var_apbio()
+#define ls2k_lock_apbio(addr)
+#define ls2k_unlock_apbio(addr)
+#endif
+
 #if defined(CONFIG_CPU_CAVIUM_OCTEON) || defined(CONFIG_CPU_LOONGSON3)
 #define war_io_reorder_wmb()		wmb()
 #else
@@ -316,7 +342,9 @@ static inline void pfx##write##bwlq(type val,				\
 	volatile type *__mem;						\
 	type __val;							\
 									\
+	ls2k_var_apbio();			\
 	war_io_reorder_wmb();					\
+	ls2k_lock_apbio(((long)mem));					\
 									\
 	__mem = (void *)__swizzle_addr_##bwlq((unsigned long)(mem));	\
 									\
@@ -344,12 +372,16 @@ static inline void pfx##write##bwlq(type val,				\
 			local_irq_restore(__flags);			\
 	} else								\
 		BUG();							\
+	ls2k_unlock_apbio((long)mem); \
 }									\
 									\
 static inline type pfx##read##bwlq(const volatile void __iomem *mem)	\
 {									\
 	volatile type *__mem;						\
 	type __val;							\
+	type __temp;  			\
+	ls2k_var_apbio();			\
+	ls2k_lock_apbio(((long)mem));					\
 									\
 	__mem = (void *)__swizzle_addr_##bwlq((unsigned long)(mem));	\
 									\
@@ -375,7 +407,9 @@ static inline type pfx##read##bwlq(const volatile void __iomem *mem)	\
 		BUG();							\
 	}								\
 									\
-	return pfx##ioswab##bwlq(__mem, __val);				\
+	__temp = pfx##ioswab##bwlq(__mem, __val);						\
+	ls2k_unlock_apbio((long)mem); \
+	return __temp;			\
 }
 
 #define __BUILD_IOPORT_SINGLE(pfx, bwlq, type, p, slow)			\

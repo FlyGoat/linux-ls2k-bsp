@@ -24,6 +24,8 @@
 #include <asm/prom.h>
 #include <asm/dma-coherence.h>
 
+#include <linux/spinlock.h>
+DEFINE_SPINLOCK(ls2k_io_lock);
 void __init mips_reboot_setup(void);
 
 void __init device_tree_init(void)
