@@ -199,6 +199,10 @@ struct boot_params{
 	struct efi_reset_system_t reset_system;
 };
 
+struct ls_temp_id {
+	int max_id;
+};
+
 extern u32 nr_cpus_loongson;
 extern u32 nr_nodes_loongson;
 extern int cores_per_node;

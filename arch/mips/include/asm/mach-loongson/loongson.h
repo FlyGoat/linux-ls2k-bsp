@@ -27,6 +27,11 @@ extern void mach_prepare_shutdown(void);
 /* environment arguments from bootloader */
 extern u32 cpu_clock_freq;
 extern u32 memsize, highmemsize;
+extern u32 loongson_hwmon;
+#define LS_CHIPTEMP0 0x00001fe0019c
+#define LS_CHIPTEMP1 0x10001fe0019e
+#define LS_CHIPTEMP2 0x20001fe0019e
+#define LS_CHIPTEMP3 0x30001fe0019e
 
 /* loongson-specific command line, env and memory initialization */
 extern void __init prom_init_memory(void);

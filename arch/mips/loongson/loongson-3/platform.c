@@ -21,8 +21,95 @@
 #include <linux/i2c.h>
 #include <boot_param.h>
 #include <workarounds.h>
+#include <linux/of.h>
+#include <loongson.h>
 
 int hpet_enabled = 0;
+
+static struct ls_temp_id temp_data= {
+	.max_id = 3,
+};
+
+/*
+ *  temperature device
+ */
+static struct resource ls_temp0_resources[] = {
+	[0] = {
+		.start = LS_CHIPTEMP0,
+		.end   = LS_CHIPTEMP0 + 0x4,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct resource ls_temp1_resources[] = {
+	[0] = {
+		.start = LS_CHIPTEMP1,
+		.end   = LS_CHIPTEMP1 + 0x4,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct resource ls_temp2_resources[] = {
+	[0] = {
+		.start = LS_CHIPTEMP2,
+		.end   = LS_CHIPTEMP2 + 0x4,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct resource ls_temp3_resources[] = {
+	[0] = {
+		.start = LS_CHIPTEMP3,
+		.end   = LS_CHIPTEMP3 + 0x4,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device ls_temp0_device = {
+	.name			= "ls-hwmon",
+	.id   			= 0,
+	.num_resources  = ARRAY_SIZE(ls_temp0_resources),
+	.resource 		= ls_temp0_resources,
+	.dev			= {
+		.platform_data = &temp_data,
+	},
+};
+
+static struct platform_device ls_temp1_device = {
+	.name			= "ls-hwmon",
+	.id   			= 1,
+	.num_resources  = ARRAY_SIZE(ls_temp1_resources),
+	.resource 		= ls_temp1_resources,
+	.dev			= {
+		.platform_data = &temp_data,
+	},
+};
+
+static struct platform_device ls_temp2_device = {
+	.name			= "ls-hwmon",
+	.id   			= 2,
+	.num_resources  = ARRAY_SIZE(ls_temp2_resources),
+	.resource 		= ls_temp2_resources,
+	.dev			= {
+		.platform_data = &temp_data,
+	},
+};
+static struct platform_device ls_temp3_device = {
+	.name			= "ls-hwmon",
+	.id   			= 3,
+	.num_resources  = ARRAY_SIZE(ls_temp3_resources),
+	.resource 		= ls_temp3_resources,
+	.dev			= {
+		.platform_data = &temp_data,
+	},
+};
+
+static struct platform_device *ls_temp_devices[] = {
+	&ls_temp0_device,
+	&ls_temp1_device,
+	&ls_temp2_device,
+	&ls_temp3_device,
+};
 
 /*
  * Kernel helper policy
@@ -36,7 +123,7 @@ int hpet_enabled = 0;
 struct loongson_fan_policy kernel_helper_policy = {
 	.type = KERNEL_HELPER_POLICY,
 	.adjust_period = 1,
-	.depend_temp = loongson3_cpu_temp,
+	.depend_temp = loongson_cpu_temp,
 };
 
 /*
@@ -54,7 +141,7 @@ struct loongson_fan_policy kernel_helper_policy = {
 struct loongson_fan_policy step_speed_policy = {
 	.type = STEP_SPEED_POLICY,
 	.adjust_period = 1,
-	.depend_temp = loongson3_cpu_temp,
+	.depend_temp = loongson_cpu_temp,
 	.up_step_num = 5,
 	.down_step_num = 5,
 	.up_step = {
@@ -110,6 +197,10 @@ static int __init loongson3_platform_init(void)
 		gpio_request(GPIO_LCD_CNTL,  "gpio_lcd_cntl");
 		gpio_request(GPIO_BACKLIGHIT_CNTL, "gpio_bl_cntl");
 	}
+#ifdef CONFIG_OF
+	if(!of_find_compatible_node(NULL, NULL, "loongson,ls-hwmon"))
+#endif
+		platform_add_devices(ls_temp_devices, ARRAY_SIZE(ls_temp_devices));
 
 	return 0;
 }
