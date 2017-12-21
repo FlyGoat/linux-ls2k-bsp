@@ -24,9 +24,14 @@
 #include <asm/prom.h>
 #include <asm/dma-coherence.h>
 
+#include <ls2k.h>
 #include <linux/spinlock.h>
 DEFINE_SPINLOCK(ls2k_io_lock);
 EXPORT_SYMBOL(ls2k_io_lock);
+u64 loongson_chiptemp[MAX_PACKAGES];
+u32 nr_cpus_loongson;
+u32 cores_per_package;
+u32 loongson_hwmon;
 
 void __init mips_reboot_setup(void);
 
@@ -48,6 +53,36 @@ void __init device_tree_init(void)
 	/* free the space reserved for the dt blob */
 	free_bootmem(base, size);
 
+}
+
+static int __init setup_package(void)
+{
+	struct device_node *np = of_find_compatible_node(NULL, NULL, "ls,nbus");
+	if (!np) {
+		pr_err("Oops: No Loongson NBus found!\n");
+		hw_coherentio = 0;
+		pr_info("Assume Hardware DOES NOT support coherent IO!\n");
+		goto no_np;
+	}
+	if (of_property_read_u32(np, "nr_cpus_loongson" , &nr_cpus_loongson)){
+		pr_err("nr_cpus_loongson not found!\n");
+		goto no_found;
+	}
+	if (of_property_read_u32(np, "cores_per_package", &cores_per_package)){
+		pr_err("cores_per_package not found!\n");
+		goto no_found;
+	}
+
+	if (strstr(arcs_cmdline, "hwmon"))
+		loongson_hwmon = 1;
+	else
+		loongson_hwmon = 0;
+
+	of_node_put(np);
+no_np:
+	return 0;
+no_found:
+	return 0;
 }
 
 /*static void __init set_io_noncoherent(void)*/
@@ -123,5 +158,6 @@ int __init ls2k_publish_devices(void)
 	return of_platform_populate(NULL, ls2k_ids, NULL, NULL);
 }
 
+arch_initcall(setup_package);
 arch_initcall(setup_dma_ops);
 device_initcall(ls2k_publish_devices);

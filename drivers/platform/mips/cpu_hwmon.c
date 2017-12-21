@@ -8,9 +8,13 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 
+#ifdef CONFIG_CPU_LOONGSON3
 #include <loongson.h>
 #include <boot_param.h>
 #include <loongson_hwmon.h>
+#else
+#include <ls2k.h>
+#endif
 
 /* Allow other reference temperatures to fixup the original cpu temperature */
 int __weak fixup_cpu_temp(int cpu, int cputemp)
@@ -43,6 +47,9 @@ int loongson_cpu_temp(int cpu)
 	case PRID_REV_LOONGSON3A_R3_0:
 	case PRID_REV_LOONGSON3A_R3_1:
 		reg = (reg & 0xffff)*731/0x4000 - 273;
+		break;
+	case PRID_REV_LOONGSON2K:
+		reg = (reg & 0xff) - 100;
 		break;
 	}
 

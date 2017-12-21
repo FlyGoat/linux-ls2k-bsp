@@ -355,11 +355,17 @@ enum {
 
 #define LS2K_VRAM_2H_DDR 0x01
 #define LS2K_VRAM_3A_DDR 0x02
-        
+
 #define LS2K_SOC_GPU    0x01
 #define LS3A_2H_GPU     0x02
 
-
+#define MAX_PACKAGES 2
+/* Chip Temperature registor of each physical cpu package, for Loongson2K and successor */
+extern u64 loongson_chiptemp[MAX_PACKAGES];
+#define LOONGSON_CHIPTEMP(id) (*(volatile u32 *)(loongson_chiptemp[id]))
+extern u32 nr_cpus_loongson;
+extern u32 cores_per_package;
+extern u32 loongson_hwmon;
 struct ls2k_usbh_data {
 	u8      ports;      /* number of ports on root hub */
 	u8      vbus_pin[]; /* port power-control pin */
@@ -367,6 +373,10 @@ struct ls2k_usbh_data {
 
 struct generic_plat_data {
 	u32	chip_ver;
+};
+
+struct ls_temp_id {
+	int max_id;
 };
 
 struct ls2k_nand_plat_data {

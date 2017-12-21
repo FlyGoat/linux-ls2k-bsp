@@ -25,6 +25,8 @@
 		#size-cells = <1>;
 		ranges = <0x10000000 0 0x10000000 0x10000000>;
 		dma-coherent;
+		nr_cpus_loongson = <2>;
+		cores_per_package = <2>;
 
 		icu: interrupt-controller@1fe11400 {
 			compatible = "loongson,2k-icu";
@@ -341,6 +343,15 @@
 				label = "os_partition";
 				reg = <0x01400000 0x0>;
 			};
+		};
+		hwmon@0x1fe07000{
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			compatible = "loongson,ls-hwmon";
+			reg = <0x1fe07000 0x1>;
+			max-id = <0>;
+			id = <0>;
 		};
 	};
 
