@@ -44,6 +44,12 @@ config USB_HIDDEV
 
 	  If unsure, say Y.
 
+config HID_HUIONTABLET
+	tristate "Huion tablet"
+	depends on INPUT
+	---help---
+	Support for Huion tablet.
+
 menu "USB HID Boot Protocol drivers"
 	depends on USB!=n && USB_HID!=y && EXPERT
 
