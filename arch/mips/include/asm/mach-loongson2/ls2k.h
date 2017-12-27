@@ -277,14 +277,14 @@
 #define LS2K_IRQ_MASK              0xff8f00ffb03ff3ff
 
 /* REG ACCESS*/
-#define ls2k_readb(addr)		(*(volatile unsigned char *)CKSEG1ADDR(addr))
-#define ls2k_readw(addr)		(*(volatile unsigned short *)CKSEG1ADDR(addr))
-#define ls2k_readl(addr)		(*(volatile unsigned int *)CKSEG1ADDR(addr))
-#define ls2k_readq(addr)		(*(volatile unsigned long *)CKSEG1ADDR(addr))
-#define ls2k_writeb(val, addr)		*(volatile unsigned char *)CKSEG1ADDR(addr) = (val)
-#define ls2k_writew(val, addr)		*(volatile unsigned short *)CKSEG1ADDR(addr) = (val)
-#define ls2k_writel(val, addr)		*(volatile unsigned int *)CKSEG1ADDR(addr) = (val)
-#define ls2k_writeq(val, addr)		*(volatile unsigned long *)CKSEG1ADDR(addr) = (val)
+#define ls2k_readb(addr)		(*(volatile unsigned char *)TO_UNCAC(addr))
+#define ls2k_readw(addr)		(*(volatile unsigned short *)TO_UNCAC(addr))
+#define ls2k_readl(addr)		(*(volatile unsigned int *)TO_UNCAC(addr))
+#define ls2k_readq(addr)		(*(volatile unsigned long *)TO_UNCAC(addr))
+#define ls2k_writeb(val, addr)		*(volatile unsigned char *)TO_UNCAC(addr) = (val)
+#define ls2k_writew(val, addr)		*(volatile unsigned short *)TO_UNCAC(addr) = (val)
+#define ls2k_writel(val, addr)		*(volatile unsigned int *)TO_UNCAC(addr) = (val)
+#define ls2k_writeq(val, addr)		*(volatile unsigned long *)TO_UNCAC(addr) = (val)
 
 /* Board Version Number */
 enum {
