@@ -23,7 +23,8 @@
 		compatible = "ls,nbus", "simple-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
-		ranges = <0x10000000 0 0x10000000 0x10000000>;
+		ranges = <0x10000000 0 0x10000000 0x10000000
+			  0x40000000 0 0x40000000 0x40000000>;
 		dma-coherent;
 		nr_cpus_loongson = <2>;
 		cores_per_package = <2>;
@@ -35,44 +36,44 @@
 			reg = <0x1fe11400 0x40>;
 		};
 
-		dc@0x10290000 {
+		dc@0x40090000 {
 			compatible = "loongson,ls-fb";
-			reg = <0x102a0000 0x10000>;
+			reg = <0x40090000 0xffff>;
 			interrupt-parent = <&icu>;
-			interrupts = <28>;
+			interrupts = <36>;
 		};
 
-		ohci@0x102b0000 {
+		ohci@0x40040000 {
 			compatible = "loongson,ls2k-ohci", "usb-ohci";
-			reg = <0x102b0000 0x8000>;
+			reg = <0x40040000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <59>;
 		};
 
-		ehci@0x102b8000 {
+		ehci@0x40030000 {
 			compatible = "loongson,ls2k-ehci", "usb-ehci";
-			reg = <0x102b8000 0x8000>;
+			reg = <0x40030000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <58>;
 		};
 
-		otg@0x10240000 {
+		otg@0x40020000 {
 			compatible = "loongson,ls2k-otg", "usb-otg";
-			reg = <0x10240000 0x10000>;
+			reg = <0x40020000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <57>;
 		};
 
-		ahci@0x10280000 {
+		ahci@0x400b0000{
 			compatible = "snps,spear-ahci";
-			reg = <0x10280000 0x10000>;
+			reg = <0x400b0000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <27>;
 		};
 
-		ethernet@102c8000 {
+		ethernet@0x40000000 {
 			compatible = "snps,dwmac-3.70a", "ls,ls2k-gmac";
-			reg = <0x102c8000 0x8000>;
+			reg = <0x40000000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <20 21>;
 			interrupt-names = "macirq", "eth_wake_irq";
@@ -82,9 +83,9 @@
             phy_addr = <0x0>;
 		};
 
-		ethernet@102c0000 {
+		ethernet@0x40010000 {
 			compatible = "snps,dwmac-3.70a", "ls,ls2k-gmac";
-			reg = <0x102c0000 0x8000>;
+			reg = <0x40010000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <22 23>;
 			interrupt-names = "macirq", "eth_wake_irq";
