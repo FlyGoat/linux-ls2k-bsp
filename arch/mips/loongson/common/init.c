@@ -98,6 +98,7 @@ void __init prom_init(void)
 		default:
 			break;
 		}
+		prom_printf("SET HT_DMA UNCACHED\n");
 	} else {
 		/* set HT-access cache */
 		switch (cputype) {
@@ -116,7 +117,8 @@ void __init prom_init(void)
 		default:
 			break;
 		}
-		printk("SET HT_DMA CACHED\n");
+		prom_printf("SET HT_DMA CACHED\n");
+
 	}
 	__sync();
 #endif /* CONFIG_CPU_LOONGSON3 */
