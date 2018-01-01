@@ -2531,6 +2531,13 @@ config HT_PCI
 config PCI_DOMAINS
 	bool
 
+config LS2K_PCIE
+	bool "Loongson2K PCI-Express Controller"
+	depends on PCI && CPU_LOONGSON2K
+	default y
+	help
+	  Make use of the Loongson2K PCI-Express Controller.
+
 source "drivers/pci/Kconfig"
 
 source "drivers/pci/pcie/Kconfig"
