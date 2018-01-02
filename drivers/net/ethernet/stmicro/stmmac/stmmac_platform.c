@@ -34,8 +34,9 @@ static int stmmac_probe_config_dt(struct platform_device *pdev,
 				  const char **mac)
 {
 	struct device_node *np = pdev->dev.of_node;
-    __be32 *bus_id_p = NULL;
-    __be32 *phy_addr_p = NULL;
+	__be32 *bus_id_p = NULL;
+	__be32 *phy_addr_p = NULL;
+	__be32 *dma_mask_p = NULL;
 
 	if (!np)
 		return -ENODEV;
@@ -58,17 +59,23 @@ static int stmmac_probe_config_dt(struct platform_device *pdev,
 		plat->pmt = 1;
 	}
 
-	if (of_device_is_compatible(np, "ls,ls2k-gmac")) {
-		    plat->enh_desc = 1;
-            /*when bios transmit paratmer is not Null,then analysis data*/
-            bus_id_p = (__be32 *)of_get_property(np, "bus_id", NULL);
-            phy_addr_p = (__be32 *)of_get_property(np, "phy_addr", NULL);
+	if (of_device_is_compatible(np, "ls,ls-gmac")) {
+		plat->enh_desc = 1;
+		/*when bios transmit paratmer is not Null,then analysis data*/
+		bus_id_p = (__be32 *)of_get_property(np, "bus_id", NULL);
+		phy_addr_p = (__be32 *)of_get_property(np, "phy_addr", NULL);
+		dma_mask_p = (__be32 *)of_get_property(np, "dma-mask", NULL);
 
-        if ((bus_id_p != NULL) && (phy_addr_p != NULL)){
-            plat->bus_id = of_read_number(bus_id_p,1);
-            plat->phy_addr = of_read_number(phy_addr_p,1);
-	    }
-    }
+		if (bus_id_p != NULL){
+				plat->bus_id = of_read_number(bus_id_p,1);
+		}
+		if (bus_id_p != NULL){
+				plat->phy_addr = of_read_number(phy_addr_p,1);
+		}
+		if (dma_mask_p != NULL){
+				plat->dma_mask = of_read_number(dma_mask_p,2);
+		}
+	}
 	return 0;
 }
 #else
@@ -123,6 +130,7 @@ static int stmmac_pltfr_probe(struct platform_device *pdev)
 		plat_dat = pdev->dev.platform_data;
 	}
 
+	pdev->dev.dma_mask = &plat_dat->dma_mask;
 	/* Custom initialisation (if needed)*/
 	if (plat_dat->init) {
 		ret = plat_dat->init(pdev);
