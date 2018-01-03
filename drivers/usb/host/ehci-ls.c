@@ -21,6 +21,7 @@
 #include <linux/pm.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/usb/ehci_pdriver.h>
 
 #include "ehci.h"
 
@@ -28,19 +29,60 @@
 
 static const char hcd_name[] = "ls2k-ehci";
 
+static int ehci_platform_reset(struct usb_hcd *hcd)
+{
+    struct platform_device *pdev = to_platform_device(hcd->self.controller);
+    struct usb_ehci_pdata *pdata = pdev->dev.platform_data;
+    struct ehci_hcd *ehci = hcd_to_ehci(hcd);
+    int retval;
+
+    hcd->has_tt = pdata->has_tt;
+    ehci->has_synopsys_hc_bug = pdata->has_synopsys_hc_bug;
+    ehci->big_endian_desc = pdata->big_endian_desc;
+    ehci->big_endian_mmio = pdata->big_endian_mmio;
+
+    if (pdata->pre_setup) {
+        retval = pdata->pre_setup(hcd);
+        if (retval < 0)
+            return retval;
+    }
+
+    retval = ehci_setup(hcd);
+    if (retval)
+        return retval;
+
+    if (pdata->no_io_watchdog)
+        ehci->need_io_watchdog = 0;
+    return 0;
+}
+
 static struct hc_driver __read_mostly ehci_ls2k_hc_driver;
 
+static const struct ehci_driver_overrides platform_overrides __initconst = {
+    .reset =    ehci_platform_reset,
+};
 
+static struct usb_ehci_pdata ehci_platform_defaults;
 
 static int ls2k_ehci_hcd_drv_probe(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd ;
 	struct resource *res;
+	struct usb_ehci_pdata *pdata;
 	const struct hc_driver *driver = &ehci_ls2k_hc_driver;
 	int irq, retval;
 
 	if (usb_disabled())
 		return -ENODEV;
+
+	if (!pdev->dev.platform_data)
+		pdev->dev.platform_data = &ehci_platform_defaults;
+	if (!pdev->dev.dma_mask)
+		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+	if (!pdev->dev.coherent_dma_mask)
+		pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
+
+	pdata = pdev->dev.platform_data;
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
@@ -137,7 +179,7 @@ static int __init ehci_ls2k_init(void)
 
 	pr_info("%s: " DRIVER_DESC "\n", hcd_name);
 
-	ehci_init_driver(&ehci_ls2k_hc_driver, NULL);
+	ehci_init_driver(&ehci_ls2k_hc_driver, &platform_overrides);
 	return platform_driver_register(&ls2k_ehci_hcd_driver);
 }
 module_init(ehci_ls2k_init);
