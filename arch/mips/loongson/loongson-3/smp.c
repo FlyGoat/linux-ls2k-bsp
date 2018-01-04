@@ -193,7 +193,7 @@ static void loongson3_send_ipi_mask(const struct cpumask *mask, unsigned int act
 }
 
 #define IPI_IRQ_OFFSET 6
-extern unsigned int ls7a_ipi_pos2irq[];
+extern unsigned char ls7a_ipi_pos2irq[];
 
 void loongson3_send_irq_by_ipi(int cpu, int irqs)
 {
@@ -244,7 +244,7 @@ void loongson3_ipi_interrupt(struct pt_regs *regs)
 		case LS7A:
 			while ((irq = ffs(irqs))) {
 				irq1 = ls7a_ipi_pos2irq[irq-1];
-				do_IRQ(LS7A_IOAPIC_IRQ_BASE+irq1);
+				do_IRQ(irq1);
 				irqs &= ~(1<<(irq-1));
 			}
 			break;
