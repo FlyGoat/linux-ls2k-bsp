@@ -73,7 +73,9 @@ static int stmmac_probe_config_dt(struct platform_device *pdev,
 				plat->phy_addr = of_read_number(phy_addr_p,1);
 		}
 		if (dma_mask_p != NULL){
-				plat->dma_mask = of_read_number(dma_mask_p,2);
+				pdev->dev.coherent_dma_mask = of_read_number(dma_mask_p,2);
+				if (pdev->dev.dma_mask)
+						*(pdev->dev.dma_mask) = pdev->dev.coherent_dma_mask;
 		}
 	}
 	return 0;
@@ -130,7 +132,9 @@ static int stmmac_pltfr_probe(struct platform_device *pdev)
 		plat_dat = pdev->dev.platform_data;
 	}
 
-	pdev->dev.dma_mask = &plat_dat->dma_mask;
+	if (!pdev->dev.dma_mask)
+		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+
 	/* Custom initialisation (if needed)*/
 	if (plat_dat->init) {
 		ret = plat_dat->init(pdev);
