@@ -115,40 +115,40 @@
 			#address-cells = <3>;
 			#size-cells = <2>;
 			bus-range = <0x4 0x6>;
-			  ranges = <0x02000000 0x0 0x50000000 0x50000000 0x0 0xfffffff  //mem
+			  ranges = <0x02000000 0x0 0x50000000 0x50000000 0x0 0x3ffffff  //mem
 						0x01000000 0x0 0x18100000 0x18100000 0x0 0x100000>;  //io
 		};
 
-		pcie0_port2@60000000 {
+		pcie0_port2@54000000 {
 			compatible = "loongson,ls-pcie";
 			interrupt-parent = <&icu>;
 			interrupts = <42>;
 			#address-cells = <3>;
 			#size-cells = <2>;
 			bus-range = <0x8 0xa>;
-			  ranges = <0x02000000 0x0 0x60000000 0x60000000 0x0 0x7ffffff  //mem
+			  ranges = <0x02000000 0x0 0x54000000 0x54000000 0x0 0x3ffffff  //mem
 						0x01000000 0x0 0x18200000 0x18200000 0x0 0x100000>;  //io
 		};
 
-		pcie0_port3@68000000 {
+		pcie0_port3@58000000 {
 			compatible = "loongson,ls-pcie";
 			interrupt-parent = <&icu>;
 			interrupts = <43>;
 			#address-cells = <3>;
 			#size-cells = <2>;
 			bus-range = <0xc 0xe>;
-			  ranges = <0x02000000 0x0 0x68000000 0x68000000 0x0 0x7ffffff  //mem
+			  ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x7ffffff  //mem
 						0x01000000 0x0 0x18300000 0x18300000 0x0 0x100000>;  //io
 		};
 
-		pcie1_port0@70000000 {
+		pcie1_port0@60000000 {
 			compatible = "loongson,ls-pcie";
 			interrupt-parent = <&icu>;
 			interrupts = <44>;
 			#address-cells = <3>;
 			#size-cells = <2>;
 			bus-range = <0x10 0x12>;
-			  ranges = <0x02000000 0x0 0x70000000 0x70000000 0x0 0x7ffffff  //mem
+			  ranges = <0x02000000 0x0 0x60000000 0x60000000 0x0 0x17ffffff  //mem
 						0x01000000 0x0 0x18400000 0x18400000 0x0 0x1000000>;  //io
 		};
 
