@@ -565,6 +565,29 @@ static int ls_fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 
 static int ls_fb_blank (int blank_mode, struct fb_info *info)
 {
+#ifdef CONFIG_CPU_LOONGSON2K
+	u64 val,reg;
+	val = ls_readq(LS_PIX0_PLL);
+	reg = ls_readq(LS_PIX1_PLL);
+	switch (blank_mode) {
+		case FB_BLANK_VSYNC_SUSPEND:
+			break;
+		case FB_BLANK_HSYNC_SUSPEND:
+			break;
+		case FB_BLANK_POWERDOWN:
+			val |= (1 << PD_DC_PLL);
+			reg |= (1 << PD_DC_PLL);
+			break;
+		case FB_BLANK_NORMAL:
+			break;
+		case FB_BLANK_UNBLANK:
+			val &= ~(1 << PD_DC_PLL);
+			reg &= ~(1 << PD_DC_PLL);
+			break;
+    }
+	ls_writeq(val,LS_PIX0_PLL);
+	ls_writeq(reg,LS_PIX1_PLL);
+#endif
 	return 0;
 }
 

@@ -4,6 +4,7 @@
 #ifdef CONFIG_CPU_LOONGSON2K
 #include <ls2k.h>
 #define DEFAULT_BITS_PER_PIXEL		16
+#define PD_DC_PLL					19
 #define LS_PIX0_PLL					LS2K_PIX0_PLL
 #define LS_PIX1_PLL					LS2K_PIX1_PLL
 #define ls_readl					ls2k_readl
