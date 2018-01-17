@@ -4,6 +4,7 @@ obj-$(CONFIG_EARLY_PRINTK) += early_printk.o
 obj-$(CONFIG_SMP) += smp.o
 obj-$(CONFIG_USE_OF)  += dts/
 obj-$(CONFIG_SWIOTLB) += swiotlb.o
+obj-$(CONFIG_PCI_MSI) += pci_msi.o
 #
 #HPET Support
 #

@@ -18,6 +18,7 @@ config 2K1000_SBC
 	select SYS_HAS_EARLY_PRINTK
 	#select DMA_COHERENT
 	select DMA_MAYBE_COHERENT
+	select ARCH_SUPPORTS_MSI
 	select USE_OF
 	select ZONE_DMA32 if SWIOTLB
 	help
