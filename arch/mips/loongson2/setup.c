@@ -33,6 +33,20 @@ u32 nr_cpus_loongson;
 u32 cores_per_package;
 u32 loongson_hwmon;
 
+static void wbflush_loongson(void)
+{
+		asm(".set\tpush\n\t"
+			".set\tnoreorder\n\t"
+			".set mips3\n\t"
+			"sync\n\t"
+			"nop\n\t"
+			".set\tpop\n\t"
+			".set mips0\n\t");
+}
+
+void (*__wbflush)(void) = wbflush_loongson;
+EXPORT_SYMBOL(__wbflush);
+
 void __init mips_reboot_setup(void);
 
 void __init device_tree_init(void)
