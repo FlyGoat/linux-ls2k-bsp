@@ -36,6 +36,14 @@
 			reg = <0x1fe11400 0x40>;
 		};
 
+		msi: pci-msi-controller@1fe114a0 {
+			compatible = "loongson,2k-pci-msi";
+			msi-controller;
+			interrupt-parent = <&icu>;
+			msi-mask = <0x000000c0 0x40000c00>;
+			reg = <0x1fe114a0 0x60>;
+		};
+
 		dc@0x400c0000 {
 			compatible = "loongson,ls-fb";
 			reg = <0x400c0000 0xffff>;

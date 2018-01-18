@@ -20,18 +20,24 @@
 #include <asm/mach-loongson2/2k1000.h>
 #include <asm/mipsregs.h>
 #include <irq.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
 
 /* ip7 take perf/timer */
 /* ip6 take smp */
 /* ip5 take off-chip msi irq */
 /* ip4 take on-chip irq */
+DEFINE_RAW_SPINLOCK(ls2k_irq_lock);
 void ls64_ipi_interrupt(struct pt_regs *regs);
 
-static void unmask_icu_irq(struct irq_data * data)
+void ls_unmask_icu_irq(struct irq_data * data)
 {
 	struct irq_chip *chip;
 	unsigned int index;
 	unsigned long base;
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&ls2k_irq_lock, flags);
 	chip = data->chip;
 	if (data->irq >= LS64_MSI_IRQ_BASE)
 		index = data->irq - LS64_MSI_IRQ_BASE;
@@ -39,13 +45,17 @@ static void unmask_icu_irq(struct irq_data * data)
 		index = data->irq - LS2K_IRQ_BASE;
 	base = CKSEG1ADDR(CONF_BASE) + (index > 32) * 0x40 + INT_LO_OFF ;
 	ls64_conf_write32(1 << (index & 0x1f), (void *)(base + INT_SET_OFF));
+	raw_spin_unlock_irqrestore(&ls2k_irq_lock, flags);
 }
 
-static void mask_icu_irq(struct irq_data * data)
+void ls_mask_icu_irq(struct irq_data * data)
 {
 	struct irq_chip *chip;
 	unsigned int index;
 	unsigned long base;
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&ls2k_irq_lock, flags);
 	chip = data->chip;
 	if (data->irq >= LS64_MSI_IRQ_BASE)
 		index = data->irq - LS64_MSI_IRQ_BASE;
@@ -53,18 +63,18 @@ static void mask_icu_irq(struct irq_data * data)
 		index = data->irq - LS2K_IRQ_BASE;
 	base = CKSEG1ADDR(CONF_BASE) + (index > 32) * 0x40 + INT_LO_OFF;
 	ls64_conf_write32(1 << (index & 0x1f), (void *)(base + INT_CLR_OFF));
+	raw_spin_unlock_irqrestore(&ls2k_irq_lock, flags);
 }
 
 static struct irq_chip ls64_irq_chip = {
 	.name		= "ls64soc",
 	/*.irq_ack	= mask_icu_irq,*/
 	/*.irq_eoi	= unmask_icu_irq,*/
-	.irq_unmask	= unmask_icu_irq,
-	.irq_mask	= mask_icu_irq,
+	.irq_unmask	= ls_unmask_icu_irq,
+	.irq_mask	= ls_mask_icu_irq,
 };
 
-
-
+extern u64 ls_msi_irq_mask;
 asmlinkage void plat_irq_dispatch(void)
 {
 	unsigned int cp0_cause;
@@ -74,7 +84,6 @@ asmlinkage void plat_irq_dispatch(void)
 	unsigned long lo;
 	unsigned long irq_status;
 	unsigned long irq_masked;
-	unsigned long irq_po;
 	int i = (read_c0_ebase() & 0x3ff);
 	unsigned long addr = CKSEG1ADDR(CONF_BASE);
 
@@ -85,11 +94,6 @@ asmlinkage void plat_irq_dispatch(void)
 	hi = ls64_conf_read32((void*)(addr + INT_HI_OFF + INT_EN_OFF));
 	lo = ls64_conf_read32((void*)(addr + INT_LO_OFF + INT_EN_OFF));
 	irq_masked = ((hi << 32) | lo);
-
-	hi = ls64_conf_read32((void*)(addr + INT_HI_OFF + INT_PLE_OFF));
-	lo = ls64_conf_read32((void*)(addr + INT_LO_OFF + INT_PLE_OFF));
-	irq_po = ((hi << 32) | lo);
-
 
 	cp0_cause_saved = read_c0_cause() & ST0_IM ;
 	cp0_status = read_c0_status();
@@ -104,9 +108,7 @@ asmlinkage void plat_irq_dispatch(void)
 	}
 #endif
 	else if (cp0_cause & STATUSF_IP5) {
-		/* MSI has only 32 vector */
-		hi = (irq_status & irq_po & 0xffffffff);
-		irq_status ^= hi;
+		hi = (irq_status & ls_msi_irq_mask);
 		while ((i = __fls(hi)) != -1) {
 			do_IRQ(i + LS64_MSI_IRQ_BASE);
 			hi = (hi ^ (1UL << i));
@@ -124,10 +126,9 @@ asmlinkage void plat_irq_dispatch(void)
 		/*pr_info("irq not handled i:%lx, c:%x, s:%x\n", irq_status, cp0_cause_saved,*/
 				/*cp0_status);*/
 	/*}*/
-
 }
 
-static void set_irq_attr(int irq, unsigned int imask, unsigned int core_mask, int mode)
+void set_irq_attr(int irq, unsigned int imask, unsigned int core_mask, int mode)
 {
 	unsigned int index;
 	unsigned long base;
@@ -167,12 +168,10 @@ void __init setup_irq_default(void)
 		irq_set_chip_and_handler(i, &ls64_irq_chip, handle_level_irq);
 		set_irq_attr(i, 1 << (STATUSB_IP4 - 10), 1 << core_id, 0);
 	}
-
 }
 
 void  __init arch_init_irq(void)
 {
-
 	mips_cpu_irq_init();
 	set_c0_status(STATUSF_IP4 | STATUSF_IP5 | STATUSF_IP6 | STATUSF_IP7);
 	setup_irq_default();
