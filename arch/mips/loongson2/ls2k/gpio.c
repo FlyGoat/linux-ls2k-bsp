@@ -29,8 +29,8 @@
 #define LS2K_GPIO_MAX 64
 
 
-#define ls2k_readq(addr) (*(volatile unsigned long *)CKSEG1ADDR(addr))
-#define ls2k_writeq(val,addr) *(volatile unsigned long *)CKSEG1ADDR(addr) = (val)
+#define ls2k_readq(addr) (*(volatile unsigned long long *)CKSEG1ADDR(addr))
+#define ls2k_writeq(val,addr) *(volatile unsigned long long *)CKSEG1ADDR(addr) = (val)
 
 int gpio_get_value(unsigned gpio)
 {
@@ -43,14 +43,16 @@ EXPORT_SYMBOL(gpio_get_value);
 void gpio_set_value(unsigned gpio, int value)
 {
 	unsigned long gpio_out = LS2K_GPIO_OUT_REG;
-	unsigned tmp;
+	unsigned long long tmp;
 
-	tmp = ls2k_readq(gpio_out) & ~(1 << gpio);
+	tmp = ls2k_readq(gpio_out) & ~(1ULL << gpio);
 	if (value)
-		tmp |= 1 << gpio;
+		tmp |= (1ULL << gpio);
 	ls2k_writeq(tmp, gpio_out);
+
 }
 EXPORT_SYMBOL(gpio_set_value);
+
 
 static const char *ls2k_gpio_list[LS2K_GPIO_MAX];
 
@@ -79,9 +81,12 @@ static inline void ls2k_gpio_set_value(struct gpio_chip *chip, unsigned gpio, in
 	unsigned long gpio_out = LS2K_GPIO_OUT_REG;
 	unsigned long tmp;
 
-	tmp = ls2k_readq(gpio_out) & ~(1 << gpio);
+	printk("value =%d gpio=%d\n",value,gpio);
+	tmp = ls2k_readq(gpio_out) & ~(1ULL << gpio);
 	if (value)
 		tmp |= 1ULL << gpio;
+//	else
+//		tmp &= ~(1ULL << gpio);
 	ls2k_writeq(tmp, gpio_out);
 }
 
