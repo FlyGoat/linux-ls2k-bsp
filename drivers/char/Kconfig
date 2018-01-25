@@ -369,6 +369,9 @@ config DS1302
 
 endif # RTC_LIB
 
+config 74HC595
+	bool "74HC595"
+
 config DTLK
 	tristate "Double Talk PC internal speech card support"
 	depends on ISA
