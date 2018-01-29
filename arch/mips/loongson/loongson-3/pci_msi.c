@@ -15,6 +15,9 @@ static DECLARE_BITMAP(msi_irq_in_use, LS7A_NUM_MSI_IRQS)={0xff00000000000000ULL}
 static DEFINE_SPINLOCK(lock);
 extern int ls3a_msi_enabled;
 
+int pch_create_dirq(unsigned int irq);
+void pch_destroy_dirq(unsigned int irq);
+
 #define irq2bit(irq) (irq - IRQ_LS7A_MSI_0)
 #define bit2irq(bit) (IRQ_LS7A_MSI_0 + bit)
 
@@ -35,6 +38,7 @@ again:
 	}
 
 	irq = pos + IRQ_LS7A_MSI_0;
+	pch_create_dirq(irq);
 	/* test_and_set_bit operates on 32-bits at a time */
 	if (test_and_set_bit(pos, msi_irq_in_use))
 		goto again;
@@ -49,6 +53,7 @@ static void ls7a_destroy_irq(unsigned int irq)
 {
 	int pos = irq2bit(irq);
 
+	pch_destroy_dirq(irq);
 	dynamic_irq_cleanup(irq);
 
 	clear_bit(pos, msi_irq_in_use);
@@ -72,6 +77,7 @@ static struct irq_chip ls7a_msi_chip = {
 	.irq_disable = mask_msi_irq,
 	.irq_mask = mask_msi_irq,
 	.irq_unmask = unmask_msi_irq,
+	.irq_set_affinity = plat_set_irq_affinity,
 };
 
 int ls7a_setup_msi_irq(struct pci_dev *pdev, struct msi_desc *desc)

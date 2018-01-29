@@ -14,6 +14,7 @@ extern void loongson3_ipi_interrupt(struct pt_regs *regs);
 
 int ls3a_msi_enabled = 0;
 EXPORT_SYMBOL(ls3a_msi_enabled);
+extern unsigned char ls7a_ipi_irq2pos[];
 
 int plat_set_irq_affinity(struct irq_data *d, const struct cpumask *affinity,
 			  bool force)
@@ -21,6 +22,8 @@ int plat_set_irq_affinity(struct irq_data *d, const struct cpumask *affinity,
 	unsigned int cpu;
 	struct cpumask new_affinity;
 
+	if (ls7a_ipi_irq2pos[d->irq] < 0)
+		return -EINVAL;
 	/* I/O devices are connected on package-0 */
 	cpumask_copy(&new_affinity, affinity);
 	for_each_cpu(cpu, affinity)

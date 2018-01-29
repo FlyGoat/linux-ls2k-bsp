@@ -25,6 +25,64 @@ extern void loongson3_send_irq_by_ipi(int cpu, int irqs);
 static DEFINE_SPINLOCK(pch_irq_lock);
 extern int ls3a_msi_enabled;
 
+/* Maximum 26 IPI irqs */
+#define PCH_DIRQS 26
+unsigned char ls7a_ipi_irq2pos[128] = { [0 ... 63] = -1 };
+unsigned char ls7a_ipi_pos2irq[64] = { [0 ... 63] = -1 };
+static DECLARE_BITMAP(pch_irq_in_use, PCH_DIRQS);
+
+int pch_create_dirq(unsigned int irq)
+{
+	unsigned long flags;
+	int pos;
+	spin_lock_irqsave(&pch_irq_lock, flags);
+again:
+	pos = find_first_zero_bit(pch_irq_in_use, PCH_DIRQS);
+	if(pos == PCH_DIRQS)
+	{
+		spin_unlock_irqrestore(&pch_irq_lock, flags);
+		return -ENOSPC;
+	}
+	if (test_and_set_bit(pos, pch_irq_in_use))
+		goto again;
+	ls7a_ipi_pos2irq[pos] = irq;
+	ls7a_ipi_irq2pos[irq] = pos;
+	spin_unlock_irqrestore(&pch_irq_lock, flags);
+	return 0;
+}
+
+void pch_destroy_dirq(unsigned int irq)
+{
+	unsigned long flags;
+	int pos;
+	spin_lock_irqsave(&pch_irq_lock, flags);
+	pos = ls7a_ipi_irq2pos[irq];
+
+	if(pos >= 0)
+	{
+		clear_bit(pos, pch_irq_in_use);
+		ls7a_ipi_irq2pos[irq] = -1;
+		ls7a_ipi_pos2irq[pos] = -1;
+	}
+	spin_unlock_irqrestore(&pch_irq_lock, flags);
+}
+
+static void mask_pch_irq(struct irq_data *d);
+static void unmask_pch_irq(struct irq_data *d);
+
+unsigned int startup_pch_irq(struct irq_data *d)
+{
+	pch_create_dirq(d->irq);
+	unmask_pch_irq(d);
+	return 0;
+}
+
+void shutdown_pch_irq(struct irq_data *d)
+{
+	mask_pch_irq(d);
+	pch_destroy_dirq(d->irq);
+}
+
 static void mask_pch_irq(struct irq_data *d)
 {
 	unsigned long flags;
@@ -61,10 +119,13 @@ static struct irq_chip pch_irq_chip = {
 	.name        = "LS7A-IOAPIC",
 	.irq_mask    = mask_pch_irq,
 	.irq_unmask    = unmask_pch_irq,
+	.irq_startup	= startup_pch_irq,
+	.irq_shutdown	= shutdown_pch_irq,
 	.irq_set_affinity = plat_set_irq_affinity,
 };
 
 static unsigned int irq_cpu[64] = {[0 ... 63] = -1};
+static unsigned int irq_msi[64] = {[0 ... 63] = -1};
 static unsigned long long local_irq = (1ULL << LS7A_IOAPIC_UART0_OFFSET         ) |
 										(1ULL << LS7A_IOAPIC_I2C0_OFFSET          ) |
 										(1ULL << LS7A_IOAPIC_GMAC0_PMT_OFFSET     ) |
@@ -76,46 +137,6 @@ static unsigned long long local_irq = (1ULL << LS7A_IOAPIC_UART0_OFFSET         
 										(1ULL << LS7A_IOAPIC_ACPI_INT_OFFSET      ) |
 										(1ULL << LS7A_IOAPIC_HPET_INT_OFFSET      ) ;
 
-//Maximum 26 IPI irqs
-unsigned int ls7a_ipi_irq2pos[64] = { [0 ... 63] = -1,
-									[LS7A_IOAPIC_GMAC0_OFFSET        ] = 0  ,
-									[LS7A_IOAPIC_GMAC1_OFFSET        ] = 1  ,
-									[LS7A_IOAPIC_SATA0_OFFSET        ] = 2  ,
-									[LS7A_IOAPIC_SATA1_OFFSET        ] = 3  ,
-									[LS7A_IOAPIC_SATA2_OFFSET        ] = 4  ,
-									[LS7A_IOAPIC_EHCI0_OFFSET        ] = 5  ,
-									[LS7A_IOAPIC_EHCI1_OFFSET        ] = 6  ,
-									[LS7A_IOAPIC_PCIE_F0_PORT0_OFFSET] = 7  ,
-									[LS7A_IOAPIC_PCIE_F0_PORT1_OFFSET] = 8  ,
-									[LS7A_IOAPIC_PCIE_F0_PORT2_OFFSET] = 9  ,
-									[LS7A_IOAPIC_PCIE_F0_PORT3_OFFSET] = 10 ,
-									[LS7A_IOAPIC_PCIE_F1_PORT0_OFFSET] = 11 ,
-									[LS7A_IOAPIC_PCIE_F1_PORT1_OFFSET] = 12 ,
-									[LS7A_IOAPIC_PCIE_H_LO_OFFSET    ] = 13 ,
-									[LS7A_IOAPIC_PCIE_H_HI_OFFSET    ] = 14 ,
-									[LS7A_IOAPIC_PCIE_G0_LO_OFFSET   ] = 15 ,
-									[LS7A_IOAPIC_PCIE_G0_HI_OFFSET   ] = 16 ,
-									[LS7A_IOAPIC_PCIE_G1_LO_OFFSET   ] = 17 ,
-									[LS7A_IOAPIC_PCIE_G1_HI_OFFSET   ] = 18 };
-unsigned int ls7a_ipi_pos2irq[] = { LS7A_IOAPIC_GMAC0_OFFSET         ,
-									LS7A_IOAPIC_GMAC1_OFFSET         ,
-									LS7A_IOAPIC_SATA0_OFFSET         ,
-									LS7A_IOAPIC_SATA1_OFFSET         ,
-									LS7A_IOAPIC_SATA2_OFFSET         ,
-									LS7A_IOAPIC_EHCI0_OFFSET         ,
-									LS7A_IOAPIC_EHCI1_OFFSET         ,
-									LS7A_IOAPIC_PCIE_F0_PORT0_OFFSET ,
-									LS7A_IOAPIC_PCIE_F0_PORT1_OFFSET ,
-									LS7A_IOAPIC_PCIE_F0_PORT2_OFFSET ,
-									LS7A_IOAPIC_PCIE_F0_PORT3_OFFSET ,
-									LS7A_IOAPIC_PCIE_F1_PORT0_OFFSET ,
-									LS7A_IOAPIC_PCIE_F1_PORT1_OFFSET ,
-									LS7A_IOAPIC_PCIE_H_LO_OFFSET     ,
-									LS7A_IOAPIC_PCIE_H_HI_OFFSET     ,
-									LS7A_IOAPIC_PCIE_G0_LO_OFFSET    ,
-									LS7A_IOAPIC_PCIE_G0_HI_OFFSET    ,
-									LS7A_IOAPIC_PCIE_G1_LO_OFFSET    ,
-									LS7A_IOAPIC_PCIE_G1_HI_OFFSET    };
 
 void handle_7a_irqs(unsigned long long irqs) {
 	unsigned int  irq;
@@ -128,7 +149,7 @@ void handle_7a_irqs(unsigned long long irqs) {
 		irqs &= ~(1ULL<<irq);
 
 		/* handled by local core */
-		if ((local_irq & (0x1ULL << irq)) || ls7a_ipi_irq2pos[irq]==-1) {
+		if ((local_irq & (0x1ULL << irq)) || ls7a_ipi_irq2pos[LS7A_IOAPIC_IRQ_BASE + irq] == (unsigned char)-1) {
 			do_IRQ(LS7A_IOAPIC_IRQ_BASE + irq);
 			continue;
 		}
@@ -150,7 +171,39 @@ void handle_7a_irqs(unsigned long long irqs) {
 		}
 
 		/* balanced by other cores */
-		loongson3_send_irq_by_ipi(irq_cpu[irq], (0x1<<(ls7a_ipi_irq2pos[irq])));
+		loongson3_send_irq_by_ipi(irq_cpu[irq], (0x1<<(ls7a_ipi_irq2pos[LS7A_IOAPIC_IRQ_BASE + irq])));
+	}
+}
+
+void handle_msi_irqs(unsigned long long irqs) {
+	unsigned int  irq;
+	struct irq_data *irqd;
+	struct cpumask affinity;
+	int cpu = smp_processor_id();
+
+	while(irqs){
+		irq = __ffs(irqs);
+		irqs &= ~(1ULL<<irq);
+
+
+		irqd = irq_get_irq_data(irq);
+		cpumask_and(&affinity, irqd->affinity, cpu_active_mask);
+		if (cpumask_empty(&affinity)) {
+			do_IRQ(irq);
+			continue;
+		}
+
+		irq_msi[irq] = cpumask_next(irq_msi[irq], &affinity);
+		if (irq_msi[irq] >= nr_cpu_ids)
+			irq_msi[irq] = cpumask_first(&affinity);
+
+		if (irq_msi[irq] == cpu || ls7a_ipi_irq2pos[irq] == (unsigned char)-1 ) {
+			do_IRQ(irq);
+			continue;
+		}
+
+		/* balanced by other cores */
+		loongson3_send_irq_by_ipi(irq_msi[irq], (0x1<<(ls7a_ipi_irq2pos[irq])));
 	}
 }
 
@@ -172,7 +225,7 @@ void ls7a_irq_dispatch(void)
 
 void ls7a_msi_irq_dispatch(void)
 {
-	unsigned int i, irq;
+	unsigned int i;
 	unsigned long long  irqs;
 	int cpu = smp_processor_id();
 
@@ -186,11 +239,7 @@ void ls7a_msi_irq_dispatch(void)
 			if(i==1) {
 				handle_7a_irqs(irqs);
 			} else {
-				while(irqs){
-					irq = __ffs(irqs);
-					do_IRQ(irq+i*64);
-					irqs &= ~(1ULL<<irq);
-				}
+				handle_msi_irqs(irqs);
 			}
 		}
 	}
