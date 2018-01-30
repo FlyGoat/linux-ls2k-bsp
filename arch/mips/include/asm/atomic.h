@@ -39,21 +39,17 @@
  * Atomically sets the value of @v to @i.
  */
 #ifdef CONFIG_CPU_LOONGSON3
-static __inline__ void atomic_set(atomic_t * v,int i)
+static __inline__ void atomic_set(atomic_t * v, int i)
 {
-		int temp;
 		__asm__ __volatile__(
-		"	.set	mips3		# atomic_set		\n"
-                "       .set    noreorder       		    	\n"
-		__WEAK_LLSC_MB
-		"1:	ll	%0, %1					\n"
-		"	move	%0, %2					\n"
-		"	sc	%0, %1					\n"
-		"	beqz	%0, 1b					\n"
-		"	nop						\n"
-		"	.set	reorder					\n"
-		"	.set	mips0					\n"
-		: "=&r" (temp), "+m" (v->counter)
+		"	.set    mips64r2	# atomic_set		\n"
+                "	.set    noreorder				\n"
+		"	sync						\n"
+		"	sw      %1, %0					\n"
+		"	sync						\n"
+		"	.set    reorder					\n"
+		"	.set    mips0					\n"
+		: "+m" (v->counter)
 		: "r" (i));
 }
 #else
@@ -507,21 +503,17 @@ static __inline__ int __atomic_add_unless(atomic_t *v, int a, int u)
  * @i: required value
  */
 #ifdef CONFIG_CPU_LOONGSON3
-static __inline__ void atomic64_set(atomic64_t * v,long i)
+static __inline__ void atomic64_set(atomic64_t * v, long i)
 {
-		long temp;
 		__asm__ __volatile__(
-		"	.set	mips3		# atomic64_set		\n"
-                "       .set    noreorder       		    	\n"
-		__WEAK_LLSC_MB
-		"1:	lld	%0, %1					\n"
-		"	move	%0, %2					\n"
-		"	scd	%0, %1					\n"
-		"	beqz	%0, 1b					\n"
-		"	nop						\n"
-                "       .set    reorder       			    	\n"
-		"	.set	mips0					\n"
-		: "=&r" (temp), "+m" (v->counter)
+		"	.set    mips64r2	# atomic64_set		\n"
+                "	.set    noreorder       		    	\n"
+		"	sync						\n"
+		"	sd      %1, %0					\n"
+		"	sync						\n"
+                "	.set    reorder				    	\n"
+		"	.set    mips0					\n"
+		: "+m" (v->counter)
 		: "r" (i));
 }
 #else
