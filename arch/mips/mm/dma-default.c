@@ -181,7 +181,10 @@ static inline void __dma_sync_virtual(void *addr, size_t size,
 		break;
 
 	case DMA_FROM_DEVICE:
-		dma_cache_inv((unsigned long)addr, size);
+		if (((unsigned long)addr | size) & L1_CACHE_MASK)
+			dma_cache_wback_inv((unsigned long)addr, size);
+		else
+			dma_cache_inv((unsigned long)addr, size);
 		break;
 
 	case DMA_BIDIRECTIONAL:
