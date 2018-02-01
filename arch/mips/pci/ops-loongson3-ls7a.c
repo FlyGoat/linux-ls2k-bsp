@@ -12,6 +12,95 @@
 #define HT1LO_PCICFG_BASE      0x1a000000
 #define HT1LO_PCICFG_BASE_TP1  0x1b000000
 
+#define PCI_byte_BAD 0
+#define PCI_word_BAD (pos & 1)
+#define PCI_dword_BAD (pos & 3)
+#define PCI_FIND_CAP_TTL        48
+
+#define PCI_OP_READ(size,type,len) \
+static int pci_bus_read_config_##size##_nolock \
+	(struct pci_bus *bus, unsigned int devfn, int pos, type *value) \
+{                                                                       \
+	int res;                                                        \
+	u32 data = 0;                                                   \
+	if (PCI_##size##_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;       \
+	res = bus->ops->read(bus, devfn, pos, len, &data);              \
+	*value = (type)data;                                            \
+	return res;                                                     \
+}
+
+PCI_OP_READ(byte, u8, 1)
+PCI_OP_READ(word, u16, 2)
+PCI_OP_READ(dword, u32, 4)
+
+static int __pci_find_next_cap_ttl_nolock(struct pci_bus *bus, unsigned int devfn,
+					  u8 pos, int cap, int *ttl)
+{
+	u8 id;
+	u16 ent;
+
+	pci_bus_read_config_byte_nolock(bus, devfn, pos, &pos);
+
+	while ((*ttl)--) {
+		if (pos < 0x40)
+			break;
+		pos &= ~3;
+		pci_bus_read_config_word_nolock(bus, devfn, pos, &ent);
+
+		id = ent & 0xff;
+		if (id == 0xff)
+			break;
+		if (id == cap)
+			return pos;
+		pos = (ent >> 8);
+	}
+	return 0;
+}
+
+static int __pci_find_next_cap_nolock(struct pci_bus *bus, unsigned int devfn,
+					u8 pos, int cap)
+{
+	int ttl = PCI_FIND_CAP_TTL;
+
+	return __pci_find_next_cap_ttl_nolock(bus, devfn, pos, cap, &ttl);
+}
+
+static int __pci_bus_find_cap_start_nolock(struct pci_bus *bus,
+					   unsigned int devfn, u8 hdr_type)
+{
+	u16 status;
+
+	pci_bus_read_config_word_nolock(bus, devfn, PCI_STATUS, &status);
+	if (!(status & PCI_STATUS_CAP_LIST))
+		return 0;
+
+	switch (hdr_type) {
+	case PCI_HEADER_TYPE_NORMAL:
+	case PCI_HEADER_TYPE_BRIDGE:
+		return PCI_CAPABILITY_LIST;
+	case PCI_HEADER_TYPE_CARDBUS:
+		return PCI_CB_CAPABILITY_LIST;
+	default:
+		return 0;
+	}
+
+	return 0;
+}
+
+static int pci_bus_find_capability_nolock(struct pci_bus *bus, unsigned int devfn, int cap)
+{
+	int pos;
+	u8 hdr_type;
+
+	pci_bus_read_config_byte_nolock(bus, devfn, PCI_HEADER_TYPE, &hdr_type);
+
+	pos = __pci_bus_find_cap_start_nolock(bus, devfn, hdr_type & 0x7f);
+	if (pos)
+		pos = __pci_find_next_cap_nolock(bus, devfn, pos, cap);
+
+	return pos;
+}
+
 static int ls7a_pci_config_access(unsigned char access_type,
 		struct pci_bus *bus, unsigned int devfn,
 		int where, u32 *data)
@@ -22,6 +111,7 @@ static int ls7a_pci_config_access(unsigned char access_type,
 	int device = PCI_SLOT(devfn);
 	int function = PCI_FUNC(devfn);
 	int reg = where & ~3;
+	int pos;
 
 	if (busnum == 0 && device == 6 && function == 0 && reg == 0x20)
 		return 0;
@@ -42,9 +132,20 @@ static int ls7a_pci_config_access(unsigned char access_type,
 		type = 0x10000;
 	}
 
-	if (access_type == PCI_ACCESS_WRITE)
+	if (access_type == PCI_ACCESS_WRITE) {
+		pos = pci_bus_find_capability_nolock(bus, devfn, PCI_CAP_ID_EXP);
+
+		if (pos != 0 && (pos + PCI_EXP_DEVCTL) == reg)
+		{
+			if (((*data & PCI_EXP_DEVCTL_READRQ) >> 12) > 1) {
+				printk(KERN_ERR "MAX READ REQUEST SIZE shuould not greater than 256");
+				*data = *data & ~PCI_EXP_DEVCTL_READRQ;
+				*data = *data | (1 << 12);
+			}
+		}
+
 		*(volatile unsigned int *)addrp = cpu_to_le32(*data);
-	else {
+	} else {
 		*data = le32_to_cpu(*(volatile unsigned int *)addrp);
 		if (busnum == 0 && reg == PCI_CLASS_REVISION && *data == 0x06000001)
 			*data = (PCI_CLASS_BRIDGE_PCI << 16) | (*data & 0xffff);
