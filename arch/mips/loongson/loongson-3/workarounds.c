@@ -19,22 +19,30 @@ void loongson3_cache_stall_unlock(int cpu, int irq)
 {
 	unsigned int core_id;
 	unsigned int node_id;
-	unsigned int cpu_next;
 	int curr_timer_irq_count;
+	int i;
+	unsigned int cpu_next = cpu;
 	struct irq_desc *desc = irq_to_desc(irq);
 
 	if (!desc)
 		return;
 
-	if (*per_cpu_ptr(desc->kstat_irqs, cpu) & 0x3F)
+	if (*per_cpu_ptr(desc->kstat_irqs, cpu) & 0xFF)
 		return;
 
 	core_id = cpu_data[cpu].core;
 	node_id = cpu_data[cpu].package;
 
-	cpu_next = cpu + 1;
-	if (core_id == (cores_per_package - 1))
-		cpu_next -= cores_per_package;
+	for (i = 1; i <= cores_per_package; i++)
+	{
+		cpu_next = (node_id << 2) + ((core_id + i) % cores_per_package);
+		if (cpu_online(cpu_next))
+			break;
+	}
+
+	/* Current package has only on core online */
+	if (cpu_next == cpu)
+		return;
 
 	curr_timer_irq_count = *per_cpu_ptr(desc->kstat_irqs, cpu_next);
 
