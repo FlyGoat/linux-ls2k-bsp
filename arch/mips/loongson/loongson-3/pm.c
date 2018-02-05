@@ -38,6 +38,7 @@ extern void acpi_sleep_complete(void);
 extern void acpi_registers_setup(void);
 extern void ls2h_irq_router_init(void);
 extern void rs780_irq_router_init(void);
+extern void	ls7a_irq_router_init(void);
 
 struct loongson_registers {
 	u32 config4;
@@ -102,7 +103,7 @@ int wakeup_loongson(void)
 void mach_suspend(suspend_state_t state)
 {
 	if (state == PM_SUSPEND_MEM) {
-		if (loongson_pch->board_type != LS2H)
+		if (loongson_pch->board_type == RS780E)
 			acpi_sleep_prepare();
 
 		if (cpu_has_ftlb) {
@@ -159,6 +160,8 @@ void mach_resume(suspend_state_t state)
 		loongson_pch->early_config();
 		if (loongson_pch->board_type == LS2H)
 			ls2h_irq_router_init();
+		else if(loongson_pch->board_type == LS7A)
+			ls7a_irq_router_init();
 		else {
 			rs780_irq_router_init();
 			acpi_registers_setup();

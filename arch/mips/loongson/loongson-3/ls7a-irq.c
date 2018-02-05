@@ -294,7 +294,7 @@ void init_7a_irqs(void)
 	init_7a_irq(LS7A_IOAPIC_AC97_HDA_OFFSET     , LS7A_IOAPIC_AC97_HDA_IRQ     );
 }
 
-static void ls7a_irq_router_init(void)
+void ls7a_irq_router_init(void)
 {
 	int i;
 	/* route LPC int to cpu core0 int 0 */
