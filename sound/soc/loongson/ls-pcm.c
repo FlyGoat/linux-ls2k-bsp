@@ -108,45 +108,46 @@ int ls_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct ls_runtime_data *prtd = substream->runtime->private_data;
 	int ret = 0;
-	u32 val;
+	u64 val,dma_order;
 	int timeout = 20000;
 	void *order_addr;
 	order_addr = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?  prtd->order_addr1 : prtd->order_addr2;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-		val = prtd->dma_desc_array_phys | 8;
+		val = (prtd->dma_desc_array_phys & ~0x1fUL) | 0x8UL;
 #ifdef DMA64
 		val |= 1;
 #endif
-		writel(val, order_addr);
+		dma_order = (readq(order_addr) & 0xfUL) | val;
+		writeq(dma_order, order_addr);
 		while((readl(order_addr) & 8) && timeout--)
 		 udelay(5);
 
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
-		writel(0x10, order_addr);
+		writeq(0x10UL | (readq(order_addr) & 0x1fUL), order_addr);
 		udelay(1000);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		val = prtd->dma_desc_ready_phys | 4;
+		val = (prtd->dma_desc_ready_phys & ~0x1fUL) | 0x4UL;
 #ifdef DMA64
 		val |= 1;
 #endif
-		writel(val, order_addr);
+		dma_order = (readq(order_addr) & 0x1fUL) | val;
+		writeq(dma_order, order_addr);
 		while(readl(order_addr)&4);
-
-		writel(0x10, order_addr);
+		writel(0x10UL | (readq(order_addr) & 0x1fUL) , order_addr);
 		udelay(1000);
 		break;
 
 	case SNDRV_PCM_TRIGGER_RESUME:
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		val = prtd->dma_desc_ready_phys | 8;
+		val = (prtd->dma_desc_ready_phys &  ~0x1fUL)| 0x8UL;
 #ifdef DMA64
 		val |= 1;
 #endif
@@ -169,16 +170,16 @@ ls_pcm_pointer(struct snd_pcm_substream *substream)
 	struct ls_runtime_data *prtd = runtime->private_data;
 
 	snd_pcm_uframes_t x;
-	u32 val;
+	u64 dma_order,val;
 	void *order_addr;
 	order_addr = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?  prtd->order_addr1 : prtd->order_addr2;
-
-	val = prtd->dma_position_desc_phys | 4;
+	val = (prtd->dma_position_desc_phys &  ~0x1fUL) | 0x4UL;
 #ifdef DMA64
 	val |= 1;
 #endif
-	writel(val, order_addr);
-	while(readl(order_addr)&4);
+	dma_order = (readq(order_addr) & 0x1fUL) | val;
+	writeq(dma_order, order_addr);
+	while(readl(order_addr) & 4);
 
 	x = bytes_to_frames(runtime, prtd->dma_position_desc->saddr - runtime->dma_addr);
 

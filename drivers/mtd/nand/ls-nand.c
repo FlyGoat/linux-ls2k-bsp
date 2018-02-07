@@ -102,7 +102,7 @@ struct ls_nand_info {
 	unsigned 		cmd;
 
 	/* DMA information */
-	unsigned int		dma_order_reg;	/* dma controller register */
+	u64					dma_order_reg;	/* dma controller register */
 	unsigned int		apb_data_addr;	/* dma access this address */
 	u64			desc_addr;	/* dma descriptor address */
 	dma_addr_t		desc_addr_phys;
@@ -225,9 +225,9 @@ void dma_desc_init(struct ls_nand_info *info)
 
 static void dma_setup(struct ls_nand_info *info, int dma_cmd, int dma_cnt)
 {
+	u64 dma_order,t;
 	volatile struct ls_nand_dma_desc *dma_base =
 		(volatile struct ls_nand_dma_desc *)(info->desc_addr);
-	unsigned int t;
 
 	dma_base->orderad = 0;
 	dma_base->saddr = info->data_buff_phys;
@@ -238,11 +238,12 @@ static void dma_setup(struct ls_nand_info *info, int dma_cmd, int dma_cnt)
 	dma_base->length = dma_cnt;
 	dma_base->cmd = dma_cmd;
 
-	t = ((unsigned int)info->desc_addr_phys) | (1 << 3);
-	ls2k_writel(t, info->dma_order_reg);
+	t = (((unsigned int)info->desc_addr_phys) & ~0x1fUL) | (0x1UL << 3);
+	dma_order = readq(info->dma_order_reg) & 0xfUL | t;
+	writeq(dma_order, info->dma_order_reg);
 
 	t = STATUS_TIME_LOOP_R;
-	while ((ls2k_readl(info->dma_order_reg) & 0x8) && t) {
+	while ((readl(info->dma_order_reg) & 0x8) && t) {
 		t--;
 		udelay(50);
 	};
@@ -501,12 +502,14 @@ static void ls_nand_init_mtd(struct mtd_info *mtd,
 
 static void test_handler(unsigned long data)
 {
-	u32 val;
+	u64 dma_order,val;
 	struct ls_nand_info *info = (struct ls_nand_info *)data;
 
 	mod_timer(&info->test_timer, jiffies + 1);
-	val = info->dma_ask_phy | 0x4;
-	ls2k_writel(val, info->dma_order_reg);
+	val = (info->dma_ask_phy & ~0x1fUL) | 0x4;
+
+	dma_order = readq(info->dma_order_reg) & 0x1fUL | val;
+	writeq(dma_order, info->dma_order_reg);
 	udelay(1000);
 }
 
@@ -625,7 +628,7 @@ static int ls_nand_probe(struct platform_device *pdev)
 	}
 	of_property_read_u32(chan->device->dev->of_node, "reg", &data);
 	r->start = data;
-	info->dma_order_reg = r->start;
+	info->dma_order_reg = ioremap(r->start, 8);
 #ifdef MTD_NAND_DEBUG
 	pr_info("info->dma_order_reg = %x\n", info->dma_order_reg);
 #endif

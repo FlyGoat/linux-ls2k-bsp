@@ -173,7 +173,6 @@ static int set_apbdma_config(struct ls_apbdma_platform_data *pdata)
 	if (!request_mem_region(io->start, size, pdata->common->dev.of_node->name)) {
 		return -EBUSY;
 	}
-
 	regs = ioremap(io->start, size);
 	if (!regs) {
 		err = -ENOMEM;
@@ -240,8 +239,10 @@ static int __init ls_apbdma_probe(struct platform_device *pdev)
 {
 	struct ls_apbdma_platform_data *pdata;
 	struct ls_apbdma		*apbdma = NULL;
+	void __iomem		*regs;
+	struct resource		*r;
 	size_t			size;
-	int			err;
+	int			err = 0;
 	int			i;
 	dma_cap_mask_t mask;
 
@@ -251,6 +252,23 @@ static int __init ls_apbdma_probe(struct platform_device *pdev)
 		pdata = ls_apbdma_parse_dt(pdev);
 	if (!pdata)
 		return -ENOMEM;
+
+	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!r)
+		return -EINVAL;
+	if (!request_mem_region(r->start, r->end - r->start + 1, pdev->name))
+		return -EBUSY;
+
+	regs = ioremap(r->start, r->end - r->start + 1);
+	if (!regs) {
+		err = -ENOMEM;
+		goto err_release_r;
+	}
+
+	if(hw_coherentio == 1)
+		writel(readl(regs)&(~0x2),regs);
+	else
+		writel(readl(regs)|0x2,regs);
 
 	err = set_apbdma_config(pdata);
 	if(err)
@@ -309,6 +327,9 @@ err_of_dma_controller_register:
 err_kfree:
 	devm_kfree(&pdev->dev, pdata);
 	kfree(apbdma);
+err_release_r:
+	iounmap(regs);
+	release_mem_region(r->start, r->end - r->start + 1);
 	return err;
 }
 

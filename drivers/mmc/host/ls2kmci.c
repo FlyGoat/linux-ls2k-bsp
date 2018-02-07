@@ -483,6 +483,7 @@ static void noinline ls2k_mci_send_command(struct ls2k_mci_host *host,
 static int ls2k_mci_prepare_dma(struct ls2k_mci_host *host, struct mmc_data *data)
 {
 	int dma_len, i;
+	u64 dma_order;
 	int rw = data->flags & MMC_DATA_WRITE;
 
 	dma_len = dma_map_sg(mmc_dev(host->mmc), data->sg, data->sg_len,
@@ -510,7 +511,9 @@ static int ls2k_mci_prepare_dma(struct ls2k_mci_host *host, struct mmc_data *dat
 	}
 
 	host->sg_cpu[dma_len-1].order_addr &= ~(0x1<<0);
-	*(volatile unsigned int *) host->dma_order_reg = (host->sg_dma | 0x8);
+
+	dma_order = (readq(host->dma_order_reg) & 0xfUL) | ((host->sg_dma & ~0x1fUL) | 0x8UL);
+	writeq(dma_order,host->dma_order_reg);
 
 	return 0;
 }
