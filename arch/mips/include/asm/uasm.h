@@ -127,6 +127,7 @@ Ip_u2u1u3(_dsra);
 Ip_u2u1u3(_dsrl);
 Ip_u2u1u3(_dsrl32);
 Ip_u3u1u2(_dsubu);
+Ip_u1(_ei);
 Ip_0(_eret);
 Ip_u2u1msbu3(_ext);
 Ip_u2u1msbu3(_ins);
