@@ -13,8 +13,8 @@
 	memory {
 		name = "memory";
 		device_type = "memory";
-		reg =  <0 0x00200000 0 0x09800000	// 152MiB at 2MiB
-			0 0x90000000 0 0x70000000>;	// 1792MiB at 2304MiB
+		reg =  <0 0x00200000 0 0x0d800000	// 216MiB at 2MiB
+			1 0x10000000 1 0xd0000000>;	// 7424MiB at 4352MiB
 	};
 
 	// all soc device use 32bit address
