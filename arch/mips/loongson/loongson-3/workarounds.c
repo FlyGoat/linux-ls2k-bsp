@@ -13,7 +13,9 @@
 #define GPIO_BACKLIGHIT_CNTL	7
 #define SYNCI   0x041f0000
 #define SYNC    0xf
+#define V0      2
 #define RA      31
+#define C0_STATUS               12, 0
 
 unsigned int last_timer_irq_count[NR_CPUS];
 extern void (* r4k_blast_scache_node)(long node);
@@ -129,6 +131,18 @@ void loongson3_local_irq_optimize(unsigned int cpu_type)
 		/* optimize arch_local_irq_disable */
 		p = (unsigned int *)&arch_local_irq_disable;
 		uasm_i_di(&p, 0);
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+
+		/* optimize arch_local_irq_save */
+		p = (unsigned int *)&arch_local_irq_save;
+		if (cpu_type == PRID_REV_LOONGSON3A_R2) {
+			uasm_i_mfc0(&p, V0, C0_STATUS);
+			uasm_i_di(&p, 0);
+		}
+		else
+			uasm_i_di(&p, V0);
+		uasm_i_andi(&p, V0, V0, 0x1);
 		uasm_i_jr(&p, RA);
 		uasm_i_nop(&p);
 		break;
