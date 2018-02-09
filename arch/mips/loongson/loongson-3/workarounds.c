@@ -14,8 +14,17 @@
 #define SYNCI   0x041f0000
 #define SYNC    0xf
 #define V0      2
+#define A0      4
 #define RA      31
 #define C0_STATUS               12, 0
+
+enum label_id {
+        label_irq_restore_out = 1,
+        label___irq_restore_out,
+};
+
+UASM_L_LA(_irq_restore_out)
+UASM_L_LA(___irq_restore_out)
 
 unsigned int last_timer_irq_count[NR_CPUS];
 extern void (* r4k_blast_scache_node)(long node);
@@ -120,6 +129,10 @@ late_initcall(usb_fix_for_tmcs);
 void loongson3_local_irq_optimize(unsigned int cpu_type)
 {
 	unsigned int *p;
+	struct uasm_label labels[3];
+	struct uasm_reloc relocs[3];
+	struct uasm_label *l = labels;
+	struct uasm_reloc *r = relocs;
 
 	switch(cpu_type) {
 	case PRID_REV_LOONGSON3A_R1:
@@ -128,6 +141,9 @@ void loongson3_local_irq_optimize(unsigned int cpu_type)
 	/* do noting for legacy processors. */
 		break;
 	default:
+		memset(labels, 0, sizeof(labels));
+		memset(relocs, 0, sizeof(relocs));
+
 		/* optimize arch_local_irq_disable */
 		p = (unsigned int *)&arch_local_irq_disable;
 		uasm_i_di(&p, 0);
@@ -145,6 +161,26 @@ void loongson3_local_irq_optimize(unsigned int cpu_type)
 		uasm_i_andi(&p, V0, V0, 0x1);
 		uasm_i_jr(&p, RA);
 		uasm_i_nop(&p);
+
+		/* optimize arch_local_irq_restore */
+		p = (unsigned int *)&arch_local_irq_restore;
+		uasm_il_beqz(&p, &r, A0, label_irq_restore_out);
+		uasm_i_di(&p, 0);
+		uasm_i_ei(&p, 0);
+		uasm_l_irq_restore_out(&l, p);
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+
+		/* optimize __arch_local_irq_restore */
+		p = (unsigned int *)&__arch_local_irq_restore;
+		uasm_il_beqz(&p, &r, A0, label___irq_restore_out);
+		uasm_i_di(&p, 0);
+		uasm_i_ei(&p, 0);
+		uasm_l___irq_restore_out(&l, p);
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+
+		uasm_resolve_relocs(relocs, labels);
 		break;
 	}
 }
