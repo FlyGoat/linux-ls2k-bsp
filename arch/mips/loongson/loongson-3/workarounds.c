@@ -193,22 +193,21 @@ void  loongson3_inst_fixup(void)
 {
 	unsigned int cpu_type = read_c0_prid() & 0xF;
 
+	/* GS464 do not support synci, and sync is just enough for GS464. */
 	if (cpu_type == PRID_REV_LOONGSON3A_R1) {
-			unsigned int *inst_ptr = (unsigned int *)&_text;
-			unsigned int *inst_ptr_init = (unsigned int *)&__init_begin;
-			while(inst_ptr <= (unsigned int *)&_etext)
-			{
-					if (*inst_ptr == SYNCI)
-							*inst_ptr = SYNC;
-					inst_ptr++;
-			}
+		unsigned int *inst_ptr = (unsigned int *)&_text;
+		unsigned int *inst_ptr_init = (unsigned int *)&__init_begin;
+		while(inst_ptr <= (unsigned int *)&_etext) {
+			if (*inst_ptr == SYNCI)
+				*inst_ptr = SYNC;
+			inst_ptr++;
+		}
 
-			while(inst_ptr_init <= (unsigned int *)&__init_end)
-			{
-					if (*inst_ptr_init == SYNCI)
-							*inst_ptr_init = SYNC;
-					inst_ptr_init++;
-			}
+		while(inst_ptr_init <= (unsigned int *)&__init_end) {
+			if (*inst_ptr_init == SYNCI)
+				*inst_ptr_init = SYNC;
+			inst_ptr_init++;
+		}
 	}
 
 	loongson3_local_irq_optimize(cpu_type);
