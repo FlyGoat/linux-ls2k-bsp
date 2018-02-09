@@ -5,12 +5,15 @@
 #include <ec_wpce775l.h>
 #include <workarounds.h>
 #include <asm/sections.h>
+#include <asm/uasm.h>
+#include <asm/regdef.h>
 
 #include <loongson.h>
 #define GPIO_LCD_CNTL		5
 #define GPIO_BACKLIGHIT_CNTL	7
 #define SYNCI   0x041f0000
 #define SYNC    0xf
+#define RA      31
 
 unsigned int last_timer_irq_count[NR_CPUS];
 extern void (* r4k_blast_scache_node)(long node);
@@ -112,13 +115,35 @@ static int __init usb_fix_for_tmcs(void)
 
 late_initcall(usb_fix_for_tmcs);
 
+void loongson3_local_irq_optimize(unsigned int cpu_type)
+{
+	unsigned int *p;
+
+	switch(cpu_type) {
+	case PRID_REV_LOONGSON3A_R1:
+	case PRID_REV_LOONGSON3B_R1:
+	case PRID_REV_LOONGSON3B_R2:
+	/* do noting for legacy processors. */
+		break;
+	default:
+		/* optimize arch_local_irq_disable */
+		p = (unsigned int *)&arch_local_irq_disable;
+		uasm_i_di(&p, 0);
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+		break;
+	}
+}
+
 /*
  * for 3A1000 synci will lead to crash, so use the sync intead of synci
  * in the vmlinux range
  */
 void  loongson3_inst_fixup(void)
 {
-	if ((read_c0_prid() & 0xf) == PRID_REV_LOONGSON3A_R1) {
+	unsigned int cpu_type = read_c0_prid() & 0xF;
+
+	if (cpu_type == PRID_REV_LOONGSON3A_R1) {
 			unsigned int *inst_ptr = (unsigned int *)&_text;
 			unsigned int *inst_ptr_init = (unsigned int *)&__init_begin;
 			while(inst_ptr <= (unsigned int *)&_etext)
@@ -135,5 +160,7 @@ void  loongson3_inst_fixup(void)
 					inst_ptr_init++;
 			}
 	}
+
+	loongson3_local_irq_optimize(cpu_type);
 }
 EXPORT_SYMBOL(loongson3_inst_fixup);
