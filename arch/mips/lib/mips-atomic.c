@@ -15,6 +15,72 @@
 #include <linux/export.h>
 #include <linux/stringify.h>
 
+#if defined(CONFIG_CPU_LOONGSON3) && defined(CONFIG_PHASE_LOCK)
+unsigned int phase_lock[32];
+notrace unsigned long loongson3_phase_lock_acquire(void)
+{
+	unsigned long flags;
+	u32 node_id, tmp, cpu;
+
+	flags = arch_local_irq_save();
+
+	__asm__ __volatile__(
+		"	.set	mips32					\n"
+		"	mfc0	%0, $15, 1				\n"
+		"	.set	mips0					\n"
+		: "=r" (cpu));
+
+	/*
+	 * Make sure phase_lock address is cache-line seperated to avoid
+	 * Fake cache-line share.
+	 */
+	node_id = ((cpu & 0x3FF) / 4) << 3;
+
+	__asm__ __volatile__(
+                "       .set    noreorder       # lock for phase    	\n"
+                "1:							\n"
+		__WEAK_LLSC_MB
+                "	ll      %1, %2					\n"
+                "       bnez    %1, 1b					\n"
+                "       li	%1, 1					\n"
+                "       sc      %1, %0					\n"
+                "       beqz    %1, 1b					\n"
+                "       nop						\n"
+                "       .set	reorder					\n"
+                : "=m" (phase_lock[node_id]), "=&r" (tmp)
+                : "m" (phase_lock[node_id])
+                : "memory");
+
+	return flags;
+}
+EXPORT_SYMBOL(loongson3_phase_lock_acquire);
+
+notrace void loongson3_phase_lock_release(unsigned long flags)
+{
+	u32 node_id, cpu;
+
+	__asm__ __volatile__(
+		"	.set	mips32					\n"
+		"	mfc0	%0, $15, 1				\n"
+		"	.set	mips0					\n"
+		: "=r" (cpu));
+
+	node_id = ((cpu & 0x3FF) / 4) << 3;
+
+	__asm__ __volatile__(
+		"	.set	noreorder       # unlock for phase   	\n"
+		"	sync						\n"
+		"	sw	$0, %0                                  \n"
+		"	sync						\n"
+		"	.set\treorder                                 	\n"
+		: "=m" (phase_lock[node_id])
+		: "m" (phase_lock[node_id])
+		: "memory");
+
+	arch_local_irq_restore(flags);
+}
+EXPORT_SYMBOL(loongson3_phase_lock_release);
+#endif
 #if !defined(CONFIG_CPU_MIPSR2) || defined(CONFIG_MIPS_MT_SMTC)
 
 /*
