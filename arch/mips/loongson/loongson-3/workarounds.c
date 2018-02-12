@@ -126,13 +126,42 @@ static int __init usb_fix_for_tmcs(void)
 
 late_initcall(usb_fix_for_tmcs);
 
-void loongson3_local_irq_optimize(unsigned int cpu_type)
+static inline int loongson3_ccnuma_platform(void)
+{
+	struct loongson_params *loongson_p;
+	struct efi_cpuinfo_loongson *ecpu;
+
+	loongson_p = &(((struct boot_params *)fw_arg2)->efi.smbios.lp);
+	ecpu = (struct efi_cpuinfo_loongson *)((u64)loongson_p + loongson_p->cpu_offset);
+
+	if (ecpu->nr_cpus <= 4)
+		return 0;
+
+	return 1;
+}
+
+extern u32 nr_nodes_loongson;
+void loongson3_arch_func_optimize(unsigned int cpu_type)
 {
 	unsigned int *p;
 	struct uasm_label labels[3];
 	struct uasm_reloc relocs[3];
 	struct uasm_label *l = labels;
 	struct uasm_reloc *r = relocs;
+
+	if (!loongson3_ccnuma_platform()) {
+#ifdef CONFIG_PHASE_LOCK
+		/* optimize loongson3_phase_lock_acquire for SMP */
+		p = (unsigned int *)&loongson3_phase_lock_acquire;
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+
+		/* optimize loongson3_phase_lock_release for SMP */
+		p = (unsigned int *)&loongson3_phase_lock_release;
+		uasm_i_jr(&p, RA);
+		uasm_i_nop(&p);
+#endif
+	}
 
 	switch(cpu_type) {
 	case PRID_REV_LOONGSON3A_R1:
@@ -210,6 +239,6 @@ void  loongson3_inst_fixup(void)
 		}
 	}
 
-	loongson3_local_irq_optimize(cpu_type);
+	loongson3_arch_func_optimize(cpu_type);
 }
 EXPORT_SYMBOL(loongson3_inst_fixup);
