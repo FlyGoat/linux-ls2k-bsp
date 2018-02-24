@@ -287,6 +287,11 @@ void __init prom_init_env(void)
 		memcpy(loongson_ecname, esys->ec_name, 32);
 	loongson_workarounds |= esys->workarounds;
 
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	if (strstr(eboard->name,"L39") || strstr(eboard->name,"L41"))
+		loongson_workarounds |= WORKAROUND_LVDS_EA_EC;
+#endif
+
 	loongson_nr_uarts = esys->nr_uarts;
 	if (loongson_nr_uarts < 1 || loongson_nr_uarts > MAX_UARTS)
 		loongson_nr_uarts = 1;

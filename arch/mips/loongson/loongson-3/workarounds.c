@@ -80,12 +80,21 @@ static void gpio_lvds_on(void)
 	gpio_direction_output(GPIO_BACKLIGHIT_CNTL, 1);
 }
 
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+void ea_turn_off_lvds(void);
+void ea_turn_on_lvds(void);
+#endif
+
 void turn_off_lvds(void)
 {
 	if (loongson_workarounds & WORKAROUND_LVDS_EC)
 		ec_write(INDEX_BACKLIGHT_STSCTRL, BACKLIGHT_OFF);
 	if (loongson_workarounds & WORKAROUND_LVDS_GPIO)
 		gpio_lvds_off();
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	if (loongson_workarounds & WORKAROUND_LVDS_EA_EC)
+		ea_turn_off_lvds();
+#endif
 }
 EXPORT_SYMBOL(turn_off_lvds);
 
@@ -95,6 +104,10 @@ void turn_on_lvds(void)
 		ec_write(INDEX_BACKLIGHT_STSCTRL, BACKLIGHT_ON);
 	if (loongson_workarounds & WORKAROUND_LVDS_GPIO)
 		gpio_lvds_on();
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	if (loongson_workarounds & WORKAROUND_LVDS_EA_EC)
+		ea_turn_on_lvds();
+#endif
 }
 EXPORT_SYMBOL(turn_on_lvds);
 
