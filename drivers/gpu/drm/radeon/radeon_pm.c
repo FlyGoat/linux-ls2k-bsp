@@ -1432,6 +1432,9 @@ static struct radeon_dpm_quirk radeon_dpm_quirk_list[] = {
 	{ PCI_VENDOR_ID_ATI, 0x6759, 0x1682, 0x3195 },
 	/* TURKS - https://bugzilla.kernel.org/show_bug.cgi?id=83731 */
 	{ PCI_VENDOR_ID_ATI, 0x6840, 0x1179, 0xfb81 },
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	{ PCI_VENDOR_ID_ATI, 0x6611, 0x1028, 0x1002 },
+#endif
 	{ 0, 0, 0, 0 },
 };
 
