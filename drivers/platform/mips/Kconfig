@@ -46,4 +46,19 @@ config LOONGSON_LAPTOP
 	  This is a driver for Loongson laptops, include power and hotkey
 	  driver;
 
+config LOONGSON_EA_PM_HOTKEY
+	tristate "PM and Hotkey driver for EA Laptio and Minipc"
+	depends on CPU_LOONGSON3
+	select BACKLIGHT_CLASS_DEVICE
+	select LCD_CLASS_DEVICE
+	select BACKLIGHT_LCD_SUPPORT
+	select VIDEO_OUTPUT_CONTROL
+	depends on INPUT
+	select INPUT_SPARSEKMAP
+	select INPUT_EVDEV
+	default y
+	---help---
+	  This is a driver for EASCS Loongson laptops, include power and hotkey
+	  driver;
+
 endif # MIPS_PLATFORM_DEVICES

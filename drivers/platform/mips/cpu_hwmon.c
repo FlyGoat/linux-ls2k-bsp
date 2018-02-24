@@ -56,6 +56,7 @@ int loongson_cpu_temp(int cpu)
 	cputemp = (int)reg * 1000;
 	return fixup_cpu_temp(cpu, cputemp);
 }
+EXPORT_SYMBOL(loongson_cpu_temp);
 
 /* ========================= Hwmon ====================== */
 static struct device *cpu_hwmon_dev;

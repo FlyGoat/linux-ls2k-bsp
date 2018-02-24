@@ -22,6 +22,13 @@ static struct platform_device loongson_sci_event_device = {
 	.id = -1,
 };
 
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+static struct platform_device loongson_ea_sci_event_device = {
+	.name = "ea_pm_hotkey",
+	.id = -1,
+};
+#endif
+
 static struct platform_device loongson3_cpufreq_device = {
 	.name = "loongson3_cpufreq",
 	.id = -1,
@@ -45,6 +52,9 @@ arch_initcall(loongson_cpufreq_init);
 static int __init loongson3_platform_init(void)
 {
 	platform_device_register(&loongson_sci_event_device);
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	platform_device_register(&loongson_ea_sci_event_device);
+#endif
 	return 0;
 }
 arch_initcall(loongson3_platform_init);
