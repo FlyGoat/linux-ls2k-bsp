@@ -1529,6 +1529,9 @@ static const struct dmi_system_id no_hw_res_dmi_table[] = {
 	{ }
 };
 
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+int is_ea_laptop(void);
+#endif
 /*
  * determine hardware version and set some properties according to it.
  */
@@ -1588,6 +1591,11 @@ static int elantech_set_properties(struct elantech_data *etd)
 	 * The signatures of v3 and v4 packets change depending on the
 	 * value of this hardware flag.
 	 */
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	if(is_ea_laptop())
+		etd->crc_enabled = 1;
+	else
+#endif
 	etd->crc_enabled = (etd->fw_version & 0x4000) == 0x4000 ||
 			   dmi_check_system(elantech_dmi_force_crc_enabled);
 
