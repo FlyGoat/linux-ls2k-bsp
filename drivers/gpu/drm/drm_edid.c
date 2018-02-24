@@ -36,6 +36,7 @@
 #include <drm/drmP.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_displayid.h>
+#include <linux/delay.h>
 
 #define version_greater(edid, maj, min) \
 	(((edid)->version > (maj)) || \
@@ -1370,6 +1371,10 @@ drm_probe_ddc(struct i2c_adapter *adapter)
 }
 EXPORT_SYMBOL(drm_probe_ddc);
 
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+extern int is_ea_laptop(void);
+#endif
+
 /**
  * drm_get_edid - get EDID data, if available
  * @connector: connector we're probing
@@ -1384,6 +1389,11 @@ struct edid *drm_get_edid(struct drm_connector *connector,
 			  struct i2c_adapter *adapter)
 {
 	struct edid *edid;
+
+#if defined(CONFIG_LOONGSON_EA_PM_HOTKEY)
+	if(is_ea_laptop())
+		mdelay(500);
+#endif
 
 	if (!drm_probe_ddc(adapter))
 		return NULL;
