@@ -499,6 +499,7 @@ static int ls2k_mci_prepare_dma(struct ls2k_mci_host *host, struct mmc_data *dat
 		host->sg_cpu[i].step_length = 0;
 		host->sg_cpu[i].step_times = 1;
 		host->sg_cpu[i].saddr = sg_dma_address(&data->sg[i]);
+		host->sg_cpu[i].saddr_hi = ((sg_dma_address(&data->sg[i])) >> 32);
 		host->sg_cpu[i].daddr = host->phys_base+0x40;
 		if (data->flags & MMC_DATA_READ) {
 			host->sg_cpu[i].cmd = 0x1<<0;
@@ -507,12 +508,18 @@ static int ls2k_mci_prepare_dma(struct ls2k_mci_host *host, struct mmc_data *dat
 		}
 
 		host->sg_cpu[i].order_addr = host->sg_dma+(i+1)*sizeof(struct ls2k_dma_desc);
+		host->sg_cpu[i].order_addr_hi = ((host->sg_dma+(i+1)*sizeof(struct ls2k_dma_desc)) >> 32);
 		host->sg_cpu[i].order_addr |= 0x1<<0;
 	}
 
 	host->sg_cpu[dma_len-1].order_addr &= ~(0x1<<0);
 
 	dma_order = (readq(host->dma_order_reg) & 0xfUL) | ((host->sg_dma & ~0x1fUL) | 0x8UL);
+	if(host->pdev->dev.coherent_dma_mask == DMA_BIT_MASK(64))
+		dma_order |= 0x1UL;
+	else
+		dma_order &= ~0x1UL;
+
 	writeq(dma_order,host->dma_order_reg);
 
 	return 0;
@@ -687,6 +694,18 @@ static int ls2k_mci_probe(struct platform_device *pdev)
 	struct resource *r;
 	struct dma_chan *chan;
 	int data;
+	__be32 *dma_mask_p = NULL;
+
+	if (pdev->dev.of_node) {
+			dma_mask_p = (__be32 *)of_get_property(pdev->dev.of_node, "dma-mask", NULL);
+			if (dma_mask_p != 0){
+					pdev->dev.coherent_dma_mask = of_read_number(dma_mask_p,2);
+					if (pdev->dev.dma_mask)
+							*(pdev->dev.dma_mask) = pdev->dev.coherent_dma_mask;
+					else
+							pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+			}
+	}
 
 	mmc = mmc_alloc_host(sizeof(struct ls2k_mci_host), &pdev->dev);
 	if (!mmc) {

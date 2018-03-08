@@ -86,6 +86,9 @@ struct ls_nand_dma_desc {
 	uint32_t step_length;
 	uint32_t step_times;
 	uint32_t cmd;
+	uint32_t dummy;
+	uint32_t order_addr_hi;
+	uint32_t saddr_hi;
 };
 
 struct ls_nand_info {
@@ -221,6 +224,9 @@ void dma_desc_init(struct ls_nand_info *info)
 	dma_base->step_times = 0x1;
 	dma_base->length = 0;
 	dma_base->cmd = 0;
+	dma_base->order_addr_hi = 0;
+	dma_base->saddr_hi = ((info->data_buff_phys) >> 32);
+
 }
 
 static void dma_setup(struct ls_nand_info *info, int dma_cmd, int dma_cnt)
@@ -231,25 +237,29 @@ static void dma_setup(struct ls_nand_info *info, int dma_cmd, int dma_cnt)
 
 	dma_base->orderad = 0;
 	dma_base->saddr = info->data_buff_phys;
+	dma_base->saddr_hi = ((info->data_buff_phys) >> 32);
 	dma_base->daddr = info->apb_data_addr;
 	dma_base->step_length = 0;
 	dma_base->step_times = 0x1;
-
 	dma_base->length = dma_cnt;
 	dma_base->cmd = dma_cmd;
 
-	t = (((unsigned int)info->desc_addr_phys) & ~0x1fUL) | (0x1UL << 3);
+	t = ((info->desc_addr_phys) & ~0x1fUL) | (0x1UL << 3);
+	if(info->pdev->dev.coherent_dma_mask == DMA_BIT_MASK(64))
+			t |= 0x1UL;
+	else
+			t &= ~0x1UL;
 	dma_order = readq(info->dma_order_reg) & 0xfUL | t;
 	writeq(dma_order, info->dma_order_reg);
 
 	t = STATUS_TIME_LOOP_R;
 	while ((readl(info->dma_order_reg) & 0x8) && t) {
-		t--;
-		udelay(50);
+			t--;
+			udelay(50);
 	};
 
 	if (t == 0) {
-		pr_info("nand dma timeout!\n");
+			pr_info("nand dma timeout!\n");
 	}
 
 	wait_nand_done(info, STATUS_TIME_LOOP_R);
@@ -555,6 +565,18 @@ static int ls_nand_probe(struct platform_device *pdev)
 	struct mtd_partition *partitions = NULL;
 	int num_partitions = 0;
 #endif
+    __be32 *dma_mask_p = NULL;
+
+	if (pdev->dev.of_node) {
+			dma_mask_p = (__be32 *)of_get_property(pdev->dev.of_node, "dma-mask", NULL);
+			if (dma_mask_p != 0){
+					pdev->dev.coherent_dma_mask = of_read_number(dma_mask_p,2);
+					if (pdev->dev.dma_mask)
+							*(pdev->dev.dma_mask) = pdev->dev.coherent_dma_mask;
+					else
+							pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+			}
+	}
 
 	pdata =  devm_kzalloc(&pdev->dev,
                   sizeof(struct ls2k_nand_plat_data),

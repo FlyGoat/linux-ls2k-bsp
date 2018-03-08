@@ -76,8 +76,10 @@ int __ls_pcm_hw_params(struct snd_pcm_substream *substream,
 	do {
 		next_desc_phys += sizeof(ls_dma_desc);
 		dma_desc->ordered = (next_desc_phys | 0x1);
+		dma_desc->ordered_hi = (next_desc_phys >> 32);
 
 		dma_desc->saddr = dma_buff_phys;
+		dma_desc->saddr_hi = (dma_buff_phys >> 32);
 		dma_desc->daddr = rtd->params->dev_addr;
 		dma_desc->cmd = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
 				0x00001001 : 0x00000001;
@@ -92,6 +94,7 @@ int __ls_pcm_hw_params(struct snd_pcm_substream *substream,
 		dma_buff_phys += period;
 	} while (totsize -= period);
 	dma_desc[-1].ordered = (rtd->dma_desc_array_phys | 0x1);
+	dma_desc[-1].ordered_hi = ((rtd->dma_desc_array_phys) >> 32);
 
 	return 0;
 }
@@ -107,6 +110,7 @@ EXPORT_SYMBOL(__ls_pcm_hw_free);
 int ls_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct ls_runtime_data *prtd = substream->runtime->private_data;
+	struct device *dev = substream->pcm->card->dev;
 	int ret = 0;
 	u64 val,dma_order;
 	int timeout = 20000;
@@ -116,13 +120,16 @@ int ls_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 		val = (prtd->dma_desc_array_phys & ~0x1fUL) | 0x8UL;
-#ifdef DMA64
-		val |= 1;
-#endif
+
+		if(dev->coherent_dma_mask == DMA_BIT_MASK(64))
+				val |= 0x1UL;
+		else
+				val &= ~0x1UL;
+
 		dma_order = (readq(order_addr) & 0xfUL) | val;
 		writeq(dma_order, order_addr);
 		while((readl(order_addr) & 8) && timeout--)
-		 udelay(5);
+				udelay(5);
 
 		break;
 
@@ -134,9 +141,12 @@ int ls_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		val = (prtd->dma_desc_ready_phys & ~0x1fUL) | 0x4UL;
-#ifdef DMA64
-		val |= 1;
-#endif
+
+		if(dev->coherent_dma_mask == DMA_BIT_MASK(64))
+				val |= 0x1UL;
+		else
+				val &= ~0x1UL;
+
 		dma_order = (readq(order_addr) & 0x1fUL) | val;
 		writeq(dma_order, order_addr);
 		while(readl(order_addr)&4);
@@ -148,9 +158,12 @@ int ls_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		val = (prtd->dma_desc_ready_phys &  ~0x1fUL)| 0x8UL;
-#ifdef DMA64
-		val |= 1;
-#endif
+
+		if(dev->coherent_dma_mask == DMA_BIT_MASK(64))
+				val |= 0x1UL;
+		else
+				val &= ~0x1UL;
+
 		while((readl(order_addr) & 8) && timeout--)
 		 udelay(5);
 		break;
@@ -168,20 +181,28 @@ ls_pcm_pointer(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct ls_runtime_data *prtd = runtime->private_data;
+	struct device *dev = substream->pcm->card->dev;
 
 	snd_pcm_uframes_t x;
 	u64 dma_order,val;
+	u64 addr;
 	void *order_addr;
 	order_addr = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?  prtd->order_addr1 : prtd->order_addr2;
 	val = (prtd->dma_position_desc_phys &  ~0x1fUL) | 0x4UL;
-#ifdef DMA64
-	val |= 1;
-#endif
+
+	if(dev->coherent_dma_mask == DMA_BIT_MASK(64))
+		val |= 0x1UL;
+	else
+		val &= ~0x1UL;
+
 	dma_order = (readq(order_addr) & 0x1fUL) | val;
 	writeq(dma_order, order_addr);
 	while(readl(order_addr) & 4);
 
-	x = bytes_to_frames(runtime, prtd->dma_position_desc->saddr - runtime->dma_addr);
+	addr = prtd->dma_position_desc->saddr_hi;
+	addr = ((addr << 32) | (prtd->dma_position_desc->saddr & 0xffffffff));
+
+	x = bytes_to_frames(runtime, addr - runtime->dma_addr);
 
 	if (x == runtime->buffer_size)
 		x = 0;
@@ -417,8 +438,6 @@ static struct snd_pcm_ops ls_pcm_ops = {
 	.mmap		= ls_pcm_mmap,
 };
 
-static u64 ls_pcm_dmamask = DMA_BIT_MASK(32);
-
 static int ls_soc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
@@ -426,9 +445,8 @@ static int ls_soc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	int ret = 0;
 
 	if (!card->dev->dma_mask)
-		card->dev->dma_mask = &ls_pcm_dmamask;
-	if (!card->dev->coherent_dma_mask)
-		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
+			card->dev->dma_mask = rtd->platform->dev->dma_mask;
+	card->dev->coherent_dma_mask = rtd->platform->dev->coherent_dma_mask;
 
 	if (pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream) {
 		ret = ls_pcm_preallocate_dma_buffer(pcm,
@@ -458,6 +476,18 @@ static int ls_soc_platform_probe(struct platform_device *pdev)
 {
 	struct dma_chan *chan;
 	int data;
+	__be32 *dma_mask_p = NULL;
+
+	if (pdev->dev.of_node) {
+			dma_mask_p = (__be32 *)of_get_property(pdev->dev.of_node, "dma-mask", NULL);
+			if (dma_mask_p != 0){
+					pdev->dev.coherent_dma_mask = of_read_number(dma_mask_p,2);
+					if (pdev->dev.dma_mask)
+							*(pdev->dev.dma_mask) = pdev->dev.coherent_dma_mask;
+					else
+							pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
+			}
+	}
 
 	pdev->dev.kobj.name = "ls-pcm-audio";
 	chan = of_dma_request_slave_channel(pdev->dev.of_node,"i2s_play");
