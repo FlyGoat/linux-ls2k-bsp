@@ -43,7 +43,7 @@ static inline void check_bugs(void)
 
 static inline int r4k_daddiu_bug(void)
 {
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_64BIT) && !defined(CONFIG_CPU_LOONGSON3)
 	WARN_ON(daddiu_bug < 0);
 	return daddiu_bug != 0;
 #else
