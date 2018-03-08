@@ -56,6 +56,7 @@
 			reg = <0x40070000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <59>;
+			dma-mask = <0x0 0xffffffff>;
 		};
 
 		ehci@0x40060000 {
@@ -63,6 +64,7 @@
 			reg = <0x40060000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <58>;
+			dma-mask = <0x0 0xffffffff>;
 		};
 
 		otg@0x40020000 {
@@ -70,6 +72,7 @@
 			reg = <0x40020000 0x3ffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <57>;
+			dma-mask = <0x0 0xffffffff>;
 		};
 
 		ahci@0x400e0000{
@@ -77,6 +80,7 @@
 			reg = <0x400e0000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <27>;
+			dma-mask = <0x0 0xffffffff>;
 		};
 
 		ethernet@0x40000000 {
@@ -374,7 +378,7 @@
 
 			dmas = <&dma1 1>;
 			dma-names = "sdio_rw";
-			dma-mask = <0xffffffff>;
+			dma-mask = <0xffffffff 0xffffffff>;
 		};
 		i2s: i2s@0x1fe0d000 {
 			compatible = "loongson,ls-i2s";
@@ -390,6 +394,7 @@
 			dmas = <&dma2 1
 			        &dma3 1>;
 			dma-names = "i2s_play", "i2s_record";
+			dma-mask = <0xffffffff 0xffffffff>;
 		};
 		sound {
 			compatible = "loongson,ls-sound";
@@ -408,6 +413,7 @@
 
 			dmas = <&dma0 1>;
 			dma-names = "nand_rw";
+			dma-mask = <0xffffffff 0xffffffff>;
 
 			number-of-parts = <0x2>;
 

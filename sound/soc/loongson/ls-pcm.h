@@ -18,11 +18,9 @@ typedef struct ls_dma_desc {
 	u32 step_times;
 	u32 cmd;
 	u32 stats;
-#ifdef DMA64
 	u32 ordered_hi;
 	u32 saddr_hi;
 	u32 dummy[6];
-#endif
 } ls_dma_desc;
 
 struct ls_runtime_data {
