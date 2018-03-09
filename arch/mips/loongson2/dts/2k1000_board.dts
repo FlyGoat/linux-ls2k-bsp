@@ -64,7 +64,7 @@
 			reg = <0x40060000 0xffff>;
 			interrupt-parent = <&icu>;
 			interrupts = <58>;
-			dma-mask = <0x0 0xffffffff>;
+			dma-mask = <0xffffffff 0xffffffff>;
 		};
 
 		otg@0x40020000 {

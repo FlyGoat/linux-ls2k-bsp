@@ -22,7 +22,9 @@
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
 #include <linux/usb/ehci_pdriver.h>
-
+#if defined(CONFIG_CPU_LOONGSON2K)
+#include <ls2k.h>
+#endif
 #include "ehci.h"
 
 #define DRIVER_DESC "EHCI LS2K driver"
@@ -68,21 +70,25 @@ static int ls2k_ehci_hcd_drv_probe(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd ;
 	struct resource *res;
-	struct usb_ehci_pdata *pdata;
 	const struct hc_driver *driver = &ehci_ls2k_hc_driver;
 	int irq, retval;
+	 __be32 *dma_mask_p = NULL;
 
 	if (usb_disabled())
 		return -ENODEV;
 
+	if (pdev->dev.of_node) {
+		dma_mask_p = (__be32 *)of_get_property(pdev->dev.of_node, "dma-mask", NULL);
+		if (dma_mask_p != 0){
+			if(of_read_number(dma_mask_p,2) == DMA_BIT_MASK(64))
+				ls2k_writeq(ls2k_readq(LS2K_GEN_CONFIG0_REG) | (0x1UL << 36),LS2K_GEN_CONFIG0_REG);
+			else
+				ls2k_writeq(ls2k_readq(LS2K_GEN_CONFIG0_REG) & ~(0x1UL << 36),LS2K_GEN_CONFIG0_REG);
+		}
+	}
+
 	if (!pdev->dev.platform_data)
 		pdev->dev.platform_data = &ehci_platform_defaults;
-	if (!pdev->dev.dma_mask)
-		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
-	if (!pdev->dev.coherent_dma_mask)
-		pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
-
-	pdata = pdev->dev.platform_data;
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
