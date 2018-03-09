@@ -38,7 +38,7 @@
  *
  * Atomically sets the value of @v to @i.
  */
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 static __inline__ void atomic_set(atomic_t * v, int i)
 {
 		__asm__ __volatile__(
@@ -502,7 +502,7 @@ static __inline__ int __atomic_add_unless(atomic_t *v, int a, int u)
  * @v: pointer of type atomic64_t
  * @i: required value
  */
-#ifdef CONFIG_CPU_LOONGSON3
+#if defined(CONFIG_CPU_LOONGSON3) || defined(CONFIG_CPU_LOONGSON2K)
 static __inline__ void atomic64_set(atomic64_t * v, long i)
 {
 		__asm__ __volatile__(
